@@ -5,6 +5,11 @@ package executor
 func RegisterAll() {
 	Register("openai", func() Executor { return ForwardOpenAI })
 	Register("anthropic", func() Executor { return ForwardOpenAI })
+	Register("tokenharbor", func() Executor { return ForwardOpenAI })
+	Register("dahl", func() Executor { return ForwardOpenAI })
+	Register("bai", func() Executor { return ForwardOpenAI })
+	Register("atria", func() Executor { return ForwardOpenAI })
+	Register("agnes", func() Executor { return ForwardOpenAI })
 	Register("deepseek", func() Executor { return ForwardOpenAI })
 	Register("groq", func() Executor { return ForwardOpenAI })
 	Register("nvidia", func() Executor { return ForwardOpenAI })

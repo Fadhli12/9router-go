@@ -33,6 +33,24 @@ func (p *ProviderConfig) IsGeminiNative() bool { return p.Format == "gemini-nati
 // native one (e.g. the "gemini" provider at /v1beta/openai/chat/completions).
 func (p *ProviderConfig) IsGeminiOpenAICompat() bool { return p.Format == "gemini-openai" }
 
+// modelsListURL is the OpenAI-compatible /v1/models endpoint of providers whose
+// catalogue is fetched live for the dashboard's "Suggested free models" import.
+// It is the same set upstream wires into PROVIDER_MODELS_CONFIG
+// (src/app/api/providers/[id]/models/route.js, v0.5.91).
+var modelsListURL = map[string]string{
+	"tokenharbor": "https://tokenharbor.ai/v1/models",
+	"dahl":        "https://inference.dahl.global/v1/models",
+	"atria":       "https://api.atria-asi.ai/v1/models",
+	"agnes":       "https://apihub.agnes-ai.com/v1/models",
+	"bai":         "https://api.b.ai/v1/models",
+}
+
+// ModelsListURL returns the live catalogue endpoint for a provider, or "" when
+// the provider has none.
+func ModelsListURL(provider string) string {
+	return modelsListURL[strings.ToLower(provider)]
+}
+
 // AnthropicBetaRedactThinking asks Anthropic to return thinking blocks as a
 // signature only. That is right for clients that never render thinking, but it
 // blanks the very summaries a client requested with
@@ -70,10 +88,30 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
+	"agnes": {
+		BaseURL:    "https://apihub.agnes-ai.com/v1/chat/completions",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+	},
 	"anthropic": {
 		BaseURL:    "https://api.anthropic.com/v1/messages",
 		AuthHeader: "x-api-key",
 		AuthScheme: "raw",
+	},
+	"dahl": {
+		BaseURL:    "https://inference.dahl.global/v1/chat/completions",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+	},
+	"bai": {
+		BaseURL:    "https://api.b.ai/v1/chat/completions",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+	},
+	"atria": {
+		BaseURL:    "https://api.atria-asi.ai/v1/chat/completions",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
 	},
 	"deepseek": {
 		BaseURL:    "https://api.deepseek.com/chat/completions",
@@ -773,6 +811,11 @@ var KnownProviders = map[string]ProviderConfig{
 	},
 	"tencent": {
 		BaseURL:    "https://api.hunyuan.cloud.tencent.com/v1/chat/completions",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+	},
+	"tokenharbor": {
+		BaseURL:    "https://tokenharbor.ai/v1/chat/completions",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},

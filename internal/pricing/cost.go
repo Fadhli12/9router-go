@@ -12,10 +12,31 @@ type ModelPricing struct {
 // Lookup uses longest-prefix matching so "claude-sonnet-4" catches
 // "claude-sonnet-4.5", "claude-sonnet-4-20250514", etc.
 var pricingTable = map[string]ModelPricing{
-	"claude-sonnet-4": {InputPer1M: 3.0, OutputPer1M: 15.0},
-	"claude-haiku":    {InputPer1M: 0.25, OutputPer1M: 1.25},
+	"claude-sonnet-4":   {InputPer1M: 3.0, OutputPer1M: 15.0},
+	"claude-haiku":      {InputPer1M: 0.25, OutputPer1M: 1.25},
 	"deepseek-v4-flash": {InputPer1M: 0.07, OutputPer1M: 0.28},
-	"gpt-4o":          {InputPer1M: 2.5, OutputPer1M: 10.0},
+	"gpt-4o":            {InputPer1M: 2.5, OutputPer1M: 10.0},
+}
+
+// freeModelNamespaces are model-id prefixes billed at zero. The namespace is
+// checked before the pricing table and its fallbacks, so
+// "cline-free/deepseek-v4.1-flash" costs nothing even though the bare id is
+// priced. Upstream: FREE_MODEL_NAMESPACES in open-sse/providers/pricing.js
+// (v0.5.91).
+var freeModelNamespaces = []string{"cline-free/"}
+
+// zeroPricing is what a free-namespace model costs.
+var zeroPricing = ModelPricing{}
+
+// IsFreeModel reports whether a model id sits in a namespace billed at zero.
+func IsFreeModel(model string) bool {
+	lower := strings.ToLower(model)
+	for _, ns := range freeModelNamespaces {
+		if strings.HasPrefix(lower, ns) {
+			return true
+		}
+	}
+	return false
 }
 
 // defaultPricing is the fallback when no prefix matches.
@@ -36,7 +57,12 @@ func EstimateCost(model string, promptTokens, completionTokens int) float64 {
 func lookupPricing(model string) ModelPricing {
 	model = strings.ToLower(model)
 
-	// Exact match
+	// A free namespace wins over the table: the same model id is not free when
+	// requested through a paid gateway.
+	if IsFreeModel(model) {
+		return zeroPricing
+	}
+
 	if p, ok := pricingTable[model]; ok {
 		return p
 	}

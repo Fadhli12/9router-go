@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	json "encoding/json/v2"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/models"
+	"9router/proxy/internal/providers"
 )
 
 // HandleGetConnections handles GET /api/connections.
@@ -834,10 +836,54 @@ func (h *DashboardHandler) HandleGetConnectionModels(w http.ResponseWriter, r *h
 		if len(models) == 0 {
 			models = clineResp.Models
 		}
+
+		// The free tier is published on a separate feed: /api/v1/models carries
+		// no `cline-free/*` ids at all. The feed is additive and a dead feed must
+		// never take the catalogue down with it, so ids already present win —
+		// the same "first writer wins" rule upstream uses.
+		models = mergeClineFreeTier(models, clineFreeTierModels(r.Context()))
 		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
 			"provider":     conn.Provider,
 			"connectionId": conn.ID,
 			"models":       models,
+		})
+		return
+	}
+
+	// OpenAI-compatible aggregators with a live /v1/models catalogue. The
+	// connection's key is the only credential these need.
+	if listURL := providers.ModelsListURL(conn.Provider); listURL != "" {
+		token := connData.APIKey
+		if token == "" {
+			token = connData.AccessToken
+		}
+		if token == "" {
+			handlerutil.WriteJSONError(w, http.StatusUnauthorized, "no API key configured")
+			return
+		}
+		headers := map[string]string{"Authorization": "Bearer " + token}
+		status, body, err := validateProbeDo(r.Context(), http.MethodGet, listURL, headers, nil)
+		if err != nil {
+			handlerutil.WriteJSONError(w, http.StatusBadGateway, "failed to fetch models: "+err.Error())
+			return
+		}
+		if status != http.StatusOK {
+			handlerutil.WriteJSONError(w, status, fmt.Sprintf("failed to fetch models: %d", status))
+			return
+		}
+		var listResp struct {
+			Data   []any `json:"data"`
+			Models []any `json:"models"`
+		}
+		_ = json.Unmarshal(body, &listResp)
+		items := listResp.Data
+		if len(items) == 0 {
+			items = listResp.Models
+		}
+		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+			"provider":     conn.Provider,
+			"connectionId": conn.ID,
+			"models":       items,
 		})
 		return
 	}
@@ -902,4 +948,68 @@ func (h *DashboardHandler) HandleGetConnectionModels(w http.ResponseWriter, r *h
 		"connectionId": conn.ID,
 		"models":       models,
 	})
+}
+
+// clineFreeTierEndpoint publishes Cline's free tier. The main /api/v1/models
+// catalogue carries no `cline-free/*` ids, so the tier has to come from here.
+// Upstream: open-sse/services/clinepassModels.js (v0.5.91).
+const clineFreeTierEndpoint = "https://api.cline.bot/api/v1/ai/cline/recommended-models"
+
+// clineFreeTierModels returns the recommended-models feed's free[] tier, or nil
+// on any failure — the tier is additive, so a dead feed must not break the
+// catalogue the caller already has.
+func clineFreeTierModels(ctx context.Context) []any {
+	status, body, err := validateProbeDo(
+		ctx, http.MethodGet, clineFreeTierEndpoint,
+		map[string]string{"Accept": "application/json"}, nil,
+	)
+	if err != nil || status != http.StatusOK {
+		return nil
+	}
+	var feed struct {
+		Free []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"free"`
+	}
+	if err := json.Unmarshal(body, &feed); err != nil {
+		return nil
+	}
+	out := make([]any, 0, len(feed.Free))
+	for _, m := range feed.Free {
+		if strings.TrimSpace(m.ID) == "" {
+			continue
+		}
+		name := m.Name
+		if name == "" {
+			name = m.ID
+		}
+		out = append(out, map[string]any{"id": m.ID, "name": name})
+	}
+	return out
+}
+
+// mergeClineFreeTier appends the free-tier entries the catalogue is missing.
+// First writer wins on a shared id, so anything the two sources agree on keeps
+// the catalogue's own entry.
+func mergeClineFreeTier(catalogue, free []any) []any {
+	if len(free) == 0 {
+		return catalogue
+	}
+	present := make(map[string]bool, len(catalogue))
+	for _, m := range catalogue {
+		if mm, ok := m.(map[string]any); ok {
+			if id, ok := mm["id"].(string); ok {
+				present[id] = true
+			}
+		}
+	}
+	for _, m := range free {
+		mm, _ := m.(map[string]any)
+		id, _ := mm["id"].(string)
+		if !present[id] {
+			catalogue = append(catalogue, m)
+		}
+	}
+	return catalogue
 }

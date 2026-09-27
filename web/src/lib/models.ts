@@ -14,6 +14,11 @@ export interface ProviderModel {
 }
 
 export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
+  "agnes": "agnes",
+  "bai": "bai",
+  "atria": "atria",
+  "dahl": "dahl",
+  "tokenharbor": "tokenharbor",
   "alicode": "alicode",
   "alicode-intl": "alicode-intl",
   "alims-intl": "alims-intl",
@@ -909,8 +914,16 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   ],
   "cx": [
     {
-      "id": "codex-auto-review",
-      "name": "Codex Auto Review"
+      "id": "gpt-6-astra",
+      "name": "GPT 6.0 Astra"
+    },
+    {
+      "id": "gpt-6-sol",
+      "name": "GPT-6 Sol"
+    },
+    {
+      "id": "gpt-6-luna",
+      "name": "GPT-6 Luna"
     },
     {
       "id": "gpt-6-astra",
@@ -922,9 +935,7 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     },
     {
       "id": "gpt-5.6-sol-review",
-      "name": "GPT 5.6 Sol Review",
-      "upstreamModelId": "gpt-5.6-sol",
-      "quotaFamily": "review"
+      "name": "GPT 5.6 Sol Review"
     },
     {
       "id": "gpt-5.6-terra",
@@ -932,9 +943,7 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     },
     {
       "id": "gpt-5.6-terra-review",
-      "name": "GPT 5.6 Terra Review",
-      "upstreamModelId": "gpt-5.6-terra",
-      "quotaFamily": "review"
+      "name": "GPT 5.6 Terra Review"
     },
     {
       "id": "gpt-5.6-luna",
@@ -942,9 +951,7 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     },
     {
       "id": "gpt-5.6-luna-review",
-      "name": "GPT 5.6 Luna Review",
-      "upstreamModelId": "gpt-5.6-luna",
-      "quotaFamily": "review"
+      "name": "GPT 5.6 Luna Review"
     },
     {
       "id": "gpt-5.5",
@@ -952,9 +959,7 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     },
     {
       "id": "gpt-5.5-review",
-      "name": "GPT 5.5 Review",
-      "upstreamModelId": "gpt-5.5",
-      "quotaFamily": "review"
+      "name": "GPT 5.5 Review"
     },
     {
       "id": "gpt-5.4",
@@ -962,9 +967,7 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     },
     {
       "id": "gpt-5.4-review",
-      "name": "GPT 5.4 Review",
-      "upstreamModelId": "gpt-5.4",
-      "quotaFamily": "review"
+      "name": "GPT 5.4 Review"
     },
     {
       "id": "gpt-5.4-mini",
@@ -972,9 +975,7 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     },
     {
       "id": "gpt-5.4-mini-review",
-      "name": "GPT 5.4 Mini Review",
-      "upstreamModelId": "gpt-5.4-mini",
-      "quotaFamily": "review"
+      "name": "GPT 5.4 Mini Review"
     },
     {
       "id": "gpt-5.3-codex-spark",
@@ -982,190 +983,51 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     },
     {
       "id": "gpt-5.3-codex-spark-review",
-      "name": "GPT 5.3 Codex Spark Review",
-      "upstreamModelId": "gpt-5.3-codex-spark",
-      "quotaFamily": "review"
+      "name": "GPT 5.3 Codex Spark Review"
     },
     {
       "id": "gpt-image-2.5",
-      "name": "GPT Image 2.5",
-      "capabilities": [
-        "text2img",
-        "edit",
-        "multiImage"
-      ],
-      "params": [
-        "size",
-        "quality",
-        "background",
-        "image_detail",
-        "output_format"
-      ],
-      "kind": "image"
+      "name": "GPT Image 2.5"
     },
     {
       "id": "gpt-image-2.5-flare",
-      "name": "GPT Image 2.5 Flare",
-      "capabilities": [
-        "text2img",
-        "edit",
-        "multiImage"
-      ],
-      "params": [
-        "size",
-        "quality",
-        "background",
-        "image_detail",
-        "output_format"
-      ],
-      "kind": "image"
+      "name": "GPT Image 2.5 Flare"
     },
     {
       "id": "gpt-image-2.5-sunburst",
-      "name": "GPT Image 2.5 Sunburst",
-      "capabilities": [
-        "text2img",
-        "edit",
-        "multiImage"
-      ],
-      "params": [
-        "size",
-        "quality",
-        "background",
-        "image_detail",
-        "output_format"
-      ],
-      "kind": "image"
+      "name": "GPT Image 2.5 Sunburst"
     },
     {
       "id": "gpt-image-2",
-      "name": "GPT Image 2",
-      "capabilities": [
-        "text2img",
-        "edit",
-        "multiImage"
-      ],
-      "params": [
-        "size",
-        "quality",
-        "background",
-        "image_detail",
-        "output_format"
-      ],
-      "kind": "image"
+      "name": "GPT Image 2"
     },
     {
       "id": "gpt-image-1.5",
-      "name": "GPT Image 1.5",
-      "capabilities": [
-        "text2img",
-        "edit",
-        "multiImage"
-      ],
-      "params": [
-        "size",
-        "quality",
-        "background",
-        "image_detail",
-        "output_format"
-      ],
-      "kind": "image"
+      "name": "GPT Image 1.5"
     },
     {
       "id": "gpt-5.6-sol-image",
-      "name": "GPT 5.6 Sol Image",
-      "capabilities": [
-        "text2img",
-        "edit"
-      ],
-      "params": [
-        "size",
-        "quality",
-        "background",
-        "image_detail",
-        "output_format"
-      ],
-      "kind": "image"
+      "name": "GPT 5.6 Sol Image"
     },
     {
       "id": "gpt-5.6-terra-image",
-      "name": "GPT 5.6 Terra Image",
-      "capabilities": [
-        "text2img",
-        "edit"
-      ],
-      "params": [
-        "size",
-        "quality",
-        "background",
-        "image_detail",
-        "output_format"
-      ],
-      "kind": "image"
+      "name": "GPT 5.6 Terra Image"
     },
     {
       "id": "gpt-5.6-luna-image",
-      "name": "GPT 5.6 Luna Image",
-      "capabilities": [
-        "text2img",
-        "edit"
-      ],
-      "params": [
-        "size",
-        "quality",
-        "background",
-        "image_detail",
-        "output_format"
-      ],
-      "kind": "image"
+      "name": "GPT 5.6 Luna Image"
     },
     {
       "id": "gpt-5.5-image",
-      "name": "GPT 5.5 Image",
-      "capabilities": [
-        "text2img",
-        "edit"
-      ],
-      "params": [
-        "size",
-        "quality",
-        "background",
-        "image_detail",
-        "output_format"
-      ],
-      "kind": "image"
+      "name": "GPT 5.5 Image"
     },
     {
       "id": "gpt-5.4-image",
-      "name": "GPT 5.4 Image",
-      "capabilities": [
-        "text2img",
-        "edit"
-      ],
-      "params": [
-        "size",
-        "quality",
-        "background",
-        "image_detail",
-        "output_format"
-      ],
-      "kind": "image"
+      "name": "GPT 5.4 Image"
     },
     {
       "id": "gpt-5.3-image",
-      "name": "GPT 5.3 Image",
-      "capabilities": [
-        "text2img",
-        "edit"
-      ],
-      "params": [
-        "size",
-        "quality",
-        "background",
-        "image_detail",
-        "output_format"
-      ],
-      "kind": "image"
+      "name": "GPT 5.3 Image"
     }
   ],
   "cohere": [
@@ -1207,6 +1069,52 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "id": "tts_models/en/ljspeech/tacotron2-DDC",
       "name": "Tacotron2 DDC (LJSpeech)",
       "kind": "tts"
+    }
+  ],
+  "tokenharbor": [
+    {
+      "id": "claude-opus-5.5",
+      "name": "Claude Opus 5.5"
+    },
+    {
+      "id": "claude-sonnet-5",
+      "name": "Claude Sonnet 5"
+    },
+    {
+      "id": "gpt-6-astra",
+      "name": "GPT-6 Astra"
+    },
+    {
+      "id": "gpt-6-sol",
+      "name": "GPT-6 Sol"
+    },
+    {
+      "id": "deepseek-v4.1-flash:free",
+      "name": "DeepSeek V4.1 Flash (Free)"
+    },
+    {
+      "id": "grok-4.7",
+      "name": "Grok 4.7"
+    }
+  ],
+  "dahl": [
+    {
+      "id": "zai-org/GLM-5.3-Flash",
+      "name": "GLM-5.3 Flash"
+    },
+    {
+      "id": "deepseek-ai/DeepSeek-V4-Flash-0731",
+      "name": "DeepSeek V4 Flash 0731"
+    },
+    {
+      "id": "MiniMaxAI/MiniMax-M2.7",
+      "name": "MiniMax M2.7"
+    }
+  ],
+  "atria": [
+    {
+      "id": "Atria-Dawn-Preview",
+      "name": "Atria Dawn Preview"
     }
   ],
   "commandcode": [
@@ -3258,217 +3166,171 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   "opencode-go": [
     {
       "id": "deepseek-flash",
-      "name": "DeepSeek V4.1 Flash",
-      "supportedFormats": [
-        "openai"
-      ]
+      "name": "DeepSeek Flash"
     },
     {
       "id": "glm-5.3-flash",
-      "name": "GLM 5.3 Flash (Vision)",
-      "supportedFormats": [
-        "openai"
-      ]
+      "name": "GLM 5.3 Flash (Vision)"
     },
     {
       "id": "glm-5.3",
-      "name": "GLM 5.3",
-      "supportedFormats": [
-        "openai"
-      ]
+      "name": "GLM 5.3"
     },
     {
       "id": "glm-5.2",
-      "name": "GLM 5.2",
-      "supportedFormats": [
-        "openai"
-      ]
+      "name": "GLM 5.2"
     },
     {
       "id": "glm-5.1",
-      "name": "GLM 5.1",
-      "supportedFormats": [
-        "openai"
-      ]
+      "name": "GLM 5.1"
+    },
+    {
+      "id": "glm-5",
+      "name": "GLM 5"
     },
     {
       "id": "kimi-k2.7-code",
-      "name": "Kimi K2.7 Code",
-      "supportedFormats": [
-        "openai"
-      ]
+      "name": "Kimi K2.7 Code"
     },
     {
       "id": "kimi-k2.6",
-      "name": "Kimi K2.6",
-      "supportedFormats": [
-        "openai"
-      ]
+      "name": "Kimi K2.6"
+    },
+    {
+      "id": "kimi-k2.5",
+      "name": "Kimi K2.5"
     },
     {
       "id": "kimi-k3",
-      "name": "Kimi K3",
-      "supportedFormats": [
-        "openai"
-      ]
+      "name": "Kimi K3"
     },
     {
       "id": "deepseek-v4-pro",
-      "name": "DeepSeek V4 Pro",
-      "supportedFormats": [
-        "openai",
-        "claude",
-        "openai-responses"
-      ]
+      "name": "DeepSeek V4 Pro"
     },
     {
       "id": "deepseek-v4-flash",
-      "name": "DeepSeek V4 Flash",
-      "supportedFormats": [
-        "openai",
-        "claude",
-        "openai-responses"
-      ]
+      "name": "DeepSeek V4 Flash"
     },
     {
       "id": "deepseek-v4-flash-vision-exp",
-      "name": "DeepSeek V4 Flash Vision (Exp)",
-      "supportedFormats": [
-        "openai",
-        "claude",
-        "openai-responses"
-      ]
+      "name": "DeepSeek V4 Flash Vision (Exp)"
+    },
+    {
+      "id": "deepseek-v4.1-flash",
+      "name": "DeepSeek V4.1 Flash"
     },
     {
       "id": "longcat-2.0",
-      "name": "LongCat 2.0",
-      "supportedFormats": [
-        "openai"
-      ]
+      "name": "LongCat 2.0"
+    },
+    {
+      "id": "mimo-v2.6-flash",
+      "name": "MiMo V2.6 Flash"
+    },
+    {
+      "id": "mimo-v2.6-pro",
+      "name": "MiMo V2.6 Pro"
     },
     {
       "id": "mimo-v2.5",
-      "name": "MiMo V2.5",
-      "supportedFormats": [
-        "openai"
-      ]
+      "name": "MiMo V2.5"
     },
     {
       "id": "mimo-v2.5-pro",
-      "name": "MiMo V2.5 Pro",
-      "supportedFormats": [
-        "openai"
-      ]
+      "name": "MiMo V2.5 Pro"
+    },
+    {
+      "id": "mimo-v2-pro",
+      "name": "MiMo V2 Pro"
+    },
+    {
+      "id": "mimo-v2-omni",
+      "name": "MiMo V2 Omni"
     },
     {
       "id": "minimax-m3",
-      "name": "MiniMax M3",
-      "supportedFormats": [
-        "openai",
-        "claude"
-      ]
+      "name": "MiniMax M3"
     },
     {
       "id": "minimax-m2.7",
-      "name": "MiniMax M2.7",
-      "supportedFormats": [
-        "openai",
-        "claude"
-      ]
+      "name": "MiniMax M2.7"
     },
     {
       "id": "minimax-m2.5",
-      "name": "MiniMax M2.5",
-      "supportedFormats": [
-        "openai",
-        "claude"
-      ]
+      "name": "MiniMax M2.5"
+    },
+    {
+      "id": "space-bunny-free",
+      "name": "Space Bunny Free"
     },
     {
       "id": "qwen3.8-max",
-      "name": "Qwen 3.8 Max",
-      "supportedFormats": [
-        "openai",
-        "claude"
-      ]
+      "name": "Qwen 3.8 Max"
     },
     {
       "id": "qwen3.8-flash",
-      "name": "Qwen 3.8 Flash",
-      "supportedFormats": [
-        "openai",
-        "claude"
-      ]
+      "name": "Qwen 3.8 Flash"
     },
     {
       "id": "qwen3.7-max",
-      "name": "Qwen 3.7 Max",
-      "supportedFormats": [
-        "openai",
-        "claude"
-      ]
+      "name": "Qwen 3.7 Max"
     },
     {
       "id": "qwen3.7-plus",
-      "name": "Qwen 3.7 Plus",
-      "supportedFormats": [
-        "openai",
-        "claude"
-      ]
+      "name": "Qwen 3.7 Plus"
     },
     {
       "id": "qwen3.6-plus",
-      "name": "Qwen 3.6 Plus",
-      "supportedFormats": [
-        "openai",
-        "claude"
-      ]
+      "name": "Qwen 3.6 Plus"
+    },
+    {
+      "id": "qwen3.5-plus",
+      "name": "Qwen 3.5 Plus"
     },
     {
       "id": "hy4-preview",
-      "name": "Hy4 Preview",
-      "supportedFormats": [
-        "openai"
-      ]
+      "name": "Hy4 Preview"
     },
     {
       "id": "hy3",
-      "name": "Hy3",
-      "supportedFormats": [
-        "openai"
-      ]
+      "name": "Hy3"
+    },
+    {
+      "id": "hy3-preview",
+      "name": "Hy3 Preview"
+    },
+    {
+      "id": "omen-alpha",
+      "name": "Omen Alpha"
+    },
+    {
+      "id": "grok-4.7",
+      "name": "Grok 4.7"
     },
     {
       "id": "grok-4.6",
-      "name": "Grok 4.6",
-      "targetFormat": "openai-responses",
-      "supportedFormats": [
-        "openai-responses"
-      ]
+      "name": "Grok 4.6"
+    },
+    {
+      "id": "grok-4.5",
+      "name": "Grok 4.5"
     },
     {
       "id": "gpt-5.6-luna",
-      "name": "GPT 5.6 Luna",
-      "targetFormat": "openai-responses",
-      "supportedFormats": [
-        "openai-responses"
-      ]
+      "name": "GPT-5.6 Luna"
+    },
+    {
+      "id": "gpt-6-luna",
+      "name": "GPT-6 Luna"
     },
     {
       "id": "muse-spark-1.2-contributor",
-      "name": "Muse Spark 1.2 Contributor",
-      "targetFormat": "openai-responses",
-      "supportedFormats": [
-        "openai-responses"
-      ]
+      "name": "Muse Spark 1.2 Contributor"
     },
     {
       "id": "muse-spark-1.3-contributor",
-      "name": "Muse Spark 1.3 Contributor",
-      "targetFormat": "openai-responses",
-      "supportedFormats": [
-        "openai-responses"
-      ]
+      "name": "Muse Spark 1.3 Contributor"
     }
   ],
   "oc": [
