@@ -28,6 +28,17 @@ export interface Combo {
   updatedAt: string
 }
 
+/** Resolved server-side capabilities for one catalog model. */
+export interface ModelCaps {
+  vision: boolean
+  search: boolean
+  reasoning: boolean
+  contextWindow: number
+  maxOutput: number
+  /** Selectable thinking levels, or empty for a model without reasoning. */
+  thinkingLevels: string[]
+}
+
 export interface APIKey {
   id: string
   key: string
@@ -597,6 +608,16 @@ export const api = {
   // Models — upstream parity: GET /api/models/custom -> { models: [...] },
   // GET /api/models/disabled -> { disabled: {...} } (full map) or { ids: [...] } (per-provider).
   getCustomModels: () => request<{ models: Array<{ id: string; name?: string; providerAlias?: string; type?: string; kind?: string }> }>('/api/models/custom'),
+  /**
+   * Per-model capabilities and thinking levels for one provider. The dashboard
+   * bundles the model *catalog* but capabilities are server-side state (provider
+   * registry + capability tables + synced catalog), so they are resolved by the
+   * Go backend — the same split upstream keeps (useModelCaps over /api/models).
+   */
+  getModelCaps: (provider: string) =>
+    request<{ provider: string; caps: Record<string, ModelCaps> }>(
+      `/api/models/caps?provider=${encodeURIComponent(provider)}`
+    ),
   getDisabledModels: () => request<Record<string, unknown>>('/api/models/disabled'),
   saveCustomModel: (key: string, value: unknown) =>
     request<{ success: boolean }>('/api/models/custom', {

@@ -7,6 +7,7 @@
     type FreebuffSessionStatusResponse,
     type ProviderConnection,
     type ProviderNode,
+    type ModelCaps,
     type ProxyPool,
     type Settings
   } from '../../api/client'
@@ -170,16 +171,10 @@
   let allAvailableModels = $derived<ProviderModelItem[]>(
     buildAvailableModels(builtInModels, providerCustomModels)
   )
-  // Display-only A–Z sort (case-insensitive) so the list order is stable
-  // instead of catalog insertion order. filter() returns a fresh array,
-  // so the in-place sort below is safe.
-  let visibleModels = $derived(
-    allAvailableModels
-      .filter((m) => !disabledModelIds.includes(m.id))
-      .sort((a, b) =>
-        (a.name || a.id).localeCompare(b.name || b.id, undefined, { sensitivity: 'base' })
-      )
-  )
+  // Registry order, like upstream: `models` there is getModelsByProviderId()
+  // verbatim (providers/[id]/page.js:158) with custom models appended after the
+  // catalog, so the rows read in the same sequence on both dashboards.
+  let visibleModels = $derived(allAvailableModels.filter((m) => !disabledModelIds.includes(m.id)))
   // Suggested free models from the provider's public catalog (upstream parity).
   let suggestedModels = $state<SuggestedModel[]>([])
   let suggestedNotAdded = $derived(
@@ -192,6 +187,31 @@
   let allDisabled = $derived(
     allAvailableModels.length > 0 && disabledModelIds.length >= allAvailableModels.length
   )
+
+  // Capabilities + thinking levels are resolved server-side (GET /api/models/caps):
+  // the catalog ships as a static bundle, but caps depend on the provider
+  // registry, the capability tables and the synced models.dev catalog.
+  let modelCaps = $state<Record<string, ModelCaps>>({})
+  // Union of the thinking levels this provider's models accept, with the
+  // explicit "auto" reset first — upstream providerThinkingLevels
+  // (dashboard/providers/[id]/page.js:186). null hides the picker entirely for a
+  // provider whose models have no reasoning.
+  let providerThinkingLevels = $derived.by(() => {
+    const levels = new Set<string>()
+    for (const m of allAvailableModels) {
+      for (const l of modelCaps[m.id]?.thinkingLevels ?? []) {
+        if (l !== 'none') levels.add(l)
+      }
+    }
+    return levels.size ? ['auto', ...levels] : null
+  })
+  // A picked level only applies to a model that actually supports it, so the
+  // displayed id and the copied id never carry a level the provider rejects.
+  function resolveThinkingSuffix(modelId: string): string | null {
+    if (!thinkingLevel || thinkingLevel === 'auto') return null
+    const levels = modelCaps[modelId]?.thinkingLevels
+    return levels && levels.includes(thinkingLevel) ? thinkingLevel : null
+  }
   // Compatible nodes (upstream CompatibleModelsSection): rows = custom models
   // + legacy aliases, both keyed by the node row id; display = node prefix.
   let modelAliases = $state<Record<string, string>>({})
@@ -629,17 +649,21 @@
   async function loadData() {
     suggestedModels = []
     try {
-      const [modelsData, settingsData, poolsData, aliasesData] = await Promise.all([
+      const [modelsData, settingsData, poolsData, aliasesData, capsData] = await Promise.all([
         fetchProviderModelsData(providerId, storageAlias),
         api.getSettings().catch(() => ({})),
         api.getProxyPools().catch(() => []),
         api.getModelAliases().catch(() => ({ aliases: {} })),
+        // Providers without a static catalog answer 404; the page then shows no
+        // capability icons and hides the thinking picker, same as upstream.
+        api.getModelCaps(providerId).catch(() => ({ caps: {} as Record<string, ModelCaps> })),
       ])
       customModels = modelsData.customModels
       disabledModelIds = modelsData.disabledModelIds
       modelAliases = aliasesData?.aliases || {}
       settings = settingsData
       proxyPools = poolsData
+      modelCaps = capsData?.caps || {}
 
       // Suggested free models from the provider's public catalog (if configured in upstream registry).
       const fetcher = selectedCatalogItem?.modelsFetcher
@@ -1904,8 +1928,8 @@
 
   // Model actions
   function copyModelId(modelId: string) {
-    const suffix = thinkingLevel !== 'auto' && thinkingLevel ? `(${thinkingLevel})` : ''
-    const full = `${storageAlias}/${modelId}${suffix}`
+    const level = resolveThinkingSuffix(modelId)
+    const full = `${storageAlias}/${modelId}${level ? `(${level})` : ''}`
     navigator.clipboard.writeText(full)
     copiedModelId = modelId
     setTimeout(() => (copiedModelId = null), 2000)
@@ -3087,20 +3111,18 @@
     <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
       <div class="flex items-center gap-3">
         <h2 class="text-lg font-semibold">Available Models</h2>
+        {#if providerThinkingLevels}
         <select
           title="Appends (level) suffix to copied model names"
           value={thinkingLevel}
           onchange={handleThinkingChange}
           class="rounded-md border border-border bg-background px-2 py-1 text-xs focus:border-primary focus:outline-none cursor-pointer"
         >
-          <option value="auto">Thinking: Auto</option>
-          <option value="minimal">Thinking: Minimal</option>
-          <option value="low">Thinking: Low</option>
-          <option value="medium">Thinking: Medium</option>
-          <option value="high">Thinking: High</option>
-          <option value="max">Thinking: Max</option>
-          <option value="xhigh">Thinking: Xhigh</option>
+          {#each providerThinkingLevels as opt (opt)}
+            <option value={opt}>Thinking: {opt.charAt(0).toUpperCase() + opt.slice(1)}</option>
+          {/each}
         </select>
+        {/if}
       </div>
 
       <div class="flex gap-2">
@@ -3158,7 +3180,9 @@
     <!-- Models flex-wrap list matching upstream -->
     <div class="flex flex-wrap gap-3">
       {#each visibleModels as model (model.id)}
-        {@const fullModelId = `${storageAlias}/${model.id}`}
+        {@const level = resolveThinkingSuffix(model.id)}
+        {@const fullModelId = `${storageAlias}/${model.id}${level ? `(${level})` : ''}`}
+        {@const rowCaps = modelCaps[model.id] ?? model.caps}
         {@const testStatus = modelTestStatuses[model.id]}
         {@const isTestingThis = testStatus === 'testing'}
         {@const isSessionActive = checkIsActiveSession(model.id)}
@@ -3182,7 +3206,7 @@
               <span class="flex min-w-0 items-center text-[9px] gap-1 pl-1">
                 <span class="truncate text-[9px] italic text-text-muted/70">{model.name}</span>
                 <span class="inline-flex items-center gap-0.5">
-                  {#if model.caps?.vision}
+                  {#if rowCaps?.vision}
                     <div class="relative inline-flex group/tt">
                       <span class="material-symbols-outlined leading-none cursor-help text-text-muted/70" style="font-size: 12px;">visibility</span>
                       <div class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-50 w-max max-w-56 rounded px-2 py-1 text-[11px] leading-snug bg-gray-900 text-white opacity-0 group-hover/tt:opacity-100 transition-opacity duration-150 whitespace-normal shadow-lg">
@@ -3190,7 +3214,7 @@
                       </div>
                     </div>
                   {/if}
-                  {#if model.caps?.reasoning}
+                  {#if rowCaps?.reasoning}
                     <div class="relative inline-flex group/tt">
                       <span class="material-symbols-outlined leading-none cursor-help text-text-muted/70" style="font-size: 12px;">neurology</span>
                       <div class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-50 w-max max-w-56 rounded px-2 py-1 text-[11px] leading-snug bg-gray-900 text-white opacity-0 group-hover/tt:opacity-100 transition-opacity duration-150 whitespace-normal shadow-lg">

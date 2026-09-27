@@ -158,6 +158,10 @@ export async function fetchSuggestedModels(fetcher: {
   }
 }
 
+/**
+ * Catalog rows first, custom models appended after — upstream keeps the registry
+ * list in its own order and treats custom models as additions to it.
+ */
 export function buildAvailableModels(
   builtInModels: Array<{ id: string; name?: string; kind?: string; type?: string }>,
   providerCustomModels: CustomModelData[]
@@ -165,17 +169,6 @@ export function buildAvailableModels(
   const list: ModelItem[] = []
   const seen = new Set<string>()
 
-  for (const cm of providerCustomModels) {
-    if (!cm.id || seen.has(cm.id)) continue
-    seen.add(cm.id)
-    list.push({
-      id: cm.id,
-      name: cm.name || cm.id,
-      isCustom: true,
-      caps: getModelCaps(cm.id, cm),
-      kind: getModelKind(cm),
-    })
-  }
   for (const bm of builtInModels) {
     if (!bm.id || seen.has(bm.id)) continue
     seen.add(bm.id)
@@ -185,6 +178,17 @@ export function buildAvailableModels(
       isCustom: false,
       caps: getModelCaps(bm.id, bm),
       kind: getModelKind(bm),
+    })
+  }
+  for (const cm of providerCustomModels) {
+    if (!cm.id || seen.has(cm.id)) continue
+    seen.add(cm.id)
+    list.push({
+      id: cm.id,
+      name: cm.name || cm.id,
+      isCustom: true,
+      caps: getModelCaps(cm.id, cm),
+      kind: getModelKind(cm),
     })
   }
   return list

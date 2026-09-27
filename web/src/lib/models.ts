@@ -1219,48 +1219,20 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "name": "DeepSeek V4 Flash"
     },
     {
-      "id": "moonshotai/Kimi-K2.6",
-      "name": "Kimi K2.6"
-    },
-    {
-      "id": "moonshotai/Kimi-K2.5",
-      "name": "Kimi K2.5"
-    },
-    {
-      "id": "zai-org/GLM-5.1",
-      "name": "GLM 5.1"
-    },
-    {
-      "id": "zai-org/GLM-5",
-      "name": "GLM 5"
-    },
-    {
-      "id": "MiniMaxAI/MiniMax-M2.7",
-      "name": "MiniMax M2.7"
-    },
-    {
-      "id": "MiniMaxAI/MiniMax-M2.5",
-      "name": "MiniMax M2.5"
-    },
-    {
-      "id": "Qwen/Qwen3.6-Max-Preview",
-      "name": "Qwen 3.6 Max Preview"
-    },
-    {
-      "id": "Qwen/Qwen3.6-Plus",
-      "name": "Qwen 3.6 Plus"
-    },
-    {
-      "id": "stepfun/Step-3.5-Flash",
-      "name": "Step 3.5 Flash"
-    },
-    {
       "id": "moonshotai/Kimi-K2.7-Code",
       "name": "Kimi K2.7 Code"
     },
     {
       "id": "moonshotai/Kimi-K2.7-Code-Highspeed",
       "name": "Kimi K2.7 Code HighSpeed"
+    },
+    {
+      "id": "moonshotai/Kimi-K2.6",
+      "name": "Kimi K2.6"
+    },
+    {
+      "id": "moonshotai/Kimi-K2.5",
+      "name": "Kimi K2.5"
     },
     {
       "id": "zai-org/GLM-5.2",
@@ -1271,8 +1243,24 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "name": "GLM 5.2 Fast"
     },
     {
+      "id": "zai-org/GLM-5.1",
+      "name": "GLM 5.1"
+    },
+    {
+      "id": "zai-org/GLM-5",
+      "name": "GLM 5"
+    },
+    {
       "id": "MiniMaxAI/MiniMax-M3",
       "name": "MiniMax M3"
+    },
+    {
+      "id": "MiniMaxAI/MiniMax-M2.7",
+      "name": "MiniMax M2.7"
+    },
+    {
+      "id": "MiniMaxAI/MiniMax-M2.5",
+      "name": "MiniMax M2.5"
     },
     {
       "id": "xiaomi/mimo-v2.5-pro",
@@ -1281,6 +1269,14 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "xiaomi/mimo-v2.5",
       "name": "MiMo V2.5"
+    },
+    {
+      "id": "Qwen/Qwen3.6-Max-Preview",
+      "name": "Qwen 3.6 Max Preview"
+    },
+    {
+      "id": "Qwen/Qwen3.6-Plus",
+      "name": "Qwen 3.6 Plus"
     },
     {
       "id": "Qwen/Qwen3.7-Max",
@@ -1293,6 +1289,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "stepfun/Step-3.7-Flash",
       "name": "Step 3.7 Flash"
+    },
+    {
+      "id": "stepfun/Step-3.5-Flash",
+      "name": "Step 3.5 Flash"
     },
     {
       "id": "nvidia/nemotron-3-ultra-550b-a55b",
@@ -1404,6 +1404,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "upstreamModelId": "deepseek-v4-pro"
     },
     {
+      "id": "deepseek-v4.1-flash",
+      "name": "DeepSeek V4.1 Flash"
+    },
+    {
       "id": "deepseek-v4-flash",
       "name": "DeepSeek V4 Flash"
     },
@@ -1418,11 +1422,7 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "deepseek-reasoner",
       "name": "DeepSeek V3.2 Reasoner"
-    },
-    {
-      "id": "deepseek-v4.1-flash",
-      "name": "DeepSeek V4.1 Flash"
-    },
+    }
   ],
   "devin-cli": [
     {
@@ -2033,6 +2033,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   ],
   "gcli": [
     {
+      "id": "grok-build",
+      "name": "Grok Build"
+    },
+    {
       "id": "grok-4.5",
       "name": "Grok 4.5"
     },
@@ -2050,11 +2054,7 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "id": "grok-4.5-low",
       "name": "Grok 4.5 (Low)",
       "upstreamModelId": "grok-4.5"
-    },
-    {
-      "id": "grok-build",
-      "name": "Grok Build"
-    },
+    }
   ],
   "grok-web": [
     {
@@ -3043,6 +3043,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   ],
   "openai": [
     {
+      "id": "gpt-5.5",
+      "name": "GPT-5.5"
+    },
+    {
       "id": "gpt-5.4",
       "name": "GPT-5.4"
     },
@@ -3249,11 +3253,7 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
         "response_format"
       ],
       "kind": "image"
-    },
-    {
-      "id": "gpt-5.5",
-      "name": "GPT-5.5"
-    },
+    }
   ],
   "opencode-go": [
     {
@@ -3518,16 +3518,6 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     },
   ],
   "ocz": [
-    {
-      "id": "jev-1.13",
-      "name": "Jev 1.13",
-      "kind": "systemone"
-    },
-    {
-      "id": "jev-1.13-free",
-      "name": "Jev 1.13 Free",
-      "kind": "systemone"
-    },
     {
       "id": "claude-fable-5",
       "name": "Claude Fable 5"
@@ -3816,6 +3806,16 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "id": "muse-spark-1.2-contributor-free",
       "name": "Muse Spark 1.2 Contributor Free"
     },
+    {
+      "id": "jev-1.13",
+      "name": "Jev 1.13",
+      "kind": "systemone"
+    },
+    {
+      "id": "jev-1.13-free",
+      "name": "Jev 1.13 Free",
+      "kind": "systemone"
+    }
   ],
   "openrouter": [
     {
@@ -6455,7 +6455,12 @@ export const PROVIDER_MODELS = BUILTIN_MODELS_BY_PROVIDER;
 
 export function getModelsByProviderId(providerId: string): ProviderModel[] {
   const alias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
-  return PROVIDER_MODELS[alias] || [];
+  // PROVIDER_MODELS is keyed by the provider id (upstream keys it by the registry
+  // `alias || id`, which equals the id for every non-OAuth entry), while
+  // PROVIDER_ID_TO_ALIAS holds the short *display* prefix (uiAlias) used to render
+  // `cmc/<model>`. The two only coincide for some providers, so resolve by id first
+  // and fall back to the alias instead of returning an empty catalog.
+  return PROVIDER_MODELS[providerId] || PROVIDER_MODELS[alias] || [];
 }
 
 export function getModelKind(m: unknown, fallback = "llm"): string {
