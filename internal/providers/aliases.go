@@ -74,6 +74,7 @@ var ProviderAliasMap = map[string]string{
 	"pplx-responses": "perplexity-agent",
 	"pw":             "perplexity-web",
 	"qd":             "qoder",
+	"qdcn":           "qoder-cn",
 	"runway":         "runwayml",
 	"stability":      "stability-ai",
 	"tg":             "together",

@@ -349,7 +349,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "icon": "water_drop",
     "website": "https://qoder.com.cn",
     "notice": {"signupUrl":"https://qoder.com.cn"},
+    "authHint": "Personal Access Token (pt-...) from https://qoder.com.cn/account/integrations",
     "noAuth": false,
+    "authModes": ["oauth", "apikey"],
     "serviceKinds": [
       "llm"
     ]

@@ -43,6 +43,7 @@
   import AddCompatibleNodeModal from './AddCompatibleNodeModal.svelte'
   import EditCompatibleNodeModal from './EditCompatibleNodeModal.svelte'
   import FreebuffSessionBanner from './FreebuffSessionBanner.svelte'
+  import ProviderIcon from './ProviderIcon.svelte'
 
   interface Props {
     providerId: string
@@ -68,7 +69,6 @@
     providerNodes.find((n) => n.id === providerId)
   )
   let providerName = $derived(selectedNode?.name || selectedCatalogItem?.name || providerId)
-  let providerIcon = $derived(getIconPath(providerId, selectedNode?.apiType))
   let providerColor = $derived(selectedCatalogItem?.color || '#f59e0b')
   let providerWebsite = $derived(
     selectedCatalogItem?.notice?.apiKeyUrl ||
@@ -490,10 +490,31 @@
 
   let showApplyProxyModal = $state(false)
   let isApplyingProxy = $state(false)
+  // Non-null while a reorder request is in flight; the chevrons disable on it
+  // so a second click cannot fire a swap computed from a stale list.
+  let reorderingConnId = $state<string | null>(null)
+  // Bulk-apply progress + abort flag for the Apply Proxy modal.
+  let applyProxyDone = $state(0)
+  let applyProxyAbort = $state(false)
+  let proxyPoolSearch = $state('')
+
+  let filteredProxyPools = $derived.by(() => {
+    const q = proxyPoolSearch.trim().toLowerCase()
+    if (!q) return proxyPools
+    return proxyPools.filter(
+      (p) => p.name.toLowerCase().includes(q) || p.proxyUrl.toLowerCase().includes(q)
+    )
+  })
 
   let editingConnection = $state<ProviderConnection | null>(null)
   let editName = $state('')
   let editPriority = $state<number>(1)
+  // The value the priority field was seeded with. Saving sends priority only
+  // when the field actually changed: a NULL-priority row has no number of its
+  // own, so seeding the input with 1 and always sending it turned a plain
+  // rename into an assignment of rank 1, colliding with whichever row already
+  // held it.
+  let editSeededPriority = $state<number>(1)
   let editTestStatus = $state<'ok' | 'error' | null>(null)
   let editTestError = $state<string | null>(null)
   let isTestingEdit = $state(false)
@@ -1031,21 +1052,27 @@
     isStoppingOneByOne = true
   }
 
-  // Priority reordering
-  async function swapPriority(idxA: number, idxB: number) {
-    const connA = providerConnections[idxA]
-    const connB = providerConnections[idxB]
-    if (!connA || !connB) return
-    const priorityA = connA.priority ?? idxA + 1
-    const priorityB = connB.priority ?? idxB + 1
+  // Priority reordering.
+  // Single server-side transactional call instead of two independent PUTs:
+  // a partial failure between those two writes left two rows sharing a
+  // priority, and a stable sort over tied priorities made every later click a
+  // literal no-op — the pair became permanently un-reorderable through the UI.
+  // The in-flight flag also stops a second click from firing a swap computed
+  // from the same stale list (last-write-wins, so the list appeared frozen).
+  async function swapPriority(idx: number, delta: -1 | 1) {
+    const conn = providerConnections[idx]
+    if (!conn || reorderingConnId) return
+    const target = providerConnections[idx + delta]
+    if (!target) return
+
+    reorderingConnId = conn.id
     try {
-      await Promise.all([
-        api.updateConnection(connA.id, { priority: priorityB }),
-        api.updateConnection(connB.id, { priority: priorityA })
-      ])
+      await api.reorderConnection(conn.id, delta < 0 ? 'up' : 'down')
       onRefresh()
     } catch (err) {
-      console.error('Error swapping priority:', err)
+      alert(`Reorder failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      reorderingConnId = null
     }
   }
 
@@ -1100,25 +1127,46 @@
 
   // Upstream applies bulk proxy changes to every connection of the provider,
   // regardless of the checkbox selection.
+  //
+  // Cancel sets the abort flag and the loop stops on the next iteration, so
+  // closing the modal no longer leaves requests firing in the background. The
+  // running counter is shown in the modal: with 100+ connections a sequential
+  // loop is slow enough that the previous label-less "Applying..." read as a
+  // hang.
   async function applyProxyAssignments(assignments: Array<{ id: string; poolId: string | null }>) {
     isApplyingProxy = true
+    applyProxyAbort = false
+    applyProxyDone = 0
     let failed = 0
     try {
       for (const assignment of assignments) {
+        if (applyProxyAbort) break
         try {
           await api.updateConnection(assignment.id, proxyAssignmentPayload(assignment.poolId))
         } catch {
           failed++
         }
+        applyProxyDone++
       }
       onRefresh()
       showApplyProxyModal = false
-      if (failed > 0) {
+      if (applyProxyAbort) {
+        alert(`Cancelled after ${applyProxyDone} of ${assignments.length} connection(s).`)
+      } else if (failed > 0) {
         alert(`Updated with ${failed} failed request(s).`)
       }
     } finally {
       isApplyingProxy = false
+      applyProxyAbort = false
     }
+  }
+
+  function cancelApplyProxy() {
+    if (isApplyingProxy) {
+      applyProxyAbort = true
+      return
+    }
+    showApplyProxyModal = false
   }
 
   async function handleApplyProxyPool(poolId: string | null) {
@@ -1146,6 +1194,7 @@
     editingConnection = conn
     editName = conn.name || ''
     editPriority = conn.priority ?? 1
+    editSeededPriority = editPriority
     editTestStatus = null
     editTestError = null
   }
@@ -1175,10 +1224,17 @@
     if (!editingConnection) return
     isSavingEdit = true
     try {
-      await api.updateConnection(editingConnection.id, {
-        name: editName.trim() || undefined,
-        priority: editPriority
-      })
+      const payload: { name?: string; priority?: number } = {
+        name: editName.trim() || undefined
+      }
+      // Omit an untouched priority: a NULL-priority row has no number of its
+      // own, so always sending the seeded 1 would rewrite a plain rename into
+      // a rank-1 assignment, tying with whoever already holds it and
+      // recreating the un-reorderable pair the reorder endpoint repairs.
+      if (editPriority !== editSeededPriority) {
+        payload.priority = editPriority
+      }
+      await api.updateConnection(editingConnection.id, payload)
       editingConnection = null
       onRefresh()
     } catch (err) {
@@ -2321,14 +2377,11 @@
         class="flex size-12 shrink-0 items-center justify-center rounded-lg"
         style="background-color: {providerColor}15;"
       >
-        <img
-          alt={providerName}
-          loading="lazy"
-          width="48"
-          height="48"
-          decoding="async"
-          class="max-h-12 max-w-12 rounded-lg object-contain"
-          src={providerIcon}
+        <ProviderIcon
+          id={providerId}
+          apiType={selectedNode?.apiType}
+          size="lg"
+          class="border-transparent bg-transparent"
         />
       </div>
 
@@ -2701,7 +2754,10 @@
         </div>
       </div>
     {:else}
-      <div class="flex min-w-0 flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03] max-h-[500px] overflow-y-auto pr-1">
+      <!-- relative z-50: the open row proxy dropdown paints a fixed inset-0
+           click-away backdrop over the whole viewport, which otherwise swallows
+           the first click on any priority chevron. -->
+      <div class="relative z-50 flex min-w-0 flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03] max-h-[500px] overflow-y-auto pr-1">
         {#each providerConnections as conn, idx (conn.id)}
           {@const isFirst = idx === 0}
           {@const isLast = idx === providerConnections.length - 1}
@@ -2730,21 +2786,27 @@
               <div class="group flex min-w-0 flex-col gap-3 rounded-lg p-2 transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02] sm:flex-row sm:items-center sm:justify-between">
                 <!-- Left info -->
                 <div class="flex min-w-0 flex-1 items-start gap-2 sm:items-center sm:gap-3">
-                  <!-- Reorder buttons -->
-                  <div class="flex shrink-0 flex-col">
+                  <!-- Reorder buttons. z-[60] sits above the row proxy
+                       dropdown's fixed inset-0 click-away backdrop (z-40): a
+                       positioned backdrop paints above unpositioned content, so
+                       without this the first chevron click after opening a
+                       dropdown is always swallowed. -->
+                  <div class="relative z-[60] flex shrink-0 flex-col">
                     <button
                       type="button"
-                      disabled={isFirst}
-                      onclick={() => swapPriority(idx, idx - 1)}
-                      class="p-0.5 rounded {isFirst ? 'text-text-muted/30 cursor-not-allowed' : 'hover:bg-sidebar text-text-muted hover:text-primary cursor-pointer'}"
+                      disabled={isFirst || !!reorderingConnId}
+                      title={isFirst ? 'Already first' : 'Move up'}
+                      onclick={() => swapPriority(idx, -1)}
+                      class="p-1 rounded disabled:opacity-40 {isFirst || reorderingConnId ? 'text-text-muted/30 cursor-not-allowed' : 'hover:bg-sidebar text-text-muted hover:text-primary cursor-pointer'}"
                     >
                       <span class="material-symbols-outlined text-sm">keyboard_arrow_up</span>
                     </button>
                     <button
                       type="button"
-                      disabled={isLast}
-                      onclick={() => swapPriority(idx, idx + 1)}
-                      class="p-0.5 rounded {isLast ? 'text-text-muted/30 cursor-not-allowed' : 'hover:bg-sidebar text-text-muted hover:text-primary cursor-pointer'}"
+                      disabled={isLast || !!reorderingConnId}
+                      title={isLast ? 'Already last' : 'Move down'}
+                      onclick={() => swapPriority(idx, 1)}
+                      class="p-1 rounded disabled:opacity-40 {isLast || reorderingConnId ? 'text-text-muted/30 cursor-not-allowed' : 'hover:bg-sidebar text-text-muted hover:text-primary cursor-pointer'}"
                     >
                       <span class="material-symbols-outlined text-sm">keyboard_arrow_down</span>
                     </button>
@@ -3807,24 +3869,29 @@
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
     <div
       class="absolute inset-0 bg-black/50 backdrop-blur-[2px] fade-in"
-      onclick={() => (showApplyProxyModal = false)}
+      onclick={cancelApplyProxy}
       role="presentation"
     ></div>
-    <div class="relative w-full bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-elev)] fade-in max-w-lg p-6">
-      <div class="flex items-center justify-between pb-3 border-b border-border-subtle mb-4">
+    <div class="relative flex max-h-[85vh] w-full flex-col bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-elev)] fade-in max-w-lg">
+      <div class="flex shrink-0 items-center justify-between px-6 pt-5 pb-3 border-b border-border-subtle">
         <h2 class="text-lg font-semibold text-text-main">
           Apply Proxy ({providerConnections.length} connections)
         </h2>
         <button
           type="button"
-          onclick={() => (showApplyProxyModal = false)}
-          class="p-1 rounded text-text-muted hover:text-text-main cursor-pointer"
+          onclick={cancelApplyProxy}
+          disabled={isApplyingProxy}
+          aria-label="Close"
+          class="p-1 rounded text-text-muted hover:text-text-main disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         >
           <span class="material-symbols-outlined text-lg">close</span>
         </button>
       </div>
 
-      <div class="space-y-2 mb-6">
+      <!-- The pool list scrolls on its own. With 100+ imported pools an
+           unbounded list grew this centred panel past the viewport, which
+           clipped the title and every action above the fold. -->
+      <div class="min-h-0 flex-1 space-y-2 overflow-y-auto custom-scrollbar px-6 py-4">
         <button
           type="button"
           onclick={handleApplyProxyRotate}
@@ -3851,7 +3918,15 @@
           </div>
         </button>
 
-        {#each proxyPools as pool}
+        <input
+          type="search"
+          bind:value={proxyPoolSearch}
+          placeholder="Filter {proxyPools.length} pools by name or URL"
+          disabled={isApplyingProxy}
+          class="w-full rounded-lg border border-border bg-surface-2 px-3 py-2 text-xs text-text-main placeholder:text-text-muted focus:border-primary focus:outline-none disabled:opacity-50"
+        />
+
+        {#each filteredProxyPools as pool}
           <button
             type="button"
             onclick={() => handleApplyProxyPool(pool.id)}
@@ -3869,20 +3944,25 @@
               <div class="text-[11px] text-text-muted truncate">{pool.proxyUrl}</div>
             </div>
           </button>
+        {:else}
+          <p class="py-6 text-center text-xs text-text-muted">No proxy pool matches “{proxyPoolSearch}”.</p>
         {/each}
       </div>
 
-      {#if isApplyingProxy}
-        <p class="mb-4 text-xs text-text-muted">Applying...</p>
-      {/if}
-
-      <div class="flex justify-end">
+      <div class="flex shrink-0 items-center justify-between gap-3 px-6 py-4 border-t border-border-subtle">
+        <p class="text-xs text-text-muted" aria-live="polite">
+          {#if isApplyingProxy}
+            Applying {applyProxyDone} / {providerConnections.length}…
+          {:else}
+            {filteredProxyPools.length} of {proxyPools.length} pools
+          {/if}
+        </p>
         <button
           type="button"
-          onclick={() => (showApplyProxyModal = false)}
+          onclick={cancelApplyProxy}
           class="px-3 py-1.5 text-xs font-semibold rounded-[8px] bg-surface-2 hover:bg-surface-3 text-text-main border border-border cursor-pointer"
         >
-          Cancel
+          {isApplyingProxy ? 'Stop' : 'Cancel'}
         </button>
       </div>
     </div>

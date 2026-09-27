@@ -721,6 +721,13 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
+	// Qoder CN is a distinct deployment with its own gateway and credentials.
+	// It is never aliased onto qoder (AGENTS.md section 3.A).
+	"qoder-cn": {
+		BaseURL:    "https://gateway.qoder.com.cn/algo/api/v2/service/pro/sse/agent_chat_generation",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+	},
 	"grok-web": {
 		BaseURL:    "https://grok.com/rest/app-chat/conversations/new",
 		AuthHeader: "Authorization",

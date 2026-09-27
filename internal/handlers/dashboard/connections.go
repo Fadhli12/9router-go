@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/samber/lo"
 
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/models"
@@ -140,7 +141,7 @@ var usageSupportedProviders = []string{
 	"antigravity", "claude", "codebuddy-cn", "codebuddy-intl", "codex",
 	"commandcode", "deepseek", "gemini-cli", "github", "glm", "glm-cn",
 	"grok-cli", "groq", "kimi", "kiro", "minimax", "minimax-cn", "ollama",
-	"opencode-go", "qoder", "trae", "vercel-ai-gateway", "xiaomi-mimo", "zed",
+	"opencode-go", "qoder", "qoder-cn", "trae", "vercel-ai-gateway", "xiaomi-mimo", "zed",
 }
 
 // usageApikeyProviders mirrors upstream USAGE_APIKEY_PROVIDERS
@@ -148,7 +149,7 @@ var usageSupportedProviders = []string{
 var usageApikeyProviders = []string{
 	"codebuddy-cn", "codebuddy-intl", "commandcode", "deepseek", "glm",
 	"glm-cn", "groq", "kimi", "kiro", "minimax", "minimax-cn", "ollama",
-	"opencode-go", "qoder", "vercel-ai-gateway", "xiaomi-mimo",
+	"opencode-go", "qoder", "qoder-cn", "vercel-ai-gateway", "xiaomi-mimo",
 }
 
 func strSliceContains(list []string, v string) bool {
@@ -556,11 +557,13 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 	} else if existing.Name != nil {
 		name = *existing.Name
 	}
-	priority := 0
+	// A NULL priority must stay NULL. Defaulting it to 0 would sort this row
+	// ahead of every other account (0 beats every positive rank) and silently
+	// promote it to the top of the rotation on any unrelated edit — rename,
+	// proxy assignment, model assignment.
+	priority := existing.Priority
 	if p, ok := rawBody["priority"].(float64); ok {
-		priority = int(p)
-	} else if existing.Priority != nil {
-		priority = *existing.Priority
+		priority = lo.ToPtr(int(p))
 	}
 	isActive := existing.IsActive == 1
 	if hasIsActive {
@@ -644,6 +647,67 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 	}
 
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": id})
+}
+
+// HandleReorderConnection handles POST /api/connections/{id}/reorder.
+// Body: {"direction": "up"|"down"}.
+//
+// The whole swap plus the 1..N renumbering happens in one SQLite transaction,
+// so the pool can never end up with two rows sharing a priority. See
+// Repo.ReorderProviderConnections for why the previous two-PUT client swap was
+// not safe.
+func (h *DashboardHandler) HandleReorderConnection(w http.ResponseWriter, r *http.Request) {
+	id := getURLParam(r, "id")
+	if id == "" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing connection id")
+		return
+	}
+
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	var body struct {
+		Direction string `json:"direction"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	direction := 0
+	switch strings.ToLower(strings.TrimSpace(body.Direction)) {
+	case "up":
+		direction = -1
+	case "down":
+		direction = 1
+	default:
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, `direction must be "up" or "down"`)
+		return
+	}
+
+	conn, err := h.Repo.GetProviderConnectionByID(id)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if conn == nil {
+		handlerutil.WriteJSONError(w, http.StatusNotFound, "connection not found")
+		return
+	}
+
+	if err := h.Repo.ReorderProviderConnections(conn.Provider, id, direction); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	conns, err := h.Repo.GetProviderConnections(conn.Provider, false)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": id, "connections": conns})
 }
 
 func mergeMapField(target map[string]any, key string, source map[string]any) {

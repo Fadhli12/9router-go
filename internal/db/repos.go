@@ -126,11 +126,12 @@ func (r *Repo) GetProviderConnectionByName(provider, authType, name string) (*mo
 	}
 	var conn models.ProviderConnection
 	err := r.db.QueryRow(
-		`SELECT id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt
+		`SELECT id, provider, authType, name, email, priority, isActive, data, lastUsedAt, consecutiveUseCount, createdAt, updatedAt
 		 FROM providerConnections WHERE provider = ? AND authType = ? AND name = ? LIMIT 1`,
 		provider, authType, name,
 	).Scan(&conn.ID, &conn.Provider, &conn.AuthType, &conn.Name, &conn.Email,
-		&conn.Priority, &conn.IsActive, &conn.Data, &conn.CreatedAt, &conn.UpdatedAt)
+		&conn.Priority, &conn.IsActive, &conn.Data, &conn.LastUsedAt, &conn.ConsecutiveUseCount,
+		&conn.CreatedAt, &conn.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -162,10 +163,11 @@ func (r *Repo) ReplaceProviderConnectionPayload(id, name, dataJSON string) error
 func (r *Repo) GetProviderConnectionByID(id string) (*models.ProviderConnection, error) {
 	var conn models.ProviderConnection
 	err := r.db.QueryRow(
-		"SELECT id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt FROM providerConnections WHERE id = ? LIMIT 1",
+		"SELECT id, provider, authType, name, email, priority, isActive, data, lastUsedAt, consecutiveUseCount, createdAt, updatedAt FROM providerConnections WHERE id = ? LIMIT 1",
 		id,
 	).Scan(&conn.ID, &conn.Provider, &conn.AuthType, &conn.Name, &conn.Email,
-		&conn.Priority, &conn.IsActive, &conn.Data, &conn.CreatedAt, &conn.UpdatedAt)
+		&conn.Priority, &conn.IsActive, &conn.Data, &conn.LastUsedAt, &conn.ConsecutiveUseCount,
+		&conn.CreatedAt, &conn.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -182,29 +184,21 @@ func (r *Repo) GetProviderConnections(provider string, activeOnly bool) ([]*mode
 	var query string
 	var args []any
 
+	const connCols = `id, provider, authType, name, email, priority, isActive, data, lastUsedAt, consecutiveUseCount, createdAt, updatedAt`
+	const orderBy = `ORDER BY CASE WHEN priority IS NULL THEN 999999 ELSE priority END ASC, updatedAt DESC`
+
 	if provider != "" {
 		if activeOnly {
-			query = `SELECT id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt
-				FROM providerConnections
-				WHERE provider = ? AND isActive = 1
-				ORDER BY CASE WHEN priority IS NULL THEN 999999 ELSE priority END ASC, updatedAt DESC`
+			query = "SELECT " + connCols + " FROM providerConnections WHERE provider = ? AND isActive = 1 " + orderBy
 		} else {
-			query = `SELECT id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt
-				FROM providerConnections
-				WHERE provider = ?
-				ORDER BY CASE WHEN priority IS NULL THEN 999999 ELSE priority END ASC, updatedAt DESC`
+			query = "SELECT " + connCols + " FROM providerConnections WHERE provider = ? " + orderBy
 		}
 		args = append(args, provider)
 	} else {
 		if activeOnly {
-			query = `SELECT id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt
-				FROM providerConnections
-				WHERE isActive = 1
-				ORDER BY CASE WHEN priority IS NULL THEN 999999 ELSE priority END ASC, updatedAt DESC`
+			query = "SELECT " + connCols + " FROM providerConnections WHERE isActive = 1 " + orderBy
 		} else {
-			query = `SELECT id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt
-				FROM providerConnections
-				ORDER BY CASE WHEN priority IS NULL THEN 999999 ELSE priority END ASC, updatedAt DESC`
+			query = "SELECT " + connCols + " FROM providerConnections " + orderBy
 		}
 	}
 
@@ -219,7 +213,8 @@ func (r *Repo) GetProviderConnections(provider string, activeOnly bool) ([]*mode
 		var conn models.ProviderConnection
 		err := rows.Scan(
 			&conn.ID, &conn.Provider, &conn.AuthType, &conn.Name, &conn.Email,
-			&conn.Priority, &conn.IsActive, &conn.Data, &conn.CreatedAt, &conn.UpdatedAt,
+			&conn.Priority, &conn.IsActive, &conn.Data, &conn.LastUsedAt, &conn.ConsecutiveUseCount,
+			&conn.CreatedAt, &conn.UpdatedAt,
 		)
 		if err != nil {
 			return nil, err

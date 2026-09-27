@@ -93,7 +93,7 @@ func (h *ChatHandler) handleAccountFallback(
 				}
 			}
 			if strat.RotateStrategy != "" && strat.RotateStrategy != "none" {
-				allConns = h.applyConnectionStrategy(provider, allConns, strat)
+				allConns = h.applyConnectionStrategy(allConns, strat)
 			}
 		}
 	}

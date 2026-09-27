@@ -525,6 +525,19 @@ export const api = {
       body: JSON.stringify(body),
     })
   },
+  // reorderConnection moves a connection one slot up or down inside its
+  // provider pool. The swap plus the 1..N renumbering happens server-side in a
+  // single SQLite transaction, so the pool can never end up with two rows
+  // sharing a priority. Reordering client-side with two PUTs could not: a
+  // partial failure left a tied pair that no later click could undo.
+  reorderConnection: (id: string, direction: 'up' | 'down') =>
+    request<{ status: string; id: string; connections: ProviderConnection[] }>(
+      `/api/connections/${encodeURIComponent(id)}/reorder`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ direction }),
+      }
+    ),
   deleteConnection: (id: string) =>
     request<{ success: boolean }>(`/api/connections/${encodeURIComponent(id)}`, {
       method: 'DELETE',
