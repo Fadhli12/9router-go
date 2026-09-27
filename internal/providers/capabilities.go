@@ -501,7 +501,7 @@ func GetCapabilitiesForModel(provider, model string) Capabilities {
 	}
 
 	// 5. Dynamic synced catalog overlay (only ever turns capabilities ON)
-	if dynamic := GetCatalogModalities(model); dynamic != nil {
+	if dynamic := GetCatalogModalities(provider, model); dynamic != nil {
 		if dynamic.Vision {
 			res.Vision = true
 		}
