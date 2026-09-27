@@ -277,6 +277,12 @@ func mountOAuthRoutes(r interface {
 	r.Post("/api/oauth/cline/exchange", oauthH.HandleClineExchange)
 	r.Get("/api/oauth/pkce/authorize", oauthH.HandlePKCEAuthorize)
 	r.Post("/api/oauth/pkce/exchange", oauthH.HandlePKCEExchange)
+	// Codex's OAuth client only accepts its registered loopback redirect URI,
+	// so the callback is served by a dedicated fixed-port listener rather than
+	// the dashboard's /callback page. See internal/handlers/oauth/codex_proxy.go.
+	r.Get("/api/oauth/codex/start-proxy", oauthH.HandleCodexStartProxy)
+	r.Get("/api/oauth/codex/poll-status", oauthH.HandleCodexPollStatus)
+	r.Get("/api/oauth/codex/stop-proxy", oauthH.HandleCodexStopProxy)
 	r.Get("/api/oauth/authcode/authorize", oauthH.HandleAuthCodeAuthorize)
 	r.Post("/api/oauth/authcode/exchange", oauthH.HandleAuthCodeExchange)
 	r.Get("/api/oauth/trae/authorize", oauthH.HandleTraeAuthorize)
