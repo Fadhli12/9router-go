@@ -3,6 +3,7 @@ package providers
 import (
 	"net/http"
 	"os"
+	"strings"
 )
 
 // ProviderConfig describes how to reach an upstream provider.
@@ -31,6 +32,36 @@ func (p *ProviderConfig) IsGeminiNative() bool { return p.Format == "gemini-nati
 // OpenAI-compatible endpoint whose tool schema validation is as strict as the
 // native one (e.g. the "gemini" provider at /v1beta/openai/chat/completions).
 func (p *ProviderConfig) IsGeminiOpenAICompat() bool { return p.Format == "gemini-openai" }
+
+// AnthropicBetaRedactThinking asks Anthropic to return thinking blocks as a
+// signature only. That is right for clients that never render thinking, but it
+// blanks the very summaries a client requested with
+// `thinking.display: "summarized"`, so it is dropped per request when the body
+// asks for them. Upstream: ANTHROPIC_BETA_REDACT_THINKING in
+// open-sse/providers/shared.js.
+const AnthropicBetaRedactThinking = "redact-thinking-2026-02-12"
+
+// WithoutBetaFlag returns a copy of headers with one Anthropic-Beta flag
+// removed. The registry's header map is shared by every request, so a
+// request-scoped edit has to copy rather than mutate.
+func WithoutBetaFlag(headers map[string]string, flag string) map[string]string {
+	current, ok := headers["Anthropic-Beta"]
+	if !ok {
+		return headers
+	}
+	kept := make([]string, 0, 8)
+	for _, existing := range strings.Split(current, ",") {
+		if trimmed := strings.TrimSpace(existing); trimmed != "" && trimmed != flag {
+			kept = append(kept, trimmed)
+		}
+	}
+	res := make(map[string]string, len(headers))
+	for k, v := range headers {
+		res[k] = v
+	}
+	res["Anthropic-Beta"] = strings.Join(kept, ",")
+	return res
+}
 
 // KnownProviders maps provider IDs to their upstream configuration.
 var KnownProviders = map[string]ProviderConfig{

@@ -309,6 +309,16 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			}
 		}
 	}
+
+	// A body that asked for thinking summaries must not also carry the
+	// redact-thinking beta: it asks Anthropic for signature-only thinking blocks
+	// and would blank exactly what the client requested. The header map is
+	// shared with the registry, so this edits a request-local copy.
+	if isAnthropic && executor.WantsThinkingSummaries(pipedBody) {
+		providerCfg.StaticHeaders = providers.WithoutBetaFlag(
+			providerCfg.StaticHeaders, providers.AnthropicBetaRedactThinking,
+		)
+	}
 	// Sanitize tool schemas for all OpenAI-compatible providers (opencode, gemini-openai, etc.)
 	// Fixes misplaced `required` inside `properties` and missing `items` for arrays.
 	if sanitized, err := translator.SanitizeOpenAITools(pipedBody); err == nil && sanitized != nil && string(sanitized) != string(pipedBody) {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"9router/proxy/internal/constants"
+	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/pricing"
 	"9router/proxy/internal/translator"
@@ -414,12 +415,9 @@ func getJSONMap(m map[string]any, key string) map[string]any {
 	return make(map[string]any)
 }
 
-// maskAPIKey returns a masked version of an API key for storage.
-// NOTE: kept as if/else, not lo.Ternary — Ternary evaluates both branches
-// eagerly and the slicing panics on short keys.
+// maskAPIKey returns a masked version of an API key for storage. The canonical
+// implementation lives in handlerutil so the usage-stats reader can derive the
+// same mask from a stored row to recover the key's name.
 func maskAPIKey(key string) string {
-	if len(key) <= 8 {
-		return "***"
-	}
-	return key[:4] + "***" + key[len(key)-4:]
+	return handlerutil.MaskAPIKey(key)
 }
