@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### 🐛 Claude decloak now recovers a tool name the map lost (`b65d2d0a`, #4342)
+
+- A cloaked tool name reached the client as an unresolvable `<tool>_ide` whenever `toolNameMap` missed it — the map is built per request, so a retry or a reconnect loses it. Both decloak paths now fall back to stripping the literal suffix: the non-streaming `DecloakClaudeResponseBody` and the streaming `ClaudeStreamDecloaker`. Decoy names are exempt, so they still reach the client unresolved and surface as "tool unavailable" rather than a silent no-op.
+- Two places bailed out before the fallback could help. `DecloakClaudeResponseBody` returned early on an empty map, and `NewClaudeStreamDecloaker` returned nil for one. The constructor now distinguishes the two cases: a **nil** map means no cloaking was applied at all, so stripping would be wrong; a non-nil **empty** map means the map was lost, and the decloaker is built anyway so the fallback runs.
+- `claude-opus-5-5` joined the `cc` and `claude` catalogues, in the registry position upstream lists it.
+
 ## [v1.9.4] - 2026-09-27
 
 ### 🐛 Issue #24 — proxy UI, account rotation, priority reorder, provider search
