@@ -68,6 +68,10 @@ var patternThinking = []thinkingPattern{
 	{Provider: "codex", Pattern: "*gpt-5.6-terra*", Levels: codexGPT56UltraLevels()},
 	{Provider: "codex", Pattern: "*gpt-5.6-luna*", Levels: codexGPT56Levels()},
 	{Pattern: "*codex*", Levels: []string{"low", "medium", "high", "xhigh"}}, // codex cannot disable thinking
+	{Pattern: "*mimo*v2.6*", Levels: []string{"none", "low", "medium", "high", "xhigh"}},
+	// mimo-v2.5-pro on opencode-go rejects reasoning_effort "max" (probed live);
+	// v2.5 accepts it.
+	{Pattern: "*mimo*v2.5-pro*", Levels: []string{"none", "low", "medium", "high", "xhigh"}},
 	// DeepSeek v4.* (Alibaba MaaS, probed live): effort low|medium|high|xhigh|max
 	// all 200 via output_config.effort; "none" is a 400 on the anthropic route
 	// (disable thinking instead). none kept for the picker = disable.
@@ -88,6 +92,30 @@ var patternThinking = []thinkingPattern{
 	{Provider: "codebuddy-intl", Pattern: "deepseek-v4*", Levels: []string{"low", "high", "xhigh"}},
 }
 
+// codexModelThinkingLevels mirrors the per-model `thinkingLevels` field of the
+// Codex registry entries (open-sse/providers/registry/codex.js). Upstream reads
+// it off the catalog record; the Go catalog is a flat id list, so the field
+// lives here. GPT-6 Sol/Luna are "responses-lite": they take an effort but
+// neither "none" nor "minimal".
+var codexModelThinkingLevels = map[string][]string{
+	"gpt-6-sol":  {"low", "medium", "high", "xhigh", "max"},
+	"gpt-6-luna": {"low", "medium", "high", "xhigh", "max"},
+}
+
+// codexModelLevels returns the registry-declared levels for a Codex model, with
+// any trailing "(level)" override stripped first — the suffix is a 9router
+// request override, not part of the model id.
+func codexModelLevels(provider, model string) []string {
+	if provider != "codex" {
+		return nil
+	}
+	base := model
+	if open := strings.LastIndex(base, "("); open != -1 && strings.HasSuffix(base, ")") {
+		base = strings.TrimSpace(base[:open])
+	}
+	return codexModelThinkingLevels[base]
+}
+
 // GetThinkingLevels returns the valid thinking levels for a model, or nil when
 // the model has no reasoning. The returned slice is a fresh copy, safe for the
 // caller to keep or filter.
@@ -100,17 +128,22 @@ func GetThinkingLevels(provider, model string) []string {
 		return nil
 	}
 
-	levels := formatLevels[caps.ThinkingFormat]
+	// A registry-declared per-model set wins over everything, then the pattern
+	// table, then the wire format's default — the order upstream resolves in.
+	levels := codexModelLevels(provider, model)
 	if levels == nil {
-		levels = levelBase
-	}
-	for _, entry := range patternThinking {
-		if entry.Provider != "" && entry.Provider != provider {
-			continue
+		levels = formatLevels[caps.ThinkingFormat]
+		if levels == nil {
+			levels = levelBase
 		}
-		if matchThinkingGlob(entry.Pattern, model) {
-			levels = entry.Levels
-			break
+		for _, entry := range patternThinking {
+			if entry.Provider != "" && entry.Provider != provider {
+				continue
+			}
+			if matchThinkingGlob(entry.Pattern, model) {
+				levels = entry.Levels
+				break
+			}
 		}
 	}
 	if !canDisableThinking(caps) {

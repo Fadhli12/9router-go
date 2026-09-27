@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### 🐛 Thinking levels drifted from upstream v0.5.91 (MiMo + Codex per-model sets)
+
+- Found while auditing the upstream tag range `v0.5.86..v0.5.91` (38 commits, 123 files). `internal/providers/thinking_levels.go` was missing two pattern rows and a whole resolution stage that v0.5.91 added.
+- Missing rows: `*mimo*v2.6*` and `*mimo*v2.5-pro*`, both `["none","low","medium","high","xhigh"]`. Upstream's note: *mimo-v2.5-pro on opencode-go rejects reasoning_effort "max" (probed live); v2.5 accepts it*. Without them, 15 `(provider, model)` pairs fell through to the `deepseek` format default and answered `["high","max"]` where upstream answers `["low","medium","high","xhigh"]` — the picker would have offered a level those gateways reject.
+- Missing stage: upstream resolves a per-model `thinkingLevels` off the catalog record before the pattern table (`getProviderModels("cx").find(e => e.id === baseId)?.thinkingLevels`, with a trailing `(level)` suffix stripped first). Go's catalog is a flat id list, so the field lives in `codexModelThinkingLevels`; `GetThinkingLevels` now resolves registry-declared → pattern → format default, the order upstream uses.
+- The parity fixture had been **masking this**: it was captured from an upstream tree carrying the older values, so `TestGetThinkingLevels_MatchesUpstreamFixture` reported 1547/1547 while 15 pairs were wrong. The fixture now carries an `upstreamVersion` field, the test fails when it does not match the tag the port targets, and the capture was re-taken from v0.5.91 — 1547/1547 against the real thing.
+- `TestCodexModelLevels` covers the per-model stage directly (including the `(level)` suffix and the codex/cx split), since the GPT-6 models are not in the Go catalog yet and the fixture cannot reach that path.
+
 ### ✨ Provider detail parity for `/dashboard/providers/<id>` (CommandCode audit against upstream `:20128`)
 
 - 🔴 **The "Available Models" list was empty for 28 providers.** `web/src/lib/models.ts` keyed `PROVIDER_MODELS` by provider id but resolved it through `PROVIDER_ID_TO_ALIAS`, which holds the *display* prefix (`uiAlias`: `commandcode→cmc`, `deepseek→ds`, …). Upstream derives the same map from the registry `alias` and only remaps OAuth entries (`providerModels.js:107-113`), so every non-OAuth provider whose alias differs from its id got `undefined` instead of a list. `getModelsByProviderId` now resolves by id first and falls back to the alias.

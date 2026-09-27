@@ -102,6 +102,37 @@ func TestResolveKiroEffortPath(t *testing.T) {
 	}
 }
 
+// TestCodexModelLevels covers the per-model `thinkingLevels` registry field
+// (registry/codex.js) that upstream reads off the catalog entry. The GPT-6
+// models are not in the Go catalog yet, so the fixture cannot exercise this
+// path — the "codex"/cx provider split and the "(level)" suffix both need their
+// own coverage here.
+func TestCodexModelLevels(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+		want     []string
+	}{
+		{name: "gpt-6-sol", provider: "codex", model: "gpt-6-sol",
+			want: []string{"low", "medium", "high", "xhigh", "max"}},
+		{name: "gpt-6-luna", provider: "codex", model: "gpt-6-luna",
+			want: []string{"low", "medium", "high", "xhigh", "max"}},
+		{name: "level suffix is stripped before the lookup", provider: "codex", model: "gpt-6-sol(high)",
+			want: []string{"low", "medium", "high", "xhigh", "max"}},
+		{name: "a model without a declared set", provider: "codex", model: "gpt-5.6-sol", want: nil},
+		{name: "only codex consults the registry field", provider: "cx", model: "gpt-6-sol", want: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := codexModelLevels(tt.provider, tt.model); !slices.Equal(got, tt.want) {
+				t.Errorf("codexModelLevels(%q, %q) = %v, want %v", tt.provider, tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestMatchThinkingGlob pins the glob semantics: `*` must be able to cross a
 // `/`, because CommandCode and CodeBuddy publish vendor-prefixed ids such as
 // "deepseek/deepseek-v4-pro" and the tables are written against them.
