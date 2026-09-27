@@ -14,6 +14,7 @@
   import { PROVIDER_CATALOG, type ProviderCatalogItem } from '../../lib/providers'
   import {
     clearCallback,
+    CODEX_REDIRECT_URI,
     clearPending,
     dashboardCallbackURL,
     loadPendings,
@@ -326,6 +327,9 @@
   // OAuth auto-handoff: callback tab writes to storage + BroadcastChannel,
   // this modal restores the pending session and auto-submits.
   let autoSubmitted = $state(false)
+  // Codex completes its login on a server-owned loopback listener, so the
+  // modal watches the server instead of the browser callback page.
+  let codexPollTimer: ReturnType<typeof setInterval> | null = $state(null)
 
   function dashboardCallback(): string {
     return dashboardCallbackURL(dashboardOrigin())
@@ -1250,7 +1254,9 @@
     callbackInput = ''
     copiedAuthUrl = false
     try {
-      const cb = dashboardCallback()
+      // Codex cannot use the dashboard callback: OpenAI only accepts the
+      // redirect URI registered for the Codex CLI client.
+      const cb = providerId === 'codex' ? CODEX_REDIRECT_URI : dashboardCallback()
       const res = await api.pkceAuthorize(
         providerId,
         providerId === 'gitlab'
@@ -1264,7 +1270,10 @@
       oauthAuthUrl = res.url || res.authUrl
       pkceCodeVerifier = res.codeVerifier || ''
       pkceState = res.state || ''
-      pkceRedirectUri = res.redirectUri || ''
+      pkceRedirectUri = res.redirectUri || cb
+      if (providerId === 'codex') {
+        await startCodexLoopback()
+      }
       rememberPending({
         state: pkceState,
         verifier: pkceCodeVerifier,
@@ -1282,6 +1291,68 @@
       }
     } catch (err) {
       alert(`Failed to initiate authorization: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  // Codex redirects the browser to a fixed loopback port, so the server needs
+  // that listener running before the popup opens — otherwise the callback dies
+  // on a closed port and the login can never complete.
+  async function startCodexLoopback() {
+    stopCodexPoll()
+    const proxy = await api.codexStartProxy({
+      appPort: window.location.port || (window.location.protocol === 'https:' ? '443' : '80'),
+      state: pkceState,
+      codeVerifier: pkceCodeVerifier,
+      redirectUri: CODEX_REDIRECT_URI,
+    })
+    if (!proxy.success) {
+      throw new Error(
+        proxy.reason === 'port_busy'
+          ? 'Port 1455 is in use; close the conflicting process and retry'
+          : 'Could not start the local login listener',
+      )
+    }
+    codexPollTimer = setInterval(pollCodexStatus, 1500)
+  }
+
+  async function pollCodexStatus() {
+    try {
+      const res = await api.codexPollStatus(pkceState)
+      if (res.status === 'done') {
+        stopCodexPoll()
+        showOAuthModal = false
+        onRefresh()
+      } else if (res.status === 'error') {
+        stopCodexPoll()
+        oauthError = res.error || 'Authorization failed'
+      } else if (res.status === 'unknown') {
+        // The server no longer tracks this login. Stop polling, but say so:
+        // silently freezing the modal on "Waiting for popup authorization…"
+        // leaves the user with a login that can never finish and no way to
+        // tell that apart from simply being slow.
+        stopCodexPoll()
+        oauthError = 'The local login listener is no longer running. Close this window and click Login again.'
+      }
+    } catch {
+      // Biarkan polling berikutnya mencoba lagi.
+    }
+  }
+
+  function stopCodexPoll() {
+    if (codexPollTimer) {
+      clearInterval(codexPollTimer)
+      codexPollTimer = null
+    }
+  }
+
+  // Dismissing the modal abandons the login, so any loopback listener and
+  // poll loop it started have to be released with it.
+  function closeOAuthModal() {
+    showOAuthModal = false
+    stopDevicePoll()
+    stopCodexPoll()
+    if (providerId === 'codex') {
+      void api.codexStopProxy().catch(() => {})
     }
   }
 
@@ -3406,7 +3477,7 @@
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div
         class="absolute inset-0 bg-black/50 backdrop-blur-[2px] fade-in"
-        onclick={() => { showOAuthModal = false; stopDevicePoll() }}
+        onclick={closeOAuthModal}
         role="presentation"
       ></div>
     <div class="relative w-full bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-elev)] fade-in max-w-lg p-6">
@@ -3414,7 +3485,7 @@
         <h2 class="text-lg font-semibold text-text-main">Connect {providerName}</h2>
         <button
           type="button"
-          onclick={() => { showOAuthModal = false; stopDevicePoll() }}
+          onclick={closeOAuthModal}
           class="p-1 rounded text-text-muted hover:text-text-main cursor-pointer"
         >
           <span class="material-symbols-outlined text-lg">close</span>

@@ -717,6 +717,27 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  // Codex's OAuth client has exactly one registered loopback redirect URI, so
+  // the callback lands on a fixed-port listener the server owns rather than on
+  // the dashboard's /callback page. start-proxy binds it, the login completes
+  // server-side, and poll-status reports the outcome.
+  codexStartProxy: (params: { appPort: string; state: string; codeVerifier: string; redirectUri: string; name?: string }) => {
+    const q = new URLSearchParams({
+      app_port: params.appPort,
+      state: params.state,
+      code_verifier: params.codeVerifier,
+      redirect_uri: params.redirectUri,
+    })
+    if (params.name) q.set('name', params.name)
+    return request<{ success: boolean; serverSide?: boolean; port?: number; reason?: string }>(
+      `/api/oauth/codex/start-proxy?${q.toString()}`
+    )
+  },
+  codexPollStatus: (state: string) =>
+    request<{ status: string; connectionId?: string; email?: string; error?: string }>(
+      `/api/oauth/codex/poll-status?state=${encodeURIComponent(state)}`
+    ),
+  codexStopProxy: () => request<{ success: boolean }>('/api/oauth/codex/stop-proxy'),
   authcodeAuthorize: (provider: string, redirectUri?: string) => {
     const q = new URLSearchParams({ provider })
     if (redirectUri) q.set('redirect_uri', redirectUri)
