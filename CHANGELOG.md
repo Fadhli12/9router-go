@@ -23,6 +23,17 @@
 - **A Qoder 401 now says the token is dead instead of printing a status code.** `Qoder connected. Usage fetch returned 401.` told the user nothing actionable. The connection is OAuth with an expired `accessToken`, and Qoder device tokens genuinely cannot be refreshed — `center.qoder.sh` answers 403 for device tokens, which upstream's own `shared/qoder/constants.js` documents — so the card now reads "Qoder authentication expired. Please re-authorize this connection." No silent retry is attempted, since one cannot succeed.
 - **Groq's "No rate-limit data reported" is left alone on purpose.** Groq dropped `x-ratelimit-*` from `/openai/v1/models`; those headers now ride only on chat completions (confirmed live: `/models` returns none, a completion returns limit/remaining/reset for both buckets). Upstream deliberately piggybacks on `/models` so reading usage never costs a token, and returns the same message when no bucket is present. Surfacing real numbers would mean spending a token per quota poll, so that trade-off is unchanged.
 
+### ✨ `/v1/models` can report the models you can actually call (#28)
+
+- On a fresh install `/v1/models` listed **1302 models across 119 providers** while the dashboard picker showed ~8, and nothing in the response said which list was authoritative. The two numbers came from different code paths: `buildModelsList` deliberately dumps the whole static registry when `providerConnections` is empty ("so a fresh install still has a usable picker"), while `resolveModelPickerGroups` in `web/src/components/combos/pickerData.ts` gates on `isConnected || noAuth`. A new user reads the 1302-entry list as "models I can call" and looks for a missing import step.
+- The listing is now scopeable by query parameter, leaving the default byte-for-byte upstream-compatible:
+  - `GET /v1/models` (default) — unchanged: full catalog on a fresh install, connection-scoped once connections exist
+  - `GET /v1/models?connected=1` — only providers with an active connection, plus registry `noAuth` providers. On a fresh install this is the ~8-model noAuth subset instead of the full catalog
+  - `GET /v1/models?all=1` — always the full static catalog, connections ignored, for explicit discovery
+- Every response now carries `mode` (`all` | `connected` | `catalog`) and `connections` (distinct providers with an active row), so a client can tell a candidate catalog from a usable model list without guessing.
+- The `disabledModels` KV scope keeps filtering in all three modes, and a custom model for an unconnected provider stays hidden under `?connected=1`.
+- Adds `providers.IsNoAuthProvider`, which resolves an alias to its canonical id before reading the registry flag, and `ModelsListMode` + `ModelsListResult` on the chat handler so the mode and its metadata travel together.
+
 ### 🐛 Claude decloak now recovers a tool name the map lost (`b65d2d0a`, #4342)
 
 - A cloaked tool name reached the client as an unresolvable `<tool>_ide` whenever `toolNameMap` missed it — the map is built per request, so a retry or a reconnect loses it. Both decloak paths now fall back to stripping the literal suffix: the non-streaming `DecloakClaudeResponseBody` and the streaming `ClaudeStreamDecloaker`. Decoy names are exempt, so they still reach the client unresolved and surface as "tool unavailable" rather than a silent no-op.
