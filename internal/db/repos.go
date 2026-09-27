@@ -116,6 +116,49 @@ func (r *Repo) NextConnectionPriority(provider string) (int, error) {
 	return int(maxPriority.Int64) + 1, nil
 }
 
+// GetProviderConnectionByName returns the apikey connection carrying this
+// (provider, authType, name), or nil when the name is free. Apikey connections
+// are the ones deduped by name: oauth and access_token rows are identified by
+// their account, and the user manages their duplicates by hand.
+func (r *Repo) GetProviderConnectionByName(provider, authType, name string) (*models.ProviderConnection, error) {
+	if name == "" {
+		return nil, nil
+	}
+	var conn models.ProviderConnection
+	err := r.db.QueryRow(
+		`SELECT id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt
+		 FROM providerConnections WHERE provider = ? AND authType = ? AND name = ? LIMIT 1`,
+		provider, authType, name,
+	).Scan(&conn.ID, &conn.Provider, &conn.AuthType, &conn.Name, &conn.Email,
+		&conn.Priority, &conn.IsActive, &conn.Data, &conn.CreatedAt, &conn.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get provider connection by name for %s: %w", provider, err)
+	}
+	return &conn, nil
+}
+
+// ReplaceProviderConnectionPayload rewrites an existing connection's name and
+// data in place, keeping its id and position in the rotation. This is what an
+// explicit overwrite does: the caller asked to change the key behind a name
+// they already own, not to add a second row with the same name.
+func (r *Repo) ReplaceProviderConnectionPayload(id, name, dataJSON string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := r.db.Exec(
+		`UPDATE providerConnections SET name = ?, data = ?, updatedAt = ? WHERE id = ?`,
+		name, dataJSON, now, id,
+	)
+	if err != nil {
+		return fmt.Errorf("replace provider connection %s: %w", id, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("replace provider connection %s: no such connection", id)
+	}
+	return nil
+}
+
 func (r *Repo) GetProviderConnectionByID(id string) (*models.ProviderConnection, error) {
 	var conn models.ProviderConnection
 	err := r.db.QueryRow(

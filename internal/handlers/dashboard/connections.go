@@ -311,6 +311,11 @@ type createConnectionRequest struct {
 	DefaultModel         string         `json:"defaultModel"`
 	ProviderSpecificData map[string]any `json:"providerSpecificData"`
 	Data                 any            `json:"data"`
+	// AllowOverwrite (or its legacy `overwrite` spelling) states that a
+	// name collision is intended. A request carrying an id is already an
+	// explicit edit and never needs the flag.
+	AllowOverwrite bool `json:"allowOverwrite"`
+	Overwrite      bool `json:"overwrite"`
 }
 
 // HandleCreateConnection handles POST /api/connections.
@@ -336,7 +341,11 @@ func (h *DashboardHandler) HandleCreateConnection(w http.ResponseWriter, r *http
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing provider")
 		return
 	}
-	if req.ID == "" {
+	// An id in the body means the caller is editing a known connection; its
+	// absence is what makes this a create, and a create must not quietly
+	// replace an existing one.
+	explicitID := req.ID != ""
+	if !explicitID {
 		req.ID = uuid.New().String()
 	}
 	if req.AuthType == "" {
@@ -384,6 +393,45 @@ func (h *DashboardHandler) HandleCreateConnection(w http.ResponseWriter, r *http
 			return
 		}
 		dataStr = string(encoded)
+	}
+
+	// A create that reuses a name that is already in use used to replace the
+	// stored key without a word: a script naming rows "Key 1", "Key 2", … kept
+	// the existing pool entries and handed back a success. A caller that means
+	// "change the key behind this name" passes an id or an explicit overwrite;
+	// everyone else gets a typed 409 naming the row that would have been
+	// replaced. #4311
+	if !explicitID && req.AuthType == "apikey" && name != "" {
+		existing, err := h.Repo.GetProviderConnectionByName(req.Provider, req.AuthType, name)
+		if err != nil {
+			handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if existing != nil {
+			if !req.AllowOverwrite && !req.Overwrite {
+				handlerutil.WriteJSON(w, http.StatusConflict, map[string]any{
+					"error": "A connection named \"" + name + "\" already exists for provider \"" +
+						req.Provider + "\". Pass allowOverwrite: true to replace it.",
+					"code":         "PROVIDER_NAME_CONFLICT",
+					"existingId":   existing.ID,
+					"existingName": existing.Name,
+				})
+				return
+			}
+			// Overwriting rewrites the row in place, keeping its id and its
+			// place in the rotation; adding a second row with the same name would
+			// leave the account picker with two candidates it cannot tell apart.
+			if err := h.Repo.ReplaceProviderConnectionPayload(existing.ID, name, dataStr); err != nil {
+				handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+				"status":   "ok",
+				"id":       existing.ID,
+				"replaced": existing.ID,
+			})
+			return
+		}
 	}
 
 	if err := h.Repo.CreateProviderConnectionFull(req.ID, req.Provider, req.AuthType, name, req.Priority, dataStr); err != nil {
