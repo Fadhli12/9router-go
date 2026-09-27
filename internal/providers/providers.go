@@ -81,6 +81,39 @@ func WithoutBetaFlag(headers map[string]string, flag string) map[string]string {
 	return res
 }
 
+// MergeAnthropicBeta unions any number of comma-separated beta flag lists into
+// one de-duplicated header value, keeping the order they were seen in. The
+// caller's own flags are merged in rather than dropped: a client asking for a
+// beta the gateway does not list would otherwise be refused without ever being
+// told why. Port of mergeAnthropicBeta in open-sse/providers/shared.js.
+func MergeAnthropicBeta(values ...string) string {
+	seen := make(map[string]bool, 8)
+	merged := make([]string, 0, 8)
+	for _, value := range values {
+		for _, flag := range strings.Split(value, ",") {
+			flag = strings.TrimSpace(flag)
+			if flag == "" || seen[flag] {
+				continue
+			}
+			seen[flag] = true
+			merged = append(merged, flag)
+		}
+	}
+	return strings.Join(merged, ",")
+}
+
+// WithHeader returns a copy of headers with one entry set. The registry's
+// header map is shared by every request, so a request-scoped change has to
+// copy rather than mutate — the same reason WithoutBetaFlag copies.
+func WithHeader(headers map[string]string, key, value string) map[string]string {
+	res := make(map[string]string, len(headers)+1)
+	for k, v := range headers {
+		res[k] = v
+	}
+	res[key] = value
+	return res
+}
+
 // KnownProviders maps provider IDs to their upstream configuration.
 var KnownProviders = map[string]ProviderConfig{
 	"openai": {

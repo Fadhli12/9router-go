@@ -319,6 +319,33 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			providerCfg.StaticHeaders, providers.AnthropicBetaRedactThinking,
 		)
 	}
+
+	if isAnthropic {
+		// The caller's own beta flags are merged into the upstream request
+		// instead of being dropped: a client asking for a beta the gateway does
+		// not list would be refused without ever being told why. The registry
+		// header map is shared, so this edits a request-local copy.
+		if clientBeta := handlerutil.GetClientAnthropicBeta(ctx); clientBeta != "" {
+			merged := providers.MergeAnthropicBeta(providerCfg.StaticHeaders["Anthropic-Beta"], clientBeta)
+			if merged != "" {
+				providerCfg.StaticHeaders = providers.WithHeader(providerCfg.StaticHeaders, "Anthropic-Beta", merged)
+			}
+		}
+
+		// Claude OAuth wants x-claude-code-session-id to agree with the
+		// metadata.user_id the cloak generates, otherwise the API sees two
+		// different sessions for one request.
+		if isOAuth || strings.Contains(apiKey, "sk-ant-oat") {
+			if sid := claudeSessionIDFromBody(pipedBody); sid != "" {
+				if providerCfg.StaticHeaders["x-claude-code-session-id"] == "" {
+					providerCfg.StaticHeaders = providers.WithHeader(
+						providerCfg.StaticHeaders, "x-claude-code-session-id", sid,
+					)
+				}
+			}
+		}
+	}
+
 	// Sanitize tool schemas for all OpenAI-compatible providers (opencode, gemini-openai, etc.)
 	// Fixes misplaced `required` inside `properties` and missing `items` for arrays.
 	if sanitized, err := translator.SanitizeOpenAITools(pipedBody); err == nil && sanitized != nil && string(sanitized) != string(pipedBody) {
@@ -730,4 +757,19 @@ func formatRetryAfter(isoTimestamp string) string {
 		parts = append(parts, fmt.Sprintf("%ds", s))
 	}
 	return "reset after " + strings.Join(parts, " ")
+}
+
+// claudeSessionIDFromBody reads the session id the cloak wrote into
+// metadata.user_id, so it can be echoed in x-claude-code-session-id.
+func claudeSessionIDFromBody(body []byte) string {
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		return ""
+	}
+	meta, _ := req["metadata"].(map[string]any)
+	if meta == nil {
+		return ""
+	}
+	userID, _ := meta["user_id"].(string)
+	return extractClaudeSessionIdFromUserId(userID)
 }
