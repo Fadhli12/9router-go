@@ -2,6 +2,7 @@ package translator
 
 import (
 	json "encoding/json/v2"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -513,15 +514,22 @@ func TestResponsesCompletedCarriesOutput(t *testing.T) {
 		t.Errorf("output item type = %v, want message", output[0]["type"])
 	}
 
-	// The recorded item must be the same one delivered by output_item.done.
+	// The recorded item must be the one output_item.done delivered, and it must
+	// carry the full answer text rather than an empty placeholder.
 	var doneItem map[string]any
 	for _, ev := range all {
 		if ev.Event == "response.output_item.done" {
 			doneItem = ev.Data["item"].(map[string]any)
 		}
 	}
-	if !equalJSON(t, doneItem, output[0]) {
+	if doneItem == nil {
+		t.Fatal("no output_item.done was emitted")
+	}
+	if !reflect.DeepEqual(doneItem, output[0]) {
 		t.Error("completed.output does not match the item delivered by output_item.done")
+	}
+	if got := output[0]["content"].([]any)[0].(map[string]any)["text"]; got != "the answer" {
+		t.Errorf("completed item text = %v, want the streamed answer", got)
 	}
 }
 
@@ -617,15 +625,10 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
+// equalJSON compares two decoded values structurally. Marshaling to a string and
+// comparing bytes is not usable here: encoding/json/v2 does not promise a stable
+// key order, so the same map can render differently in two contexts.
 func equalJSON(t *testing.T, a, b any) bool {
 	t.Helper()
-	left, err := json.Marshal(a)
-	if err != nil {
-		t.Fatalf("marshal a: %v", err)
-	}
-	right, err := json.Marshal(b)
-	if err != nil {
-		t.Fatalf("marshal b: %v", err)
-	}
-	return string(left) == string(right)
+	return reflect.DeepEqual(a, b)
 }
