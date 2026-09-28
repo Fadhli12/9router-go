@@ -319,9 +319,18 @@ func sseHasTerminalToken(p []byte) bool {
 }
 
 // sseHasNonNullValue reports whether key (with quotes, e.g. `"finish_reason"`)
-// appears with a value other than null.
+// appears with a value other than null. The needle is key + ":", not
+// key + `":` — key already ends in the closing quote, so the latter searched
+// for `"finish_reason":` (two quotes before the colon), which no JSON
+// contains. hasTerminal was therefore always false, and every stream the
+// upstream had already terminated correctly gained a second injected
+// terminal before its [DONE].
+//
+// Content that quotes the field back needs no extra guard: inside a JSON
+// string every quote is escaped, so it arrives as \"finish_reason\": and the
+// unescaped needle cannot match it.
 func sseHasNonNullValue(p []byte, key string) bool {
-	needle := []byte(key + `":`)
+	needle := []byte(key + ":")
 	for len(p) > 0 {
 		idx := bytes.Index(p, needle)
 		if idx < 0 {

@@ -386,3 +386,75 @@ func TestSSECopy_InjectsStopBeforeBareDone(t *testing.T) {
 		}
 	})
 }
+
+// TestSSECopy_KeepsSingleTerminalOnCompliantStream pins that a stream the
+// upstream already terminated correctly is relayed untouched. sseHasNonNullValue
+// searched for `"finish_reason":` — two quotes before the colon, which no JSON
+// contains — so hasTerminal was always false and every compliant stream was
+// given a second terminal before its [DONE].
+func TestSSECopy_KeepsSingleTerminalOnCompliantStream(t *testing.T) {
+	tests := []struct {
+		name   string
+		stream string
+	}{
+		{
+			// Real OpenAI frames carry id/object/created, which is what tells
+			// the upstream's own terminal apart from an injected one.
+			name: "OpenAI stream already closed with stop",
+			stream: "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n" +
+				"data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+				"data: [DONE]\n\n",
+		},
+		{
+			name: "OpenAI stream already closed with tool_calls",
+			stream: "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n" +
+				"data: {\"choices\":[{\"index\":0,\"finish_reason\":\"tool_calls\",\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"f\",\"arguments\":\"{}\"}}]}}]}\n\n" +
+				"data: [DONE]\n\n",
+		},
+		{
+			name: "Claude stream already closed with end_turn",
+			stream: "event: message_start\ndata: {\"type\":\"message_start\"}\n\n" +
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n" +
+				"data: [DONE]\n\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &mockResponseWriter{}
+			if err := SSECopy(rec, strings.NewReader(tt.stream), rec, nil); err != nil {
+				t.Fatalf("SSECopy failed: %v", err)
+			}
+			out := rec.String()
+			if got := strings.Count(out, sseStopTerminal); got != 0 {
+				t.Errorf("expected no injected stop terminal on an already-closed stream, got %d in %q", got, out)
+			}
+			if got := strings.Count(out, sseTruncatedTerminal); got != 0 {
+				t.Errorf("a complete stream must not be reported as truncated, got %q", out)
+			}
+			if got := strings.Count(out, "data: [DONE]"); got != 1 {
+				t.Errorf("expected exactly 1 [DONE], got %d in %q", got, out)
+			}
+		})
+	}
+}
+
+// TestSSECopy_QuotedTerminalInsideContentIsNotATerminal pins the key-position
+// requirement: content that quotes the field back is escaped JSON text, and
+// reading it as a terminal would leave the real stream unterminated.
+func TestSSECopy_QuotedTerminalInsideContentIsNotATerminal(t *testing.T) {
+	rec := &mockResponseWriter{}
+	stream := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"field: \\\"finish_reason\\\": \\\"stop\\\"\"},\"finish_reason\":null}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	if err := SSECopy(rec, strings.NewReader(stream), rec, nil); err != nil {
+		t.Fatalf("SSECopy failed: %v", err)
+	}
+	out := rec.String()
+	if !strings.Contains(out, "field:") {
+		t.Fatalf("content did not survive, got %q", out)
+	}
+	if got := strings.Count(out, sseStopTerminal); got != 1 {
+		t.Errorf("expected exactly 1 injected terminal, got %d in %q", got, out)
+	}
+}
