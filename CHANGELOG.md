@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v1.9.5] - 2026-09-28
+
 ### 🐛 Issue #27 — "Update now" opened the changelog inside the sidebar column
 
 - 🔴 **The modal was clipped into the 288px sidebar.** `App.svelte` wraps `<Sidebar>` in a mobile drawer carrying `transform … lg:transform-none`, and an ancestor with a `transform` becomes the containing block for `position: fixed`. The modal's `fixed inset-0` therefore resolved against the drawer's box instead of the viewport, so the overlay covered only the sidebar and the panel was cut off part-way through the release notes. Upstream renders its update confirm as a sibling of `<aside>` (`src/shared/components/Sidebar.js:367`) for the same reason, so the fix is structural: the modal and the disconnected overlay now live in a new `UpdateModal.svelte` that `App.svelte` mounts outside the transformed drawer. `showUpdateModal`, `updateInfo` and `version` are bindable props so the sidebar keeps ownership of the version polling.
