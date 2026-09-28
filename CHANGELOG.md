@@ -19,14 +19,14 @@
 - Covered by `internal/fetchgate` (idle gate is free, concurrent callers spaced, jitter only widens the gap, cancellation releases the wait) and by the dashboard, which asserts the spacing at the fake provider's own socket — the ollama dispatch, the Antigravity branch, and that an abandoned request makes no upstream call at all. Every one of those three fails when the gate is set to a zero gap.
 ### ✨ Chat Completions → OpenAI Responses streaming translator
 
-Diff 1–2 dari 4 (stacked). Branch `parity/responses-translator`, base `origin/main` (`b475fbd0`).
+Diff 1–4 dari 4 (stacked). Branch `parity/responses-translator`, base `origin/main` (`b475fbd0`).
 
 | Diff | Isi | Status |
 |:---|:---|:---|
 | 1 | Chat SSE → Responses SSE + `reasoning_details` | ✅ `36b17d46` |
-| **2** | Arah request: body Responses → body Chat Completions | ✅ commit ini |
-| 3 | Wiring di `HandleResponses` (resolve provider, pakai penerjemah hanya bila upstream bukan Responses-native) | ⬜ |
-| 4 | `response.completed` untuk jalur non-streaming | ⬜ |
+| 2 | Arah request: body Responses → body Chat Completions | ✅ `b3af67ad` |
+| **3** | Wiring di `ChatHandler.HandleResponses` (resolve, combo, fallback, penerjemah hanya bila upstream bukan Responses-native) | ✅ commit ini |
+| **4** | `response.completed` untuk jalur non-streaming | ✅ commit ini |
 
 **Diff 1 — mesin translasinya.** `TranslateOpenAIToResponses` + `FlushResponses` dengan `ResponsesState` yang mencerminkan `initState()` upstream.
 
@@ -43,6 +43,23 @@ Diff 1–2 dari 4 (stacked). Branch `parity/responses-translator`, base `origin/
 - **Tool custom dipertahankan sebagai identitas.** Chat Completions tidak punya deklarasi custom tool, jadi tool `type:"custom"` diekspos sebagai function dengan satu properti string `input`; namanya dikembalikan di `ResponsesRequestResult.CustomToolNames` supaya konversi balasan bisa mengenali lagi dan memancarkan `custom_tool_call_input`. Field ini **tidak** ikut masuk body upstream — upstream menaruh `_customToolNames` di body lalu menghapusnya di `chatCore.js:214` sebelum mengirim; di sini ia jadi bagian hasil, bukan body.
 - **`additional_tools` digabung ke deklarasi tool**, dengan tool dari body lebih dulu. Skema `type:"object"` tanpa `properties` mendapat `properties` kosong, karena Codex Responses API mewajibkannya.
 - Covered by `internal/translator/responses_request_test.go` (24 test): normalisasi input string/kosong, instructions, pemetaan blok konten termasuk `file_id` dan default `detail:"auto"`, tool call beruntun, tool call nameless, tool result (string dan objek), reasoning yang menempel ke turn berikutnya / tidak bocor ke turn user / `encrypted_content` bukan teks tampil, deklarasi tool (function, hosted, custom, additional, sudah-bentuk-Chat), dan pembersihan field khusus Responses.
+
+**Diff 3 — `/v1/responses` benar-benar speaks Responses.** Rute `/responses` pindah dari `MediaHandler` ke `ChatHandler.HandleResponses`, cermin `HandleMessages`: resolve model, combo, capacity adapter, account fallback, dan usage logging. Sebelumnya handler media cuma passthrough lewat `forwardMediaRequest` — tanpa resolution, tanpa combo, tanpa fallback, tanpa log.
+
+- 🔴 **Klien `/v1/responses` ke upstream Chat-Completions dapat balasan salah bentuk.** Smoke live (binary, upstream tiruan): sebelumnya balasan keluar apa adanya sebagai chunk Chat Completions; sesudahnya jadi `response.created` → `response.output_text.delta` → `response.completed`, dan upstream menerima `{"messages":[...]}` tanpa `input`/`instructions`.
+- **Penjaga "Responses-native" menentukan arah, bukan cuma tata letak.** `previous_response_id`, `store`, dan id item hanya milik API Responses; mengubahnya ke Chat Completions membuangnya dan codex kehilangan percakapan sisi server. Native-ness dibaca dari data yang sudah ada, bukan tabel baru: `executor.UpstreamSpeaksResponses` — base URL yang berakhiran `/responses` (codex, grok-cli, perplexity-agent; tes yang sama dengan yang dipakai eksekutor opencode sebelum menambahkan `/responses`) atau model opencode yang memang dilayani dari `/responses` (muse-spark, grok-4.6, gpt-5.6-luna). Padanan `sourceFormat === targetFormat` yang membuat upstream melewati penerjemahan. Balasan native diteruskan byte for byte lewat `passthroughResponses`, bukan lewat `handleCodexStream` yang akan mengubahnya jadi Chat Completions.
+- **Format klien lewat context, bukan field baru.** `translator.WithClientFormat` / `IsResponsesClient` / `NeedsResponsesBridge`, pola yang sama dengan `WithRequestedModel` yang sudah dipakai `HandleMessages`. Nol perubahan signature: `forwardRequestParams` dan kelima call site-nya tidak tersentuh, dan `executor.Request.Ctx` sudah meneruskan context ke `executor.Request{Ctx: ctx}`. `nil` context dibaca sebagai klien Chat di ketiga flag — itu mayoritas traffic, dan panic di sini akan menjatuhkan seluruh proxy.
+- **Kombo dan capacity adapter memakai aturan yang sama.** `handleMessagesComboFallback` dan `handleComboFallback` sebelumnya meng-hardcode `TranslateResponse: true` dan `Endpoint: "/v1/messages"`. Untuk klien Responses itu berarti balasan dibalik ke bentuk Claude, dan upstream Anthropic diberi body Chat mentah tanpa `EnsureClaudeMessages`. Keduanya kini diturunkan dari format klien lewat `forwardEndpoint`, tanpa mengubah perilaku klien Chat maupun klien Claude.
+- **Upstream Claude dilayani dua hop.** Event Claude → chunk Chat (cabang yang sudah ada) → event Responses, lewat bridge yang sama. `responsesBridge.feedFrames` menerima frame siap jadi maupun payload per chunk, supaya dua produser ini tidak masing-masing memecah frame sendiri.
+- **Stream terpotong tetap ditutup.** `bridge.close()` memancarkan `response.completed` kalau upstream mati di tengah jawaban; tanpa event terminal klien menunggu giliran yang sebenarnya sudah selesai. Berlaku juga untuk hop kedua (upstream Claude), yang tidak pernah memakai sentinel `[DONE]`.
+
+**Diff 4 — jalur non-streaming.** Klien yang tidak meminta streaming harus tetap menerima satu objek `Response`, bukan body Chat Completions yang tidak bisa dibacanya.
+
+- **Objek `Response` dibangun dari translator streaming, bukan penulis kedua.** `ChatResponseToResponses` melipat satu jawaban Chat jadi satu chunk sintetis lalu memainkannya melalui `TranslateOpenAIToResponses` + `FlushResponses`, dan mengambil objek dari event `response.completed`. Bentuk item, urutannya, dan detail usage jadi identik di kedua jalur secara konstruksi, bukan karena dua implementasi kebetulan sama. Padanan upstream `convertResponsesStreamToJson`, yang mengagregasi event yang sama dari stream.
+- **Provider yang memaksa stream tetap dijawab JSON.** Klien non-streaming bisa saja menerima SSE dari upstream (Codex melakukannya); `respondAsResponses` mengagregatnya lebih dulu lewat `sseToClaudeJSON`, karena menjawab klien yang menunggu JSON dengan stream membuat parsing gagal di sisi klien, bukan di sisi proxy.
+- **Body yang tidak bisa dikonversi diteruskan utuh, bukan jadi 200 kosong.** Kesalahan konversi dicatat dan body asli dikirim; bentuk yang salah setidaknya masih membuat klien melaporkan masalahnya, sedangkan 200 kosong tidak memberi tahu apa pun.
+- **Usage native dibaca ulang.** `ParseResponsesUsage` menerjemahkan `input_tokens`/`output_tokens` (dan `input_tokens_details.cached_tokens`) ke bentuk Chat yang dipakai log dan biaya, baik dari body non-streaming maupun dari event terminal `response.completed`. Tanpa ini setiap giliran codex, grok-cli, dan perplexity-agent tercatat nol token.
+- Covered by `internal/proxy/executor/responses_bridge_test.go` (replay Chat SSE ke event Responses, stream terpotong tetap punya event terminal, dua hop Claude, dan tabel native-ness provider/model/config), `internal/translator/responses_json_test.go` (objek Response non-streaming, tool call, body tidak terbaca), `internal/translator/responses_usage_test.go` (envelope non-streaming, event terminal, cache detail, tanpa usage), `internal/translator/client_format_test.go` (ketiga flag termasuk context `nil`), dan `internal/handlers/chat/responses_test.go` (tiga e2e lewat handler: bridging ke upstream chat, upstream native tidak diterjemahkan, dan jawaban non-streaming berbentuk `Response`).
 
 ### 🐛 reasoning_effort "max" sekarang diturunkan di jalur MiMo
 
