@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -277,6 +279,110 @@ func TestSSECopy_SynthesizesTerminalOnAbruptClose(t *testing.T) {
 		}
 		if !strings.Contains(out, "data: [DONE]\n\n") {
 			t.Errorf("expected data: [DONE], got %q", out)
+		}
+	})
+}
+
+// TestSSECopy_InjectsStopBeforeBareDone covers the Oh My Pi failure
+// "OpenAI completions stream closed before a finish_reason was received": a
+// non-compliant upstream streams content deltas and then emits [DONE] with no
+// terminal finish_reason chunk.
+func TestSSECopy_InjectsStopBeforeBareDone(t *testing.T) {
+	tests := []struct {
+		name   string
+		stream string
+	}{
+		{
+			name:   "deltas then DONE without finish_reason",
+			stream: "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: [DONE]\n\n",
+		},
+		{
+			name:   "null finish_reason chunks then DONE",
+			stream: "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n",
+		},
+		{
+			name:   "DONE without trailing newline at EOF",
+			stream: "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &mockResponseWriter{}
+			if err := SSECopy(rec, strings.NewReader(tt.stream), rec, nil); err != nil {
+				t.Fatalf("SSECopy failed: %v", err)
+			}
+			out := rec.String()
+			if !strings.Contains(out, `"finish_reason":"stop"`) {
+				t.Fatalf("expected injected stop terminal, got %q", out)
+			}
+			if strings.Contains(out, "network_error") {
+				t.Errorf("deliberate DONE must complete with stop, not network_error, got %q", out)
+			}
+			stopIdx := strings.Index(out, `"finish_reason":"stop"`)
+			doneIdx := strings.Index(out, "data: [DONE]")
+			if doneIdx < 0 {
+				t.Fatalf("expected [DONE] sentinel, got %q", out)
+			}
+			if stopIdx > doneIdx {
+				t.Errorf("terminal must precede [DONE], got %q", out)
+			}
+			if strings.Count(out, "[DONE]") != 1 {
+				t.Errorf("expected exactly 1 [DONE], got %d in %q", strings.Count(out, "[DONE]"), out)
+			}
+		})
+	}
+
+	t.Run("sentinel split across reads still gains terminal", func(t *testing.T) {
+		rec := &mockResponseWriter{}
+		raw := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"
+		if err := SSECopy(rec, iotest.OneByteReader(strings.NewReader(raw)), rec, nil); err != nil {
+			t.Fatalf("SSECopy failed: %v", err)
+		}
+		out := rec.String()
+		if !strings.Contains(out, `"finish_reason":"stop"`) {
+			t.Errorf("expected injected stop terminal on split reads, got %q", out)
+		}
+		if strings.Count(out, "[DONE]") != 1 {
+			t.Errorf("expected exactly 1 [DONE], got %d in %q", strings.Count(out, "[DONE]"), out)
+		}
+	})
+
+	t.Run("[DONE] mentioned inside content does not end the stream", func(t *testing.T) {
+		rec := &mockResponseWriter{}
+		raw := "data: {\"choices\":[{\"delta\":{\"content\":\"say [DONE] now\"}}]}\n\n"
+		if err := SSECopy(rec, strings.NewReader(raw), rec, nil); err != nil {
+			t.Fatalf("SSECopy failed: %v", err)
+		}
+		out := rec.String()
+		if !strings.Contains(out, "say [DONE] now") {
+			t.Errorf("content must pass through untouched, got %q", out)
+		}
+		// No real sentinel arrived, so EOF synthesis (network_error + DONE)
+		// must still close the stream.
+		if !strings.Contains(out, `"finish_reason":"network_error"`) {
+			t.Errorf("expected EOF network_error synthesis, got %q", out)
+		}
+		if !strings.HasSuffix(out, "data: [DONE]\n\n") {
+			t.Errorf("expected stream to end with [DONE], got %q", out)
+		}
+	})
+
+	t.Run("read error still terminates the stream before returning", func(t *testing.T) {
+		rec := &mockResponseWriter{}
+		upstream := io.MultiReader(
+			strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"),
+			iotest.ErrReader(errors.New("connection reset by peer")),
+		)
+		if err := SSECopy(rec, upstream, rec, nil); err == nil {
+			t.Fatal("expected the upstream read error to be reported")
+		}
+		out := rec.String()
+		if !strings.Contains(out, `"finish_reason":"network_error"`) {
+			t.Errorf("expected a synthesized terminal finish_reason, got %q", out)
+		}
+		if !strings.HasSuffix(out, "data: [DONE]\n\n") {
+			t.Errorf("expected the stream to close with [DONE], got %q", out)
 		}
 	})
 }
