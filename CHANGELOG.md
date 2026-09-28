@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### ✨ Chat Completions → OpenAI Responses streaming translator
+
+Diff 1 dari 4 (stacked). Branch `parity/responses-translator`, base `origin/main` (`b475fbd0`).
+
+| Diff | Isi | Status |
+|:---|:---|:---|
+| **1** | Penerjemah Chat SSE → Responses SSE + `reasoning_details` | ✅ commit ini |
+| 2 | Arah request: body Responses → body Chat Completions | ⬜ |
+| 3 | Wiring di `HandleResponses` (resolve provider, pakai penerjemah hanya bila upstream bukan Responses-native) | ⬜ |
+| 4 | `response.completed` untuk jalur non-streaming | ⬜ |
+
+- 🔴 **Klien `/v1/responses` yang upstream-nya bukan Responses-native mendapat balasan yang salah bentuk.** `HandleResponses` meneruskan body apa adanya ke `<base>/responses` dan menyalin balasan mentah, jadi upstream Chat-Completions-only (OpenAI-compatible) menjawab dengan chunk Chat Completions ke klien yang mengharapkan event Responses. Diff ini membangun mesin translasinya secara utuh: `TranslateOpenAIToResponses` + `FlushResponses`, dengan `ResponsesState` yang mencerminkan `initState()` upstream.
+- **`response.completed` harus mengulang item-nya (#4307).** Klien yang membangun hasil akhirnya dari event terminal (GitHub Copilot CLI, helper "final response" OpenAI SDK) menganggap turn kosong padahal teksnya sudah streaming. `recordCompletedOutputItem` menyimpan item **berkunci `output_index`** sehingga close berulang menimpa alih-alih menduplikasi, dan `collectCompletedOutputItems` mengurutkannya menurut index supaya `response.output` mengikuti urutan emisi. Keduanya menempel di item yang sama yang memancarkan `response.output_item.done` — kalau terpisah, nomor yang tercatat pasti menyimpang dari yang dikirim.
+- **Penyelesaian ditunda saat usage belum tiba, tapi hanya pada jalur langsung.** OpenAI mengirim usage di chunk terakhir yang `choices`-nya kosong, jadi menyelesaikan di frame `finish_reason` akan membekukan payload sebelum chunk itu terbaca. `FlushReachesUs` meniru `state.targetFormat === FORMATS.OPENAI` upstream: benar (tunda ke flush) bila translator berada di rute langsung, salah (langsung kirim) bila ia hop kedua dari pivot, karena `translateResponse` sudah membuang chunk terminal sehingga flush tidak pernah dipanggil dan penundaan akan menelan `response.completed` sepenuhnya.
+- **Usage tidak menimpa akuntasi milik layer stream.** Dihasilkan ke `ResponsesState.Usage` sendiri, bukan ke usage internal, karena yang terakhir diisi `normalizeUsage()`-shaped untuk log dan biaya; ditimpa dengan bentuk Responses akan diam-diam membuang token cache/reasoning dari statistik. Tanpa `usage`, klien seperti Codex CLI menahan gauge "context used" di 0 dan tidak pernah auto-compact.
+- **Item tool baru diumumkan setelah id dan nama sama-sama tiba.** Beberapa provider memecah `id` dan `function.name` ke chunk berbeda; memutuskan lebih awal membuat panggilan `exec` terkunci permanen sebagai `function_call`. Argumen custom tool justru **tidak** di-stream dan baru dikirim saat close, setelah amplop JSON Chat bisa dibungkus — streaming fragmen mentah akan mengekspos `{"input":"..."}`, bukan program freeform yang diharapkan klien.
+- **`reasoning_details` kini ikut dibaca.** `extractReasoningText` hanya mengenal `reasoning_content` dan `reasoning`; vendor ketiga mengirim `reasoning_details` sebagai array yang bisa berisi string polos atau objek ber-`text`/`content`. `OpenAIReasoningDetail` menerima kedua bentuk dan mengembalikannya ke bentuk aslinya saat marshal, sehingga request yang diterjemahkan tidak mengubah bentuk yang disukai vendor.
+- Covered by `internal/translator/responses_test.go`: urutan event teks, nomor urut monotonik, item pesan dibuka sekali, reasoning via `reasoning_content`/`reasoning_details`/blok `<think>` (termasuk yang terbelah antar chunk), idempotensi close, tool call (nunggu id+nama, buffer argumen, custom tool, `extractCustomToolInput`), usage dari chunk tanpa `choices` beserta detail cache/reasoning, penundaan penyelesaian pada kedua mode `FlushReachesUs`, `output` pada `response.completed` (#4307) termasuk overwrite dan urutan, serta `[]` bukan `null` saat kosong.
+
 ### 🐛 Issue #25 — Codex quota tracker was empty; codex now reads live 5h/7d quota
 
 - 🔴 **Every Codex account showed "Account active. No quota limits tracked."** `codex` was already listed in `usageSupportedProviders`, so Codex OAuth rows appeared in the quota tracker — but `fetchProviderUsage` had no `codex` case, so the request fell through to the lock fallback and answered `{plan:"codex", quotas:{}}`. Antigravity looked fine because it had a fetcher; Codex had none. The bug report was right that nothing read `wham/usage` anywhere in the tree. `internal/codexquota` now owns that endpoint (`GET https://chatgpt.com/backend-api/wham/usage`) and the dashboard dispatches `codex` to it, porting `open-sse/services/usage/codex.js:getCodexUsage`.
