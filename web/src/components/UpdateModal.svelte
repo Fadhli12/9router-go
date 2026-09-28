@@ -42,6 +42,7 @@
     if (!isOpen || notesForKey === key) return
     notesForKey = key
     releaseNotesHtml = ''
+    isLoadingChangelog = false
     if (updateInfo?.releaseNotes) {
       releaseNotesHtml = toHtml(updateInfo.releaseNotes)
       return
@@ -55,7 +56,8 @@
       })
       .catch(() => {})
       .finally(() => {
-        isLoadingChangelog = false
+        // Only the request that still owns the key may clear the spinner.
+        if (notesForKey === key) isLoadingChangelog = false
       })
   })
 
@@ -121,8 +123,11 @@
   }
 
   async function handleAutoUpdate() {
-    // An auto update and a manual shutdown must never both be in flight.
+    // An auto update and a manual shutdown must never both be in flight:
+    // cancel the countdown and invalidate a clipboard write still in the air.
     clearShutdownTimer()
+    shutdownToken++
+    shutdownPending = false
     isUpdating = true
     updateStatus = 'updating'
     updateMsg = 'Downloading and applying binary update...'
