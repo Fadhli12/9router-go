@@ -890,6 +890,12 @@ func (h *ChatHandler) comboLockRetryable(excludeIDs *[]string, connID, provider,
 	if lockKey != model {
 		_ = h.Repo.LockConnectionModel(connID, model, cooldownSec, cls.NewBackoffLevel)
 	}
+	// Account-scoped cooldown alongside the per-model locks, so the selector
+	// can skip this account before spending a request (upstream applyErrorState).
+	until := time.Now().UTC().Add(time.Duration(cooldownSec) * time.Second)
+	if err := h.Repo.LockConnectionRateLimit(connID, until, cls.NewBackoffLevel, ue.StatusCode, extractErrorText(ue.Body)); err != nil {
+		log.Warn("combo", "rate limit lock failed", "conn", connID, "error", err)
+	}
 	*excludeIDs = append(*excludeIDs, connID)
 	log.Warn("combo", "locked on retryable error", "provider", provider, "model", model, "lockKey", lockKey, "conn", connID, "status", ue.StatusCode, "cooldown_s", cooldownSec)
 }
