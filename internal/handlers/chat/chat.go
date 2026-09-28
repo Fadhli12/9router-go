@@ -858,8 +858,11 @@ func contentBlockChars(block any) int {
 	}
 }
 
-// HandleResponsesCompact forwards to chat handler with compact flag.
-// POST /v1/responses/compact
+// HandleResponsesCompact marks a Responses request as a compaction and runs it
+// down the same pipeline as /v1/responses, matching upstream's route, which
+// sets body._compact and reuses handleChat rather than picking another wire
+// format. Forcing the body through /v1/chat/completions instead would strip
+// the Responses format the client spoke.
 func (h *ChatHandler) HandleResponsesCompact(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -881,9 +884,9 @@ func (h *ChatHandler) HandleResponsesCompact(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	newReq, _ := http.NewRequestWithContext(r.Context(), "POST", "/v1/chat/completions", bytes.NewReader(body))
+	newReq, _ := http.NewRequestWithContext(r.Context(), "POST", responsesEndpoint, bytes.NewReader(body))
 	newReq.Header = r.Header
-	h.HandleChatCompletions(w, newReq)
+	h.HandleResponses(w, newReq)
 }
 
 // HandleOllamaChat handles Ollama-compatible /v1/api/chat endpoint.
