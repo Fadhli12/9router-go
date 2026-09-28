@@ -6,7 +6,7 @@
   // bulk turn off empty / on available, quota hide/show via settings,
   // and per-connection refresh/toggle/delete actions.
   import { onMount } from 'svelte'
-  import { api, type ProviderConnection } from '../api/client'
+  import { api, type CodexResetCredit, type ProviderConnection } from '../api/client'
   import { PROVIDER_CATALOG } from '../lib/providers'
   import Toggle from '../lib/ui/Toggle.svelte'
   import { getIconPath } from './connections/types'
@@ -157,6 +157,94 @@
     const value = (quota?.raw as { resetCredits?: { availableCount?: unknown } } | undefined)?.resetCredits?.availableCount
     const count = typeof value === 'number' ? value : Number(value)
     return Number.isFinite(count) ? Math.max(0, count) : 0
+  }
+
+  // Codex reset credits. The counter on the row only says how many are left;
+  // opening the chooser is what lists them, so the button costs nothing until
+  // it is used.
+  let resetCreditConn = $state<ProviderConnection | null>(null)
+  let resetCreditList = $state<CodexResetCredit[]>([])
+  let resetCreditSelected = $state('')
+  let resetCreditLoading = $state(false)
+  let resetCreditConsuming = $state(false)
+  let resetCreditError = $state('')
+  // One key per open session, reused across a retry so a double submit or a
+  // retried request cannot redeem the same credit twice.
+  let resetCreditIdempotencyKey = $state('')
+
+  function resetCreditLabel(credit: CodexResetCredit): string {
+    if (credit.title) return credit.title
+    if (credit.resetType) return credit.resetType.replace(/[_-]+/g, ' ')
+    return 'Reset credit'
+  }
+
+  function resetCreditExpiry(credit: CodexResetCredit): string {
+    if (!credit.expiresAt) return 'No expiry date'
+    const parsed = new Date(credit.expiresAt)
+    if (Number.isNaN(parsed.getTime())) return 'No expiry date'
+    return `Expires ${parsed.toLocaleString()}`
+  }
+
+  function newIdempotencyKey(): string {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+    return `reset-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }
+
+  function closeResetCredits() {
+    if (resetCreditConsuming) return
+    resetCreditConn = null
+    resetCreditList = []
+    resetCreditSelected = ''
+    resetCreditError = ''
+  }
+
+  async function openResetCredits(conn: ProviderConnection) {
+    resetCreditConn = conn
+    resetCreditList = []
+    resetCreditSelected = ''
+    resetCreditError = ''
+    resetCreditIdempotencyKey = newIdempotencyKey()
+    resetCreditLoading = true
+    try {
+      const res = await api.listCodexResetCredits(conn.id)
+      if (res?.error) {
+        resetCreditError = res.error
+        resetCreditList = []
+        return
+      }
+      resetCreditList = res?.credits ?? []
+      // The server returns them soonest-expiry first, so the default choice is
+      // the one that frees the quota soonest.
+      resetCreditSelected = resetCreditList[0]?.selectionToken ?? ''
+    } catch (err) {
+      resetCreditError = err instanceof Error ? err.message : 'Failed to load reset credits.'
+    } finally {
+      resetCreditLoading = false
+    }
+  }
+
+  async function confirmResetCredit() {
+    const conn = resetCreditConn
+    if (!conn || !resetCreditSelected || resetCreditConsuming) return
+    resetCreditConsuming = true
+    resetCreditError = ''
+    try {
+      const res = await api.consumeCodexResetCredit(conn.id, resetCreditSelected, resetCreditIdempotencyKey)
+      if (res?.error) {
+        resetCreditError = res.error
+        return
+      }
+      resetCreditConn = null
+      resetCreditList = []
+      resetCreditSelected = ''
+      // The quota windows are what the user reset, so re-read them rather than
+      // leaving a stale reading on screen.
+      await refreshProvider(conn.id, conn.provider)
+    } catch (err) {
+      resetCreditError = err instanceof Error ? err.message : 'Failed to redeem the reset credit.'
+    } finally {
+      resetCreditConsuming = false
+    }
   }
 
   async function toggleAutoPing(connId: string, provider: string, enabled: boolean) {
@@ -960,6 +1048,8 @@
                   <button
                     type="button"
                     disabled={resetCreditCount <= 0 || isLoading || rowBusy}
+                    onclick={() => openResetCredits(conn)}
+                    aria-label="Redeem a Codex reset credit"
                     title={resetCreditCount > 0 ? `Codex reset credits: ${resetCreditCount}` : 'No Codex reset credits available'}
                     class="flex h-8 min-w-10 items-center justify-center gap-1 rounded-lg border px-2 text-[11px] font-medium tabular-nums transition-colors disabled:cursor-not-allowed disabled:opacity-60 {resetCreditCount > 0 ? 'border-primary/30 bg-primary/5 text-primary hover:bg-primary/10' : 'border-border-subtle bg-surface-2 text-text-muted'}"
                   >
@@ -1260,6 +1350,93 @@
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if resetCreditConn}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      class="absolute inset-0 bg-black/50 backdrop-blur-[2px]"
+      onclick={closeResetCredits}
+      role="presentation"
+    ></div>
+    <div class="relative w-full max-w-md bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-elev)] p-6">
+      <div class="flex items-center justify-between pb-3 border-b border-border-subtle mb-4">
+        <h2 class="text-lg font-semibold text-text-main">Redeem a reset credit</h2>
+        <button
+          type="button"
+          onclick={closeResetCredits}
+          disabled={resetCreditConsuming}
+          class="text-text-muted hover:text-text-main transition-colors disabled:opacity-50 cursor-pointer"
+          aria-label="Close"
+        >
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+
+      <p class="text-xs text-text-muted mb-4">
+        Redeeming a credit resets the Codex usage window immediately instead of waiting for the
+        countdown to run out.
+      </p>
+
+      {#if resetCreditLoading}
+        <p class="text-sm text-text-muted py-4 text-center">Loading reset credits…</p>
+      {:else if resetCreditError && resetCreditList.length === 0}
+        <p class="text-sm text-red-500 py-4 text-center">{resetCreditError}</p>
+      {:else if resetCreditList.length === 0}
+        <p class="text-sm text-text-muted py-4 text-center">No reset credits are available on this account.</p>
+      {:else}
+        <div class="space-y-2 max-h-64 overflow-y-auto">
+          {#each resetCreditList as credit (credit.selectionToken)}
+            <label
+              class="flex items-start gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors {resetCreditSelected ===
+              credit.selectionToken
+                ? 'border-primary/40 bg-primary/5'
+                : 'border-border-subtle hover:bg-surface-2'}"
+            >
+              <input
+                type="radio"
+                name="codex-reset-credit"
+                class="mt-0.5"
+                value={credit.selectionToken}
+                checked={resetCreditSelected === credit.selectionToken}
+                onchange={() => (resetCreditSelected = credit.selectionToken)}
+              />
+              <span class="min-w-0 flex-1">
+                <span class="block text-sm font-medium text-text-main">{resetCreditLabel(credit)}</span>
+                <span class="block text-[11px] text-text-muted">{resetCreditExpiry(credit)}</span>
+                {#if credit.description}
+                  <span class="block text-[11px] text-text-subtle mt-0.5">{credit.description}</span>
+                {/if}
+              </span>
+            </label>
+          {/each}
+        </div>
+
+        {#if resetCreditError}
+          <p class="mt-3 text-xs text-red-500">{resetCreditError}</p>
+        {/if}
+      {/if}
+
+      <div class="flex justify-end gap-2 mt-5">
+        <button
+          type="button"
+          onclick={closeResetCredits}
+          disabled={resetCreditConsuming}
+          class="px-3 py-2 rounded-lg border border-border text-xs font-semibold text-text-main hover:bg-surface-2 transition-colors disabled:opacity-50 cursor-pointer"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onclick={confirmResetCredit}
+          disabled={resetCreditConsuming || resetCreditLoading || !resetCreditSelected}
+          class="px-3 py-2 rounded-lg bg-primary text-xs font-semibold text-white hover:bg-primary-hover transition-colors disabled:opacity-50 cursor-pointer"
+        >
+          {resetCreditConsuming ? 'Redeeming…' : 'Redeem'}
+        </button>
       </div>
     </div>
   </div>

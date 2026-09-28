@@ -128,4 +128,46 @@ describe('dashboard API authentication and errors', () => {
       localStorage.removeItem('9router_auth')
     }
   })
+
+  it('uses the upstream Codex reset-credit contract', async () => {
+    const originalFetch = globalThis.fetch
+    const requests: Array<{ url: string; init?: RequestInit }> = []
+    globalThis.fetch = async (input, init) => {
+      requests.push({ url: String(input), init })
+      if (String(input).endsWith('/consume')) {
+        return Response.json({ outcome: 'reset', selectionToken: 'c1', idempotencyKey: 'idem-1' })
+      }
+      return Response.json({ credits: [{ selectionToken: 'c1', title: 'Weekly reset' }], availableCount: 1 })
+    }
+    try {
+      await api.listCodexResetCredits('codex-1')
+      await api.consumeCodexResetCredit('codex-1', 'c1', 'idem-1')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(requests[0]?.url).toBe('/api/usage/codex-1/reset-credits')
+    expect(requests[1]?.url).toBe('/api/usage/codex-1/reset-credits/consume')
+    expect(requests[1]?.init?.method).toBe('POST')
+    expect(JSON.parse(String(requests[1]?.init?.body))).toEqual({
+      selectionToken: 'c1',
+      idempotencyKey: 'idem-1',
+    })
+  })
+
+  it('encodes the connection id in the reset-credit path', async () => {
+    const originalFetch = globalThis.fetch
+    const urls: string[] = []
+    globalThis.fetch = async (input) => {
+      urls.push(String(input))
+      return Response.json({ credits: [], availableCount: 0 })
+    }
+    try {
+      await api.listCodexResetCredits('id with/slash')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(urls[0]).toBe('/api/usage/id%20with%2Fslash/reset-credits')
+  })
 })

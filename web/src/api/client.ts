@@ -241,6 +241,34 @@ export interface ConnectionUsageResponse {
   error?: string
 }
 
+// Codex reset credits. `selectionToken` is the field the dashboard selects
+// with; `code` carries the typed refusal the server raised (e.g. no_credit vs
+// nothing_to_reset) so the modal can say which happened.
+export interface CodexResetCredit {
+  selectionToken: string
+  resetType?: string
+  status?: string
+  grantedAt?: string
+  expiresAt?: string
+  title?: string
+  description?: string
+}
+
+export interface CodexResetCreditListResponse {
+  credits: CodexResetCredit[]
+  availableCount: number
+  error?: string
+  code?: string
+}
+
+export interface CodexResetCreditConsumeResponse {
+  outcome: 'reset' | 'alreadyRedeemed' | 'error'
+  selectionToken?: string
+  idempotencyKey?: string
+  error?: string
+  code?: string
+}
+
 export interface FreebuffSessionSwitchResponse {
   status: 'active'
   currentModel: string
@@ -910,6 +938,21 @@ export const api = {
   getConnectionUsage: async (connectionId: string, force = false): Promise<ConnectionUsageResponse> => {
     return request<ConnectionUsageResponse>(`/api/usage/${encodeURIComponent(connectionId)}${force ? '?force=1' : ''}`)
   },
+  // Codex reset credits. The list is fetched when the user opens the chooser
+  // rather than with the quota poll, so the button stays cheap until it is used.
+  listCodexResetCredits: (connectionId: string) =>
+    request<CodexResetCreditListResponse>(
+      `/api/usage/${encodeURIComponent(connectionId)}/reset-credits`
+    ),
+  consumeCodexResetCredit: (connectionId: string, selectionToken: string, idempotencyKey?: string) =>
+    request<CodexResetCreditConsumeResponse>(
+      `/api/usage/${encodeURIComponent(connectionId)}/reset-credits/consume`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selectionToken, idempotencyKey }),
+      }
+    ),
   // Tunnel & Tailscale
   getTunnelStatus: () =>
     request<TunnelStatusResponse>('/api/tunnel/status').catch(() => ({

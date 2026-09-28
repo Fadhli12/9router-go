@@ -92,5 +92,10 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		// Usage & Quotas
 		r.Get("/usage/providers", h.HandleGetUsageProviders)
 		r.Get("/usage/{connectionId}", h.HandleGetConnectionUsage)
+		// Codex reset credits. These sit one segment deeper than the
+		// per-connection usage route, so chi matches them without the static
+		// before-parameter ordering that /usage/providers needs.
+		r.Get("/usage/{connectionId}/reset-credits", h.HandleListCodexResetCredits)
+		r.Post("/usage/{connectionId}/reset-credits/consume", h.HandleConsumeCodexResetCredit)
 	})
 }
