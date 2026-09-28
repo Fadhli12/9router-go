@@ -83,9 +83,8 @@ irm https://raw.githubusercontent.com/luqman-v1/9router-go/main/install.ps1 | ie
 
 ```bash
 9router-go
-# dashboard: http://localhost:20130
+# Dashboard: http://localhost:20130 (Default password: 123456)
 ```
-
 > Already use upstream 9Router? Point Go at the same data dir — it opens the **same `DATA_DIR/db/data.sqlite`**: providers, connections, combos, and usage carry over. Details in [`DATABASE.md`](DATABASE.md).
 
 **2. Connect a FREE provider (no signup needed):**
@@ -110,6 +109,7 @@ Claude Code / Codex / OpenClaw / Cursor / Cline Settings:
 docker run -d --name 9router-go --restart unless-stopped \
   -p 20130:20130 -v "$HOME/.9router:/data" \
   -e PORT=20130 -e DATA_DIR=/data \
+  -e INITIAL_PASSWORD=your-secure-password \
   luqmenul/9router-go:latest
 
 # Manual download — pick your file, no command line guesswork:
@@ -168,7 +168,21 @@ DB_PATH=/srv/9router/data.sqlite ./9router-go   # explicit SQLite file
 HOST=127.0.0.1 ./9router-go                     # localhost only, behind a reverse proxy
 ```
 
-First dashboard login uses the compatibility password until you set your own (remote fresh installs must change it or set `INITIAL_PASSWORD`).
+### 🔑 Dashboard Login & Fresh Install
+
+- **Localhost (`localhost` / `127.0.0.1`)**: First login uses the default compatibility password `123456`. Once logged in, change your password in **Settings → Profile**.
+- **Remote / VPS / Docker / LAN**: For security (preventing public takeover of fresh installs with known defaults, CVE-2026-56679), remote access blocks the default `123456` password. You **must** either:
+  1. **Set `INITIAL_PASSWORD` on launch (Recommended)**:
+     ```bash
+     INITIAL_PASSWORD="your-secure-password" ./9router-go
+     # Or in your .env file:
+     # INITIAL_PASSWORD=your-secure-password
+     ```
+  2. **Or access via SSH port-forwarding first**:
+     ```bash
+     ssh -L 20130:127.0.0.1:20130 user@remote-host
+     # Open http://localhost:20130, login with 123456, then change password in Settings
+     ```
 
 ### Client example
 
