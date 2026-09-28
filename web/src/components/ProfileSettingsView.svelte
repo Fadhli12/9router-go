@@ -22,7 +22,10 @@
   } from 'lucide-svelte'
   import Card from '../lib/ui/Card.svelte'
   import Toggle from '../lib/ui/Toggle.svelte'
-  import { api, type Settings } from '../api/client'
+  import Modal from '../lib/ui/Modal.svelte'
+  import Button from '../lib/ui/Button.svelte'
+  import Input from '../lib/ui/Input.svelte'
+  import { api, getAuthHeaders, type Settings } from '../api/client'
 
   interface Props {
     settings?: Settings
@@ -74,6 +77,9 @@
   let isDownloadingBackup = $state(false)
   let isImportingBackup = $state(false)
   let fileInput: HTMLInputElement | null = $state(null)
+  let dbPassword = $state('')
+  let dbAuthOpen = $state(false)
+  let pendingImportFile: File | null = $state(null)
 
   $effect(() => {
     if (settings) {
@@ -197,16 +203,39 @@
   }
 
   function handleDownloadBackup() {
+    dbPassword = ''
+    pendingImportFile = null
+    dbAuthOpen = true
+  }
+
+  async function runDownloadBackup() {
     isDownloadingBackup = true
     try {
+      const res = await fetch('/api/settings/database', {
+        headers: { ...getAuthHeaders(), 'x-9r-password': dbPassword },
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to export database')
+      }
+      const payload = await res.json()
+      const content = JSON.stringify(payload, null, 2)
+      const blob = new Blob([content], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
-      a.href = '/api/settings/database'
-      a.download = `9router-backup-${new Date().toISOString().slice(0, 10)}.json`
+      const stamp = new Date().toISOString().replace(/[.:]/g, '-')
+      a.href = url
+      a.download = `9router-backup-${stamp}.json`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      alert(`Failed to download backup: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       isDownloadingBackup = false
+      dbAuthOpen = false
+      dbPassword = ''
     }
   }
 
@@ -215,27 +244,39 @@
     const file = target.files?.[0]
     if (!file) return
 
-    if (!confirm(`Import database backup "${file.name}"? This will overwrite existing server data.`)) {
-      target.value = ''
-      return
-    }
+    target.value = ''
+    pendingImportFile = file
+    dbPassword = ''
+    dbAuthOpen = true
+  }
 
+  async function runImportBackup() {
+    const file = pendingImportFile
+    if (!file) return
     isImportingBackup = true
     try {
-      const formData = new FormData()
-      formData.append('file', file)
+      const raw = await file.text()
+      const payload = JSON.parse(raw)
+
       const res = await fetch('/api/settings/database', {
         method: 'POST',
-        body: formData,
+        headers: { ...getAuthHeaders(), 'x-9r-password': dbPassword },
+        body: JSON.stringify(payload),
       })
-      if (!res.ok) throw new Error(`Import failed with status ${res.status}`)
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to import database')
+      }
+
       alert('Database backup imported successfully! Reloading page...')
       window.location.reload()
     } catch (err) {
       alert(`Failed to import database: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       isImportingBackup = false
-      target.value = ''
+      pendingImportFile = null
+      dbAuthOpen = false
+      dbPassword = ''
     }
   }
 </script>
@@ -652,5 +693,38 @@
         </div>
       </div>
     </Card>
+
+    <Modal
+      isOpen={dbAuthOpen}
+      onClose={() => (dbAuthOpen = false)}
+      title={pendingImportFile ? 'Confirm Import' : 'Confirm Download'}
+      size="sm"
+    >
+      <div class="space-y-3">
+        <p class="text-text-muted">
+          {pendingImportFile
+            ? `Import "${pendingImportFile.name}"? This will overwrite existing server data.`
+            : 'Download a full backup of the dashboard database?'}
+        </p>
+        <Input
+          type="password"
+          label="Dashboard password"
+          placeholder="Enter password to authorize"
+          bind:value={dbPassword}
+        />
+      </div>
+      {#snippet footer()}
+        <Button variant="ghost" onclick={() => (dbAuthOpen = false)} disabled={isImportingBackup || isDownloadingBackup}>
+          Cancel
+        </Button>
+        <Button
+          variant="primary"
+          onclick={() => (pendingImportFile ? runImportBackup() : runDownloadBackup())}
+          loading={isImportingBackup || isDownloadingBackup}
+        >
+          {pendingImportFile ? 'Import' : 'Download'}
+        </Button>
+      {/snippet}
+    </Modal>
   </div>
 </div>

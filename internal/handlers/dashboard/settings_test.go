@@ -3,6 +3,7 @@ package dashboard
 import (
 	"bytes"
 	json "encoding/json/v2"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -277,5 +278,73 @@ func TestHandleExportImportDatabase_RoundTrip(t *testing.T) {
 	var apiKey string
 	if err := repo.RawDB().QueryRow(`SELECT key FROM apiKeys`).Scan(&apiKey); err != nil || apiKey != "sk-cli-1" {
 		t.Errorf("restored api key wrong: %q err=%v", apiKey, err)
+	}
+}
+
+// TestHandleImportDatabase_ClientContract pins the wire contract the Svelte
+// dashboard uses: a raw JSON body (never multipart/form-data) and the
+// x-9r-password header for re-auth, matching Next's settings/database route.
+func TestHandleImportDatabase_ClientContract(t *testing.T) {
+	repo, cleanup := setupSettingsTestDB(t)
+	defer cleanup()
+	router := setupTestRouter(repo)
+
+	payload := `{"settings":{"requireLogin":false},"providerConnections":[],"customModels":[]}`
+
+	// Multipart uploads (the pre-fix client) are rejected, not silently ignored.
+	body := &bytes.Buffer{}
+	mw := multipart.NewWriter(body)
+	fw, err := mw.CreateFormFile("file", "backup.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Write([]byte(payload)); err != nil {
+		t.Fatal(err)
+	}
+	mw.Close()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/database", body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Invalid database payload") {
+		t.Fatalf("multipart upload should be rejected, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Raw JSON restores the data.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/settings/database", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(cliTokenHeader, auth.CLIToken())
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("raw JSON import failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Once a password is set, the x-9r-password header must authorize too.
+	hash, err := bcrypt.GenerateFromPassword([]byte("s3cret-pass"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateSettingsRaw(map[string]any{"password": string(hash)}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/settings/database", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(passwordHeader, "s3cret-pass")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("password header should authorize import: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/settings/database", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(passwordHeader, "wrong")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong password should be rejected: %d %s", rec.Code, rec.Body.String())
 	}
 }
