@@ -193,7 +193,10 @@ func ForwardKiro(w http.ResponseWriter, req *Request) error {
 		return fmt.Errorf("ForwardKiro: %w", err)
 	}
 	defer resp.Body.Close()
-	return handleKiroStream(w, req, resp.Body)
+	if req.IsStream {
+		return handleKiroStream(w, req, resp.Body)
+	}
+	return handleKiroNonStream(w, req, resp.Body)
 }
 
 // kiroUpstreamBody translates an OpenAI chat body into the Kiro envelope,
