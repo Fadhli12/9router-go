@@ -262,6 +262,7 @@ func (h *DashboardHandler) changeDashboardPassword(currentPassword, newPassword 
 	}
 	return h.Repo.UpdateSettingsRaw(map[string]any{"password": string(hashed)})
 }
+
 // verifyDashboardPassword mirrors Next's verifyDashboardPassword: a stored
 // bcrypt hash wins, otherwise INITIAL_PASSWORD wins, otherwise the well-known
 // "123456" default (upstream DEFAULT_PASSWORD) is accepted.
