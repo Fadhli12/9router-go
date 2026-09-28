@@ -17,16 +17,17 @@
 - **Only the start of a request is paced, and only when one is actually made.** A single account's manual refresh pays nothing, a provider with no live fetcher (the lock/Cooldown fallback) never queues, and a dashboard that navigates away mid-refresh spends no upstream request on a response nobody reads.
 - **Upstream `decolua/9router` has no throttle here either**, so this is a deliberate, documented gap rather than a parity regression to revert later. The same shape is what OmniRoute added in `quotaFetchThrottle` after accounts on one egress IP started looking like automation to their provider.
 - Covered by `internal/fetchgate` (idle gate is free, concurrent callers spaced, jitter only widens the gap, cancellation releases the wait) and by the dashboard, which asserts the spacing at the fake provider's own socket — the ollama dispatch, the Antigravity branch, and that an abandoned request makes no upstream call at all. Every one of those three fails when the gate is set to a zero gap.
+
 ### ✨ Chat Completions → OpenAI Responses streaming translator
 
-Diff 1–4 dari 4 (stacked). Branch `parity/responses-translator`, base `origin/main` (`b475fbd0`).
+Diff 1–4 dari 4 (stacked), sudah digabung ke `main`. SHA di bawah adalah yang dipakai setelah rebase ke `main` (`63b3c14c`); sebelum rebase, diff 1–2 ada di `36b17d46`/`b3af67ad`.
 
 | Diff | Isi | Status |
 |:---|:---|:---|
-| 1 | Chat SSE → Responses SSE + `reasoning_details` | ✅ `36b17d46` |
-| 2 | Arah request: body Responses → body Chat Completions | ✅ `b3af67ad` |
-| **3** | Wiring di `ChatHandler.HandleResponses` (resolve, combo, fallback, penerjemah hanya bila upstream bukan Responses-native) | ✅ commit ini |
-| **4** | `response.completed` untuk jalur non-streaming | ✅ commit ini |
+| 1 | Chat SSE → Responses SSE + `reasoning_details` | ✅ `b244d9e6` |
+| 2 | Arah request: body Responses → body Chat Completions | ✅ `b85b256e` |
+| **3** | Wiring di `ChatHandler.HandleResponses` (resolve, combo, fallback, penerjemah hanya bila upstream bukan Responses-native) | ✅ `6f47face` |
+| **4** | `response.completed` untuk jalur non-streaming | ✅ `6f47face` |
 
 **Diff 1 — mesin translasinya.** `TranslateOpenAIToResponses` + `FlushResponses` dengan `ResponsesState` yang mencerminkan `initState()` upstream.
 
