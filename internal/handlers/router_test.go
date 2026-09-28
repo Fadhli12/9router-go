@@ -372,3 +372,68 @@ func TestSetupServerRouter_CLIToolsStatusAPIKeyAliasUnchanged(t *testing.T) {
 		t.Fatal("/cli-tools/all-statuses disappeared; it must stay registered on the API-key group")
 	}
 }
+
+// TestSetupServerRouter_CodexResetCreditsAreLive pins that the reset-credit
+// routes are registered on the router the server actually mounts.
+//
+// They were first added only to dashboard.RegisterRoutes, which the dashboard
+// tests use but SetupServerRouter does not — so every handler test passed
+// while the real gateway answered 404 and the button did nothing. This is
+// the same failure shape as the CLI Tools regression above: a route wired into
+// the table the tests exercise rather than the one production mounts.
+func TestSetupServerRouter_CodexResetCreditsAreLive(t *testing.T) {
+	t.Setenv("JWT_SECRET", "router-test-secret")
+
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := db.NewRepo(database)
+	now := "2026-07-18T00:00:00Z"
+	if _, err := database.Exec(
+		`INSERT INTO providerConnections (id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt)
+		 VALUES ('codex-1', 'codex', 'oauth', 'Codex', '', 1, 1, ?, ?, ?)`,
+		`{"accessToken":"fake","providerSpecificData":{"chatgptAccountId":"acct-1"}}`, now, now,
+	); err != nil {
+		t.Fatalf("seed connection: %v", err)
+	}
+
+	r := chi.NewRouter()
+	SetupServerRouter(r, repo, nil)
+
+	token, err := auth.Sign("router-test-secret", time.Now())
+	if err != nil {
+		t.Fatalf("sign session token: %v", err)
+	}
+	authed := func(method, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, nil)
+		req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: token})
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		return rec
+	}
+
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api/usage/codex-1/reset-credits"},
+		{http.MethodPost, "/api/usage/codex-1/reset-credits/consume"},
+	} {
+		rec := authed(tc.method, tc.path)
+		// The token is fake, so the wham call is expected to fail. Anything
+		// that is not a 404 proves the route reached the handler; chi's
+		// unmatched-route body is the tell.
+		if rec.Code == http.StatusNotFound {
+			t.Errorf("%s %s is not registered on the production router: %s",
+				tc.method, tc.path, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "404 page not found") {
+			t.Errorf("%s %s fell through to chi's not-found handler", tc.method, tc.path)
+		}
+	}
+
+	// Anonymous callers must still be stopped by the dashboard gate rather
+	// than reaching the handler.
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/usage/codex-1/reset-credits", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous status = %d, want 401", rec.Code)
+	}
+}

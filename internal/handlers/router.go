@@ -132,6 +132,8 @@ func SetupRoutes(r interface {
 	r.Get("/api/usage/request-details", HandleRequestDetails(repo))
 	r.Get("/api/usage/providers", dashH.HandleGetUsageProviders)
 	r.Get("/api/usage/{connectionId}", dashH.HandleGetConnectionUsage)
+	r.Get("/api/usage/{connectionId}/reset-credits", dashH.HandleListCodexResetCredits)
+	r.Post("/api/usage/{connectionId}/reset-credits/consume", dashH.HandleConsumeCodexResetCredit)
 
 	// Debug Tracing Domain (p50/p95 latency per provider+model)
 	r.Get("/debug/traces", HandleDebugTraces)
@@ -167,6 +169,9 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	r.Get("/api/usage/request-details", HandleRequestDetails(repo))
 	r.Get("/api/usage/providers", dashH.HandleGetUsageProviders)
 	r.Get("/api/usage/{connectionId}", dashH.HandleGetConnectionUsage)
+
+	r.Get("/api/usage/{connectionId}/reset-credits", dashH.HandleListCodexResetCredits)
+	r.Post("/api/usage/{connectionId}/reset-credits/consume", dashH.HandleConsumeCodexResetCredit)
 
 	r.Get("/api/provider-nodes", dashH.HandleGetProviderNodes)
 	r.Post("/api/provider-nodes", dashH.HandleCreateProviderNode)

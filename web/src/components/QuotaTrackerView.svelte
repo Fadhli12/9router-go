@@ -1047,10 +1047,12 @@
                   {@const resetCreditCount = getCodexResetCreditCount(quota)}
                   <button
                     type="button"
-                    disabled={resetCreditCount <= 0 || isLoading || rowBusy}
+                    disabled={isLoading || rowBusy || resetCreditConsuming}
                     onclick={() => openResetCredits(conn)}
                     aria-label="Redeem a Codex reset credit"
-                    title={resetCreditCount > 0 ? `Codex reset credits: ${resetCreditCount}` : 'No Codex reset credits available'}
+                    title={resetCreditCount > 0
+                      ? `Redeem a Codex reset credit (${resetCreditCount} available)`
+                      : 'Check Codex reset credits'}
                     class="flex h-8 min-w-10 items-center justify-center gap-1 rounded-lg border px-2 text-[11px] font-medium tabular-nums transition-colors disabled:cursor-not-allowed disabled:opacity-60 {resetCreditCount > 0 ? 'border-primary/30 bg-primary/5 text-primary hover:bg-primary/10' : 'border-border-subtle bg-surface-2 text-text-muted'}"
                   >
                     <span class="material-symbols-outlined text-[15px]">restart_alt</span>
