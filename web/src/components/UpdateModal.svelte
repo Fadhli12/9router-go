@@ -17,11 +17,15 @@
   let updateMsg = $state('')
   let copied = $state(false)
   let shutdownCountdown = $state(0)
+  let shutdownPending = $state(false)
   let isDisconnected = $state(false)
   let releaseNotesHtml = $state('')
   let isLoadingChangelog = $state(false)
-  let changelogRequested = $state(false)
+  let notesForKey = $state<string | null>(null)
   let shutdownTimer: ReturnType<typeof setInterval> | null = null
+  // Bumped on every dismissal so a late continuation can tell its
+  // operation was cancelled and must not act.
+  let shutdownToken = 0
 
   const INSTALL_CMD = '9router-go update'
 
@@ -34,8 +38,10 @@
   }
 
   $effect(() => {
-    if (!isOpen || changelogRequested) return
-    changelogRequested = true
+    const key = updateInfo?.latestVersion ?? ''
+    if (!isOpen || notesForKey === key) return
+    notesForKey = key
+    releaseNotesHtml = ''
     if (updateInfo?.releaseNotes) {
       releaseNotesHtml = toHtml(updateInfo.releaseNotes)
       return
@@ -44,7 +50,8 @@
     api
       .getChangelog()
       .then((md) => {
-        if (md) releaseNotesHtml = toHtml(md)
+        // Ignore a response that arrived after the version moved on.
+        if (md && notesForKey === key) releaseNotesHtml = toHtml(md)
       })
       .catch(() => {})
       .finally(() => {
@@ -64,6 +71,10 @@
   // abandoned and a pending shutdown countdown never outlives the modal.
   function dismiss() {
     if (isUpdating) return
+    // Invalidate anything still awaiting, so a late clipboard result cannot
+    // start a countdown behind a closed modal.
+    shutdownToken++
+    shutdownPending = false
     clearShutdownTimer()
     updateStatus = 'idle'
     updateMsg = ''
@@ -110,6 +121,8 @@
   }
 
   async function handleAutoUpdate() {
+    // An auto update and a manual shutdown must never both be in flight.
+    clearShutdownTimer()
     isUpdating = true
     updateStatus = 'updating'
     updateMsg = 'Downloading and applying binary update...'
@@ -128,7 +141,14 @@
   }
 
   async function handleCopyAndShutdown() {
-    if (!(await copyInstallCmd())) {
+    if (shutdownPending || shutdownTimer !== null) return
+    const token = ++shutdownToken
+    shutdownPending = true
+    const didCopy = await copyInstallCmd()
+    // Dismissed (or superseded) while the clipboard call was in flight.
+    if (token !== shutdownToken) return
+    shutdownPending = false
+    if (!didCopy) {
       updateStatus = 'error'
       updateMsg = `Could not copy "${INSTALL_CMD}". Copy it manually before stopping the server.`
       return
