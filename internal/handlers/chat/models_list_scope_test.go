@@ -196,6 +196,77 @@ func TestHandleModels_ConnectedModeExcludesInactiveConnections(t *testing.T) {
 	}
 }
 
+// TestHandleModels_ConnectedModeKeepsNoAuthAlongsideConnections covers the
+// regression where one configured connection made every noAuth provider
+// disappear from ?connected=1, even though the dashboard picker still offers
+// them (it keeps noAuth providers selectable regardless of connections).
+func TestHandleModels_ConnectedModeKeepsNoAuthAlongsideConnections(t *testing.T) {
+	database, cleanup := setupChatTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec(`DELETE FROM providerConnections`); err != nil {
+		t.Fatalf("delete connections: %v", err)
+	}
+	if _, err := database.Exec(`DELETE FROM kv WHERE scope='disabledModels'`); err != nil {
+		t.Fatalf("delete disabled: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES
+		('conn-kiro-1', 'kiro', 'oauth', 'Kiro Account', 1, 1, '{"apiKey":"tok"}', '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z')`); err != nil {
+		t.Fatalf("seed kiro: %v", err)
+	}
+
+	h := NewChatHandler(db.NewRepo(database))
+	ids := fetchModels(t, h, "?connected=1").idSet()
+
+	if !ids["kr/auto"] && !hasPrefixID(ids, "kr/") {
+		t.Error("connected mode dropped the active kiro connection")
+	}
+	if !hasPrefixID(ids, "oc/") {
+		t.Errorf("connected mode dropped noAuth opencode models while a connection exists")
+	}
+	// An unconnected credentialed provider must still be excluded.
+	if hasPrefixID(ids, "nv/") || hasPrefixID(ids, "nvidia/") {
+		t.Error("connected mode leaked an unconnected credentialed provider")
+	}
+}
+
+// TestHandleModels_ConnectedModeConnectionOwnsItsCatalog proves the noAuth
+// pass does not re-publish a provider's static catalog behind the connection's
+// back: a connection pinning enabledModels must keep the list narrowed.
+func TestHandleModels_ConnectedModeConnectionOwnsItsCatalog(t *testing.T) {
+	database, cleanup := setupChatTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec(`DELETE FROM providerConnections`); err != nil {
+		t.Fatalf("delete connections: %v", err)
+	}
+	if _, err := database.Exec(`DELETE FROM kv WHERE scope='disabledModels'`); err != nil {
+		t.Fatalf("delete disabled: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES
+		('conn-oc-1', 'opencode', 'api_key', 'OpenCode', 1, 1, '{"apiKey":"public","enabledModels":["union-alpha"]}', '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z')`); err != nil {
+		t.Fatalf("seed opencode: %v", err)
+	}
+
+	h := NewChatHandler(db.NewRepo(database))
+	ids := fetchModels(t, h, "?connected=1").idSet()
+
+	if !ids["oc/union-alpha"] {
+		t.Error("connected mode dropped the pinned enabledModel of an active connection")
+	}
+	if ids["oc/jev-1.13-free"] {
+		t.Error("noAuth pass re-published the static catalog over a connection's enabledModels")
+	}
+}
+
+// hasPrefixID reports whether any published id starts with prefix.
+func hasPrefixID(ids map[string]bool, prefix string) bool {
+	for id := range ids {
+		if strings.HasPrefix(id, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // TestHandleModels_AllModeForcesCatalogWithConnections proves ?all=1 dumps the
 // catalog even when connections exist, so discovery stays available.
 func TestHandleModels_AllModeForcesCatalogWithConnections(t *testing.T) {
@@ -281,15 +352,23 @@ func TestHandleModels_DisabledModelsStillWin(t *testing.T) {
 		t.Fatalf("delete disabled: %v", err)
 	}
 
+	// Prove the model is listed before it is disabled, otherwise the
+	// assertions below pass with the filter removed.
+	h := NewChatHandler(db.NewRepo(database))
+	queries := []string{"", "?connected=1", "?all=1"}
+	for _, query := range queries {
+		if !fetchModels(t, h, query).idSet()["oc/union-alpha"] {
+			t.Fatalf("query %q did not list the enabled model", query)
+		}
+	}
+
 	if _, err := database.Exec(`INSERT INTO kv (scope, key, value) VALUES ('disabledModels', 'oc', ?)`,
-		`["space-bunny-free"]`); err != nil {
+		`["union-alpha"]`); err != nil {
 		t.Fatalf("seed disabled: %v", err)
 	}
 
-	h := NewChatHandler(db.NewRepo(database))
-	for _, query := range []string{"", "?connected=1", "?all=1"} {
-		ids := fetchModels(t, h, query).idSet()
-		if ids["oc/space-bunny-free"] {
+	for _, query := range queries {
+		if fetchModels(t, h, query).idSet()["oc/union-alpha"] {
 			t.Errorf("query %q listed a disabled model", query)
 		}
 	}

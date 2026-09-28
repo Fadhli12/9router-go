@@ -387,6 +387,15 @@ func (h *ChatHandler) buildModelsListForMode(
 		conn := firstPerProvider[provID]
 		data = h.appendConnectionModels(ctx, data, seen, conn, provID, customs, aliases, isDisabled)
 	}
+	// 4. Connected mode additionally publishes the noAuth registry providers
+	// that have no connection row, mirroring the dashboard picker, which keeps
+	// every noAuth provider selectable regardless of connections. A provider
+	// already covered by an active connection is skipped: that connection's
+	// enabledModels / live catalog has decided its model set, and re-adding the
+	// static catalog here would re-publish models the connection pinned out.
+	if filterConnected {
+		data = appendNoAuthCatalogModels(data, seen, order, isDisabled)
+	}
 
 	return finalizeModels(data)
 }
@@ -546,6 +555,50 @@ func (h *ChatHandler) appendConnectionModels(
 			ContextLength:       ctxLen,
 			MaxCompletionTokens: maxOut,
 		})
+	}
+	return data
+}
+
+// appendNoAuthCatalogModels publishes the static catalog of every noAuth
+// registry provider that has no active connection row. Connected mode lists
+// connections only, so without this pass a single configured connection would
+// make every noAuth provider (opencode and friends) vanish from the response
+// while the dashboard picker still shows them. Providers in `connected` are
+// skipped because their connection already decided the model set.
+func appendNoAuthCatalogModels(
+	data []ModelInfoObject,
+	seen map[string]bool,
+	connected []string,
+	isDisabled func(provider, modelID string) bool,
+) []ModelInfoObject {
+	covered := make(map[string]bool, len(connected)*2)
+	for _, provID := range connected {
+		covered[provID] = true
+		if canon := providers.ResolveAlias(provID); canon != "" {
+			covered[canon] = true
+		}
+		if alias := providers.GetProviderAlias(provID); alias != "" {
+			covered[alias] = true
+		}
+	}
+
+	for alias, modelIDs := range providers.ProviderModels {
+		if covered[alias] {
+			continue
+		}
+		// Publish a provider once, under the alias upstream uses.
+		if canon := providers.ResolveAlias(alias); canon != alias && providers.GetProviderAlias(canon) != alias {
+			continue
+		}
+		if !providers.IsNoAuthProvider(alias) {
+			continue
+		}
+		for _, modelID := range modelIDs {
+			if isDisabled(alias, modelID) || !isLLMModelEntry(alias, alias, alias, modelID, false) {
+				continue
+			}
+			data = appendStaticModel(data, seen, alias, modelID)
+		}
 	}
 	return data
 }
