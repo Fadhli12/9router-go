@@ -2246,6 +2246,9 @@
       await refreshCompatibleModels()
       notifyCustomModelsChanged()
     } catch (err) {
+      // A refusal (the id already addresses a combo or a model alias) has to
+      // reach the user, like the other import paths on this page.
+      alert(err instanceof Error ? err.message : 'Failed to add model')
       console.error('Error adding model:', err)
     } finally {
       isAddingCompatibleModel = false
