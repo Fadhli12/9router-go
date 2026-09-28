@@ -316,6 +316,46 @@ func sanitizeSettings(raw map[string]any) map[string]any {
 	return out
 }
 
+// stripSecretSettings copies settings and drops every secret key, reusing
+// secretSettingKeys so the list stays single-sourced. Unlike sanitizeSettings
+// it adds no derived `hasPassword` field: the backup payload is read back by
+// importDatabase, so it must carry stored settings only.
+func stripSecretSettings(raw map[string]any) map[string]any {
+	out := make(map[string]any, len(raw))
+	for k, v := range raw {
+		out[k] = v
+	}
+	for _, key := range secretSettingKeys {
+		delete(out, key)
+	}
+	return out
+}
+
+// readSettingsSecrets returns the current value of every secret setting, read
+// inside the caller's transaction before the settings row is wiped. Imports
+// need it because a backup no longer carries these keys.
+func readSettingsSecrets(tx *sql.Tx) (map[string]any, error) {
+	var data string
+	err := tx.QueryRow(`SELECT data FROM settings WHERE id = 1`).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	raw := map[string]any{}
+	if err := json.Unmarshal([]byte(data), &raw); err != nil {
+		return nil, err
+	}
+	secrets := make(map[string]any, len(secretSettingKeys))
+	for _, key := range secretSettingKeys {
+		if v, ok := raw[key]; ok && v != nil {
+			secrets[key] = v
+		}
+	}
+	return secrets, nil
+}
+
 // databaseExport is the backup payload shape shared with the Next dashboard so
 // a backup taken on one runtime restores on the other.
 type databaseExport struct {
@@ -351,7 +391,7 @@ func (h *DashboardHandler) exportDatabase() (*databaseExport, error) {
 		return nil, err
 	}
 	if len(settings) > 0 {
-		out.Settings = settings
+		out.Settings = stripSecretSettings(settings)
 	}
 
 	if out.ProviderConnections, err = selectRows(db,
@@ -411,6 +451,14 @@ func (h *DashboardHandler) importDatabase(payload map[string]any) error {
 		return err
 	}
 	defer tx.Rollback()
+	// Secrets are stripped from the backup, so a restore must not let their
+	// absence delete the live credentials: wiping the settings row without
+	// them would silently reset the dashboard to the default password and
+	// disable OIDC. Read them inside the transaction before the wipe.
+	liveSecrets, err := readSettingsSecrets(tx)
+	if err != nil {
+		return err
+	}
 
 	wipes := []string{
 		`DELETE FROM settings`,
@@ -428,9 +476,23 @@ func (h *DashboardHandler) importDatabase(payload map[string]any) error {
 	}
 
 	if settings, ok := payload["settings"].(map[string]any); ok && len(settings) > 0 {
-		if b, err := json.Marshal(settings); err != nil {
+		restored := make(map[string]any, len(settings)+len(liveSecrets))
+		for k, v := range settings {
+			restored[k] = v
+		}
+		// A backup that predates the export sanitiser — or one taken from a
+		// different runtime — still wins; only a missing key falls back to
+		// the live value.
+		for k, v := range liveSecrets {
+			if _, provided := restored[k]; !provided {
+				restored[k] = v
+			}
+		}
+		b, err := json.Marshal(restored)
+		if err != nil {
 			return err
-		} else if _, err := tx.Exec(
+		}
+		if _, err := tx.Exec(
 			`INSERT INTO settings(id, data) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`, string(b),
 		); err != nil {
 			return err
