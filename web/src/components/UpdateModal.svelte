@@ -20,42 +20,61 @@
   let isDisconnected = $state(false)
   let releaseNotesHtml = $state('')
   let isLoadingChangelog = $state(false)
+  let changelogRequested = $state(false)
+  let shutdownTimer: ReturnType<typeof setInterval> | null = null
 
   const INSTALL_CMD = '9router-go update'
 
   marked.setOptions({ gfm: true, breaks: true })
 
+  // marked.parse is synchronous unless `async` is set, so it returns a string
+  // and must not be chained with .then().
+  function toHtml(md: string): string {
+    return marked.parse(md, { async: false }) as string
+  }
+
   $effect(() => {
-    if (isOpen) {
-      if (updateInfo?.releaseNotes) {
-        marked
-          .parse(updateInfo.releaseNotes)
-          .then((h) => {
-            releaseNotesHtml = h
-          })
-          .catch(() => {
-            releaseNotesHtml = ''
-          })
-      } else if (!releaseNotesHtml && !isLoadingChangelog) {
-        isLoadingChangelog = true
-        api
-          .getChangelog()
-          .then((md) => marked.parse(md))
-          .then((h) => {
-            releaseNotesHtml = h
-          })
-          .catch(() => {})
-          .finally(() => {
-            isLoadingChangelog = false
-          })
-      }
+    if (!isOpen || changelogRequested) return
+    changelogRequested = true
+    if (updateInfo?.releaseNotes) {
+      releaseNotesHtml = toHtml(updateInfo.releaseNotes)
+      return
     }
+    isLoadingChangelog = true
+    api
+      .getChangelog()
+      .then((md) => {
+        if (md) releaseNotesHtml = toHtml(md)
+      })
+      .catch(() => {})
+      .finally(() => {
+        isLoadingChangelog = false
+      })
   })
+
+  function clearShutdownTimer() {
+    if (shutdownTimer !== null) {
+      clearInterval(shutdownTimer)
+      shutdownTimer = null
+    }
+    shutdownCountdown = 0
+  }
+
+  // Every dismiss path goes through here, so an in-flight update is never
+  // abandoned and a pending shutdown countdown never outlives the modal.
+  function dismiss() {
+    if (isUpdating) return
+    clearShutdownTimer()
+    updateStatus = 'idle'
+    updateMsg = ''
+    isOpen = false
+  }
+
   // Close on Escape key & lock scroll
   $effect(() => {
     if (!isOpen) return
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isUpdating) isOpen = false
+      if (e.key === 'Escape') dismiss()
     }
     window.addEventListener('keydown', handleKeyDown)
     const prevOverflow = document.body.style.overflow
@@ -63,18 +82,31 @@
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       document.body.style.overflow = prevOverflow
+      clearShutdownTimer()
     }
   })
 
-
-  async function copyInstallCmd() {
+  async function copyInstallCmd(): Promise<boolean> {
     try {
       await navigator.clipboard.writeText(INSTALL_CMD)
-    } catch {}
+    } catch {
+      return false
+    }
     copied = true
     setTimeout(() => {
       copied = false
     }, 2000)
+    return true
+  }
+
+  async function shutdownServer() {
+    try {
+      await api.shutdownServer()
+      isDisconnected = true
+    } catch (err: any) {
+      updateStatus = 'error'
+      updateMsg = err?.message || 'Could not stop the server. Restart it manually.'
+    }
   }
 
   async function handleAutoUpdate() {
@@ -96,16 +128,19 @@
   }
 
   async function handleCopyAndShutdown() {
-    await copyInstallCmd()
+    if (!(await copyInstallCmd())) {
+      updateStatus = 'error'
+      updateMsg = `Could not copy "${INSTALL_CMD}". Copy it manually before stopping the server.`
+      return
+    }
     let remaining = 5
     shutdownCountdown = remaining
-    const timer = setInterval(() => {
+    shutdownTimer = setInterval(() => {
       remaining -= 1
       shutdownCountdown = remaining
       if (remaining <= 0) {
-        clearInterval(timer)
-        api.shutdownServer().catch(() => {})
-        isDisconnected = true
+        clearShutdownTimer()
+        shutdownServer()
       }
     }, 1000)
   }
@@ -116,8 +151,8 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="absolute inset-0 bg-black/50 backdrop-blur-sm"
-      onclick={() => (isOpen = false)}
-      onkeydown={(e) => e.key === 'Escape' && (isOpen = false)}
+      onclick={dismiss}
+      onkeydown={(e) => e.key === 'Escape' && dismiss()}
       role="button"
       tabindex="-1"
       aria-label="Close background"
@@ -142,7 +177,7 @@
         </div>
         <button
           type="button"
-          onclick={() => (isOpen = false)}
+          onclick={dismiss}
           class="p-1 rounded-lg text-text-muted hover:text-text-main hover:bg-surface-2 transition-colors cursor-pointer"
           aria-label="Close"
         >
@@ -208,7 +243,7 @@
       <div class="flex items-center justify-end gap-2 pt-2 border-t border-border-subtle">
         <button
           type="button"
-          onclick={() => (isOpen = false)}
+          onclick={dismiss}
           disabled={isUpdating}
           class="px-3.5 py-2 text-xs font-medium rounded-lg text-text-muted hover:text-text-main hover:bg-surface-2 transition-colors cursor-pointer"
         >
