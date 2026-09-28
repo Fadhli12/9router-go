@@ -82,22 +82,35 @@ func (h *DashboardHandler) resolveCodexResetCreditTarget(w http.ResponseWriter, 
 }
 
 // writeResetCreditError maps a typed reset-credit failure onto the dashboard's
-// flat error shape, keeping the upstream status and code so the UI can tell
-// "no credit" from "nothing to reset" instead of showing one generic message.
+// flat error shape, keeping the code so the UI can tell "no credit" from
+// "nothing to reset" instead of showing one generic message.
+//
+// A 401 is never passed through. In this app 401 means "your dashboard
+// session is invalid" — the API client treats any 401 as an expired session
+// and logs the user out (web/src/api/client.ts:476). Codex rejecting its own
+// token is an upstream failure, not a dashboard logout, so it is reported as
+// 502 with the upstream code intact. Forwarding it verbatim bounced the whole
+// dashboard to /login the moment the chooser was opened.
 func writeResetCreditError(w http.ResponseWriter, err error) {
+	status := http.StatusBadGateway
 	var typed *codexquota.ResetCreditError
 	if errors.As(err, &typed) {
-		body, _ := json.Marshal(map[string]any{
-			"error":   typed.Message,
-			"code":    typed.Code,
-			"outcome": "error",
-		})
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(typed.Status)
-		_, _ = w.Write(body)
-		return
+		status = typed.Status
+		if status == http.StatusUnauthorized || status == http.StatusForbidden {
+			status = http.StatusBadGateway
+		}
 	}
-	writePlainError(w, http.StatusBadGateway, err.Error())
+	payload := map[string]any{"outcome": "error"}
+	if typed != nil {
+		payload["error"] = typed.Message
+		payload["code"] = typed.Code
+	} else {
+		payload["error"] = err.Error()
+	}
+	body, _ := json.Marshal(payload)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
 }
 
 // HandleListCodexResetCredits handles GET /api/usage/{connectionId}/reset-credits.

@@ -218,3 +218,37 @@ func TestCodexResetCreditRejectsMissingConnection(t *testing.T) {
 		t.Errorf("status = %d, want 404 (%s)", rec.Code, rec.Body.String())
 	}
 }
+
+// Codex rejecting its own token must never reach the browser as a 401. The
+// API client treats any 401 as an expired dashboard session and logs the user
+// out (web/src/api/client.ts:476), so forwarding the upstream status verbatim
+// bounced the whole dashboard to /login the instant the chooser was opened.
+func TestCodexResetCreditUpstreamAuthFailureIsNotA401(t *testing.T) {
+	for _, upstream := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(upstream), func(t *testing.T) {
+			repo, cleanup := setupSettingsTestDB(t)
+			defer cleanup()
+			router := setupTestRouter(repo)
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(upstream)
+			}))
+			defer srv.Close()
+			pointCodexResetURLs(t, srv.URL)
+			insertResetCreditConn(t, repo, "codex-1", "codex", "oauth", codexOAuthData("stale", "acct-1"))
+
+			req := httptest.NewRequest(http.MethodGet, "/api/usage/codex-1/reset-credits", nil)
+			req.Header.Set(cliTokenHeader, auth.CLIToken())
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code == http.StatusUnauthorized {
+				t.Fatalf("upstream %d surfaced as 401; the client would log the user out (%s)",
+					upstream, rec.Body.String())
+			}
+			if rec.Code != http.StatusBadGateway {
+				t.Errorf("upstream %d surfaced as %d, want 502", upstream, rec.Code)
+			}
+		})
+	}
+}
