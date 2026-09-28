@@ -2,6 +2,8 @@ package chat
 
 import (
 	"bytes"
+	"context"
+	json "encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"testing"
 
 	"9router/proxy/internal/db"
+	"9router/proxy/internal/translator"
 )
 
 const responsesRequestBody = `{"model":"%s","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"stream":true}`
@@ -145,5 +148,177 @@ func TestHandleResponses_NonStreamingAnswersWithResponseObject(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %s in the response body:\n%s", want, out)
 		}
+	}
+}
+
+// TestHandleResponsesCompact_MarksRequestAndKeepsWireFormat covers the whole
+// compact chain: the endpoint marks the body, the codex executor turns that
+// into a /compact URL and strips the marker, and the client still gets
+// Responses — not a Chat Completions body, which is what routing the request
+// through /v1/chat/completions used to produce.
+func TestHandleResponsesCompact_MarksRequestAndKeepsWireFormat(t *testing.T) {
+	capture := &upstreamCapture{}
+	path := ""
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		capture.record(raw)
+		path = r.URL.Path
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n"))
+	}))
+	defer upstream.Close()
+
+	database, cleanup := setupChatTestDB(t)
+	defer cleanup()
+	seedConnDB(t, database, "codex", "conn-responses-compact", "sk-codex", upstream.URL+"/responses")
+	handler := NewChatHandler(db.NewRepo(database))
+
+	req := httptest.NewRequest("POST", "/v1/responses/compact", bytes.NewReader([]byte(`{"model":"codex/gpt-5.1","input":"compact me","stream":true}`)))
+	rec := httptest.NewRecorder()
+	handler.HandleResponsesCompact(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if path != "/responses/compact" {
+		t.Errorf("compaction did not reach the /compact endpoint, path = %q", path)
+	}
+	if sent := capture.got(); strings.Contains(sent, "_compact") {
+		t.Errorf("the compact marker leaked upstream: %s", sent)
+	}
+	if out := rec.Body.String(); strings.Contains(out, "chat.completion") {
+		t.Errorf("compact request answered in Chat Completions format:\n%s", out)
+	}
+}
+
+// TestHandleResponses_ConnectionProblemsAreReported covers the two setup
+// mistakes a client can make, through the same endpoint. The status codes
+// follow /v1/chat/completions, not the old media passthrough: an unreachable
+// provider is a bad gateway here, and a connection without a usable key is an
+// auth failure, so a client sees one consistent story across the two wire
+// formats it can speak.
+func TestHandleResponses_ConnectionProblemsAreReported(t *testing.T) {
+	t.Run("provider has no connection at all", func(t *testing.T) {
+		database, cleanup := setupChatTestDB(t)
+		defer cleanup()
+		handler := NewChatHandler(db.NewRepo(database))
+
+		req := httptest.NewRequest("POST", "/v1/responses", bytes.NewReader([]byte(`{"model":"nonexistent/foo","input":"hi"}`)))
+		rec := httptest.NewRecorder()
+		handler.HandleResponses(rec, req)
+
+		if rec.Code != http.StatusBadGateway {
+			t.Errorf("expected 502, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "no active connections") {
+			t.Errorf("error should name the missing connection: %s", rec.Body.String())
+		}
+	})
+
+	t.Run("connection carries no usable key", func(t *testing.T) {
+		// The upstream is local and counts its hits: a request that reached it
+		// would mean the gateway dispatched a call it had no credentials for,
+		// and pointing this at a real provider would make the unit test depend
+		// on the network.
+		var hits int
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits++
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer upstream.Close()
+
+		database, cleanup := setupChatTestDB(t)
+		defer cleanup()
+		seedConnDB(t, database, "bn", "conn-responses-nokey", "", upstream.URL)
+		handler := NewChatHandler(db.NewRepo(database))
+
+		req := httptest.NewRequest("POST", "/v1/responses", bytes.NewReader([]byte(`{"model":"bn/fake-model","input":"hi"}`)))
+		rec := httptest.NewRecorder()
+		handler.HandleResponses(rec, req)
+
+		// The connection is unusable, so the account fallback exhausts its
+		// candidates and reports the provider as unavailable — the same thing
+		// /v1/chat/completions does. What matters for a Responses client is
+		// that it is refused and that nothing was billed upstream.
+		if rec.Code == http.StatusOK {
+			t.Errorf("a connection without credentials must not answer 200: %s", rec.Body.String())
+		}
+		if hits != 0 {
+			t.Errorf("upstream was called %d times without credentials", hits)
+		}
+	})
+}
+
+// TestHandleResponses_ComboRotatesAndStaysInWireFormat proves the converted
+// body survives account rotation: a combo whose first member is down must
+// still answer the client in Responses, not in the Chat Completions shape the
+// failing member would have produced.
+func TestHandleResponses_ComboRotatesAndStaysInWireFormat(t *testing.T) {
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer down.Close()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c1","model":"fake","choices":[{"index":0,"message":{"role":"assistant","content":"from second"},"finish_reason":"stop"}]}`))
+	}))
+	defer up.Close()
+
+	database, cleanup := setupChatTestDB(t)
+	defer cleanup()
+	seedConnDB(t, database, "bn", "conn-combo-down", "sk-1", down.URL)
+	seedConnDB(t, database, "bnalt", "conn-combo-up", "sk-2", up.URL)
+	models, _ := json.Marshal([]string{"bn/first", "bnalt/second"})
+	if _, err := database.Exec(`INSERT INTO combos (id, name, kind, models, createdAt, updatedAt)
+		VALUES ('combo-resp', 'responses-combo', 'fallback', ?, '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z')`, string(models)); err != nil {
+		t.Fatalf("seed combo: %v", err)
+	}
+	handler := NewChatHandler(db.NewRepo(database))
+
+	req := httptest.NewRequest("POST", "/v1/responses", bytes.NewReader([]byte(`{"model":"responses-combo","input":"hi"}`)))
+	rec := httptest.NewRecorder()
+	handler.HandleResponses(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	out := rec.Body.String()
+	if !strings.Contains(out, "from second") {
+		t.Errorf("combo did not fall back to the healthy member: %s", out)
+	}
+	if strings.Contains(out, "chat.completion") {
+		t.Errorf("combo answer left the Responses wire format: %s", out)
+	}
+}
+
+// TestHandleGeminiStream_ResponsesClient covers the antigravity hop: Gemini
+// events become OpenAI chunks and those become Responses events. Without the
+// bridge this path wrote the intermediate Chat chunks straight to the client,
+// which a /v1/responses client cannot read.
+func TestHandleGeminiStream_ResponsesClient(t *testing.T) {
+	upstream := strings.Join([]string{
+		// antigravity wraps each streamed chunk in a {"response": ...} envelope.
+		`data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"Hel"}]}}]}}`,
+		`data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"lo"}]},"finishReason":"STOP"}]}}`,
+		"",
+	}, "\n\n")
+
+	rec := httptest.NewRecorder()
+	ctx := translator.WithResponsesBridge(translator.WithClientFormat(context.Background(), translator.ClientFormatResponses))
+	metrics := &streamMetrics{}
+
+	if err := (&ChatHandler{}).handleGeminiStream(ctx, rec, strings.NewReader(upstream), false, metrics); err != nil {
+		t.Fatalf("handleGeminiStream: %v", err)
+	}
+
+	out := rec.Body.String()
+	if strings.Contains(out, "chat.completion.chunk") {
+		t.Errorf("Chat chunks reached a Responses client:\n%s", out)
+	}
+	if !strings.Contains(out, "event: response.completed") {
+		t.Errorf("gemini hop never closed with response.completed:\n%s", out)
+	}
+	if !strings.Contains(out, `"text":"Hello"`) {
+		t.Errorf("answer text did not survive the two hops:\n%s", out)
 	}
 }

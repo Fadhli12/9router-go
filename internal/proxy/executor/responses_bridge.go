@@ -43,31 +43,32 @@ func UpstreamSpeaksResponses(provider, model string, cfg *providers.ProviderConf
 	}
 }
 
-// responsesBridge replays an upstream Chat Completions stream as the Responses
-// events a /v1/responses client expects. It is fed one SSE payload at a time so
-// it can sit behind any Chat producer — the plain OpenAI stream or the
-// Claude-to-OpenAI translation — without either knowing it exists.
-type responsesBridge struct {
+// ResponsesBridge replays an upstream Chat Completions stream as the Responses
+// events a /v1/responses client expects. It accepts both a single SSE payload
+// and a buffer of ready-made "data: {...}" frames, so it can sit behind any
+// Chat producer — the plain OpenAI stream, the Claude-to-OpenAI translation, or
+// the Gemini-to-OpenAI translation — without any of them knowing it exists.
+type ResponsesBridge struct {
 	state    *translator.ResponsesState
 	write    func([]byte) error
 	finished bool
 	err      error
 }
 
-// newResponsesBridge builds a bridge that writes Responses SSE frames through
+// NewResponsesBridge builds a bridge that writes Responses SSE frames through
 // write. customToolNames marks the tools the client declared as freeform custom
 // tools so their call arguments replay as custom_tool_call_input rather than as
 // JSON arguments.
-func newResponsesBridge(model string, customToolNames []string, write func([]byte) error) *responsesBridge {
+func NewResponsesBridge(model string, customToolNames []string, write func([]byte) error) *ResponsesBridge {
 	state := translator.InitResponsesState(model, true)
 	state.SetCustomToolNames(customToolNames)
-	return &responsesBridge{state: state, write: write}
+	return &ResponsesBridge{state: state, write: write}
 }
 
-// feed translates one upstream Chat Completions SSE payload. A payload that
+// Feed translates one upstream Chat Completions SSE payload. A payload that
 // carries no JSON still has to reach the translator, because the terminal null
 // chunk is what closes the open items and emits response.completed.
-func (b *responsesBridge) feed(payload []byte) {
+func (b *ResponsesBridge) Feed(payload []byte) {
 	if b.err != nil || b.finished {
 		return
 	}
@@ -78,24 +79,24 @@ func (b *responsesBridge) feed(payload []byte) {
 	b.finished = b.state.Completed
 }
 
-// feedFrames translates a buffer of ready-made Chat Completions SSE frames
+// FeedFrames translates a buffer of ready-made Chat Completions SSE frames
 // ("data: {...}\n\n", possibly several back to back). The Claude translation
 // emits its output in that shape rather than one payload at a time, so the
 // bridge accepts both framings instead of each producer re-implementing it.
-func (b *responsesBridge) feedFrames(frames []byte) {
+func (b *ResponsesBridge) FeedFrames(frames []byte) {
 	for _, frame := range bytes.Split(frames, []byte("\n\n")) {
 		frame = bytes.TrimSpace(frame)
 		if len(frame) == 0 {
 			continue
 		}
-		b.feed(bytes.TrimSpace(bytes.TrimPrefix(frame, []byte("data:"))))
+		b.Feed(bytes.TrimSpace(bytes.TrimPrefix(frame, []byte("data:"))))
 	}
 }
 
-// close flushes whatever the upstream left open. A truncated stream must not
+// Close flushes whatever the upstream left open. A truncated stream must not
 // swallow response.completed: without a terminal event the client waits forever
 // for a turn that already ended.
-func (b *responsesBridge) close() {
+func (b *ResponsesBridge) Close() {
 	if b.err != nil || b.finished {
 		return
 	}
@@ -105,7 +106,7 @@ func (b *responsesBridge) close() {
 	}
 }
 
-func (b *responsesBridge) writeEvents(events []translator.ResponsesEvent) error {
+func (b *ResponsesBridge) writeEvents(events []translator.ResponsesEvent) error {
 	frame := make([]byte, 0, 512)
 	for _, ev := range events {
 		frame = append(frame, translator.FormatResponsesSSE(ev)...)
@@ -114,6 +115,13 @@ func (b *responsesBridge) writeEvents(events []translator.ResponsesEvent) error 
 		return nil
 	}
 	return b.write(frame)
+}
+
+// Err reports the write error that stopped the bridge, if any. A producer that
+// keeps feeding after a failed write would otherwise spin until the upstream
+// stream ends.
+func (b *ResponsesBridge) Err() error {
+	return b.err
 }
 
 // parseChatChunk decodes one upstream SSE data payload.
@@ -150,13 +158,13 @@ func StreamChatToResponses(ctx context.Context, w http.ResponseWriter, upstream 
 	defer hw.Close()
 	flusher := proxy.WriteSSEHeaders(hw)
 
-	bridge := newResponsesBridge(
+	bridge := NewResponsesBridge(
 		translator.RequestedModelFromContext(ctx),
 		translator.CustomToolNamesFrom(ctx),
 		responsesWriter(sseStreamOpts{TTFT: ttft, Buf: buf}, hw, flusher, startTime),
 	)
-	err := proxy.ScanStream(upstream, bridge.feed)
-	bridge.close()
+	err := proxy.ScanStream(upstream, bridge.Feed)
+	bridge.Close()
 	if bridge.err != nil {
 		return fmt.Errorf("write to client: %w", bridge.err)
 	}

@@ -54,13 +54,13 @@ func handleClaudeMessagesStream(w http.ResponseWriter, req *Request, upstream io
 	// A /v1/responses client is one hop further out: the Claude events become
 	// OpenAI chunks here and those chunks become Responses events, so the
 	// bridge consumes this branch's output instead of the raw writer.
-	var bridge *responsesBridge
+	var bridge *ResponsesBridge
 	if translator.NeedsResponsesBridge(req.Ctx) {
 		startTime := req.StartTime
 		if startTime.IsZero() {
 			startTime = time.Now()
 		}
-		bridge = newResponsesBridge(
+		bridge = NewResponsesBridge(
 			translator.RequestedModelFromContext(req.Ctx),
 			translator.CustomToolNamesFrom(req.Ctx),
 			responsesWriter(sseStreamOpts{TTFT: req.TTFT, Buf: req.ResponseBuf}, hw, flusher, startTime),
@@ -96,7 +96,7 @@ func handleClaudeMessagesStream(w http.ResponseWriter, req *Request, upstream io
 		}
 
 		if bridge != nil {
-			bridge.feedFrames(out)
+			bridge.FeedFrames(out)
 			if bridge.err != nil {
 				writeErr = bridge.err
 			}
@@ -151,7 +151,7 @@ func handleClaudeMessagesStream(w http.ResponseWriter, req *Request, upstream io
 	// A Responses client waits for response.completed, not [DONE], so the bridge
 	// closes before the fallback below can call the stream unfinished.
 	if bridge != nil {
-		bridge.close()
+		bridge.Close()
 		doneSeen = true
 	}
 

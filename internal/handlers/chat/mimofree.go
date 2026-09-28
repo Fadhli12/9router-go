@@ -17,6 +17,7 @@ import (
 
 	"9router/proxy/internal/constants"
 	"9router/proxy/internal/providers"
+	"9router/proxy/internal/translator"
 )
 
 // MiMo anti-abuse: the free chat endpoint returns 403 "Illegal access"
@@ -118,6 +119,14 @@ func (h *ChatHandler) MimoFreeChat(ctx context.Context, w http.ResponseWriter, b
 	if resp.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(resp.Body)
 		return &upstreamError{StatusCode: resp.StatusCode, Body: errBody}
+	}
+
+	if translator.NeedsResponsesBridge(ctx) && !isStream {
+		raw, rErr := io.ReadAll(io.LimitReader(resp.Body, constants.MaxUpstreamBodyBytes))
+		if rErr != nil {
+			return fmt.Errorf("mimo read response: %w", rErr)
+		}
+		return h.respondAsResponses(ctx, w, raw)
 	}
 
 	if isStream {

@@ -8,9 +8,11 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
+	internalproxy "9router/proxy/internal/proxy"
 	"9router/proxy/internal/proxy/executor"
 	"9router/proxy/internal/translator"
 )
@@ -26,6 +28,33 @@ func forwardEndpoint(ctx context.Context, claudeClient string) string {
 		return responsesEndpoint
 	}
 	return claudeClient
+}
+
+// newResponsesBridge builds a Chat→Responses bridge that writes through an
+// already-committed SSE writer. Producers that translate upstream into OpenAI
+// chunks on the way out — the Claude and Gemini paths — hand their finished
+// frames to it instead of writing them raw, so a /v1/responses client is served
+// correctly no matter which translation produced the Chat shape.
+func newResponsesBridge(ctx context.Context, hw *internalproxy.HeartbeatWriter, flusher http.Flusher, metrics *streamMetrics, start time.Time) *executor.ResponsesBridge {
+	return executor.NewResponsesBridge(
+		translator.RequestedModelFromContext(ctx),
+		translator.CustomToolNamesFrom(ctx),
+		func(frame []byte) error {
+			if metrics != nil {
+				if metrics.TTFT == 0 {
+					metrics.TTFT = time.Since(start).Milliseconds()
+				}
+				metrics.ResponseBuf.Write(frame)
+			}
+			if _, err := hw.Write(frame); err != nil {
+				return err
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return nil
+		},
+	)
 }
 
 // HandleResponses handles POST /v1/responses (OpenAI Responses API clients).

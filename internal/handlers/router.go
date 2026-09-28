@@ -70,7 +70,7 @@ func SetupRoutes(r interface {
 	// logging, none of which the media passthrough has, so it lives with the
 	// chat handlers — the same place /v1/messages does.
 	r.Post("/responses", chatH.HandleResponses)
-	r.Post("/responses/compact", mediaH.HandleResponsesCompact)
+	r.Post("/responses/compact", chatH.HandleResponsesCompact)
 	r.Post("/images/generations", mediaH.HandleImages)
 	r.Post("/audio/speech", mediaH.HandleAudioSpeech)
 	r.Get("/audio/voices", mediaH.HandleAudioVoices)
