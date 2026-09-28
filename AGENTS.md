@@ -23,6 +23,21 @@ Whenever you implement features, fix bugs, add providers, update routing logic, 
 3. **Changelog Tracking**:
    - When porting features or fixes, reference the upstream commit/issue/PR in `CHANGELOG.md` (e.g. `upstream decolua/9router#4197 parity`).
 
+### Secondary Reference: OmniRoute (source of many feature requests)
+
+Some feature issues in this repo are not parity requests against `decolua/9router` — they are **port requests sourced from OmniRoute**, cited by a file path inside that repo (e.g. issue #38 cites `src/lib/usage/codexResetCredits.ts`).
+
+- **Reference Repository**: `https://github.com/diegosouzapw/OmniRoute` — TypeScript/Next.js, MIT, a *sibling* gateway project (not this repo's upstream). It vendors its own `open-sse/` tree under the `@omniroute/open-sse` package alias, so its provider/executor layout is recognizable but **not** the same as `decolua/9router`'s.
+- **When an issue cites OmniRoute**, treat the cited file as the *feature specification*. Do not guess its contents and do not port from memory.
+
+**OmniRoute Porting Protocol**
+1. **Fetch the cited file first**, from raw: `https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/<path>`. Fetch the related UI component too (dashboard modals live under its `src/app/` tree) — the port must match the dashboard *behavior*, not just the API shape.
+2. **Port the contract, not the code**: endpoints, request/response payloads, error status codes, and filter/sort rules. Never transliterate TypeScript into Go (see §4.A).
+3. **Map by responsibility** — OmniRoute `src/lib/usage/*.ts` → `internal/handlers/dashboard/` + `web/src/api/client.ts`; `open-sse/executors/` → `internal/proxy/executor/`; `src/app/` components → `web/src/`.
+4. **OmniRoute is secondary**. Where it conflicts with `decolua/9router`, the §1 parity rules win; record the deliberate divergence in `CHANGELOG.md`.
+5. **Provider IDs are not portable verbatim.** OmniRoute has its own catalog. Map to `9router-go` provider IDs and obey §3 (strict provider isolation — no cross-provider aliasing or model hijacking).
+6. **Preserve upstream error semantics.** OmniRoute surfaces typed error classes with explicit status codes (e.g. `409 no_credit`); port that distinction rather than collapsing every upstream failure into one generic error.
+
 ---
 
 ## 2. Architecture & Codebase Mapping
