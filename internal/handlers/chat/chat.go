@@ -614,13 +614,10 @@ func (h *ChatHandler) HandleModelLookup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Otherwise treat as provider/model ID lookup
-	data := h.buildModelsList(r.Context())
-	for _, m := range data {
-		if m.ID == suffix {
-			handlerutil.WriteJSON(w, http.StatusOK, m)
-			return
-		}
+	// Otherwise treat as provider/model ID lookup.
+	if m, ok := h.findModelForLookup(r.Context(), suffix); ok {
+		handlerutil.WriteJSON(w, http.StatusOK, m)
+		return
 	}
 	// Also try without provider prefix? No, must be exact.
 
@@ -631,6 +628,35 @@ func (h *ChatHandler) HandleModelLookup(w http.ResponseWriter, r *http.Request) 
 			"code":    "model_not_found",
 		},
 	})
+}
+
+// findModelForLookup resolves a provider/model id against the default list,
+// then against the connected-mode list.
+//
+// The default list is connection-scoped as soon as any connection row exists,
+// so a registry noAuth model that /v1/models?connected=1 advertises would 404
+// here — the listing endpoint and the lookup endpoint would disagree about
+// whether the same model exists. Falling back keeps this route additive in both
+// directions: on a fresh install the default list is the full catalog, which
+// already contains everything connected mode offers, and on a configured
+// install connected mode is the superset. Replacing the lookup outright with
+// connected mode would instead make a fresh install stricter, turning the
+// credentialed-provider lookups that resolve today into 404s.
+func (h *ChatHandler) findModelForLookup(ctx context.Context, modelID string) (ModelInfoObject, bool) {
+	if m, ok := findModelByID(h.buildModelsList(ctx), modelID); ok {
+		return m, true
+	}
+	return findModelByID(h.buildModelsListResult(ctx, modeListConnected).Models, modelID)
+}
+
+// findModelByID scans the published list for an exact provider/model id.
+func findModelByID(data []ModelInfoObject, modelID string) (ModelInfoObject, bool) {
+	for _, m := range data {
+		if m.ID == modelID {
+			return m, true
+		}
+	}
+	return ModelInfoObject{}, false
 }
 
 // HandleAudioVoices lists available TTS voices for a provider.
