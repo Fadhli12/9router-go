@@ -60,12 +60,12 @@ func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 	requiredCaps := DetectRequiredCapabilities(body)
 
 	if len(modelInfo.ComboModels) > 0 {
-		augmented, _ := h.AugmentModelsWithCapacityAdapter(modelInfo.ComboModels, requiredCaps)
+		augmented, comboStrategy := h.applyCapacityAdapter(modelInfo.ComboModels, requiredCaps, modelInfo.Strategy, reqBody.Model)
 		if modelInfo.Strategy == "fusion" {
 			h.handleFusion(ctx, w, body, augmented, modelInfo.Strategy, reqBody.Stream, false, reqBody.Model, modelInfo.StickyLimit, modelInfo.JudgeModel)
 			return
 		}
-		h.handleComboFallback(ctx, w, body, augmented, modelInfo.Strategy, reqBody.Stream, false, reqBody.Model, modelInfo.StickyLimit)
+		h.handleComboFallback(ctx, w, body, augmented, comboStrategy, reqBody.Stream, false, reqBody.Model, modelInfo.StickyLimit)
 		return
 	}
 
@@ -82,6 +82,33 @@ func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 	}
 
 	h.handleSingleModel(ctx, w, body, modelInfo, reqBody.Stream, false)
+}
+
+// applyCapacityAdapter augments a combo's model list with the capacity-adapter
+// pool and reports the strategy that must govern the resulting list.
+//
+// The pool exists precisely because none of the combo's own models can serve
+// the request (a text-only combo receiving an image, say), so it is prepended
+// and must be tried before the combo's own list. Handing the combo's own
+// strategy to the augmented list instead used to fold the adapter model into
+// the combo's rotation: with strategy round-robin, combo-wombo (whose only
+// entry is oc/space-bunny-free, which reports no vision) alternated every turn
+// between its own model and ag/gemini-3.8-flash-high, so traffic to a provider
+// absent from the combo appeared to leak out of it. An augmented list is
+// therefore governed by the adapter's own strategy; the combo's strategy
+// applies only when nothing was injected.
+func (h *ChatHandler) applyCapacityAdapter(comboModels []string, required map[string]bool, comboStrategy, requestedModel string) ([]string, string) {
+	augmented, adapterStrategy := h.AugmentModelsWithCapacityAdapter(comboModels, required)
+	if len(augmented) == len(comboModels) {
+		return augmented, comboStrategy
+	}
+	log.Info("chat", "capacity adapter auto-switch combo",
+		"target", requestedModel,
+		"switched_to", augmented[0],
+		"caps", keysString(required),
+		"comboStrategy", comboStrategy,
+		"adapterStrategy", adapterStrategy)
+	return augmented, adapterStrategy
 }
 
 // handleSingleModel resolves a single ModelInfo and forwards the request upstream.
@@ -184,7 +211,7 @@ func (h *ChatHandler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	requiredCaps := DetectRequiredCapabilities(body)
 
 	if len(modelInfo.ComboModels) > 0 {
-		augmented, _ := h.AugmentModelsWithCapacityAdapter(modelInfo.ComboModels, requiredCaps)
+		augmented, comboStrategy := h.applyCapacityAdapter(modelInfo.ComboModels, requiredCaps, modelInfo.Strategy, reqBody.Model)
 		if modelInfo.Strategy == "fusion" {
 			bodyJSON, err := json.Marshal(workingBody)
 			if err != nil {
@@ -194,7 +221,7 @@ func (h *ChatHandler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			h.handleFusion(ctx, w, bodyJSON, augmented, modelInfo.Strategy, reqBody.Stream, translateResponse, reqBody.Model, modelInfo.StickyLimit, modelInfo.JudgeModel)
 			return
 		}
-		h.handleMessagesComboFallback(ctx, w, workingBody, augmented, modelInfo.Strategy, reqBody.Stream, reqBody.Model, modelInfo.StickyLimit)
+		h.handleMessagesComboFallback(ctx, w, workingBody, augmented, comboStrategy, reqBody.Stream, reqBody.Model, modelInfo.StickyLimit)
 		return
 	}
 
