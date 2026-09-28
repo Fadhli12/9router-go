@@ -407,6 +407,36 @@ func TestHandleImportDatabase_PreservesLiveSecrets(t *testing.T) {
 	if requireLogin, ok := restored["requireLogin"].(bool); !ok || !requireLogin {
 		t.Errorf("requireLogin must be restored, got %#v", restored["requireLogin"])
 	}
+
+	// An empty secret in the payload means "not present here", not "clear
+	// it" — it must not wipe the hash either.
+	body, err = json.Marshal(map[string]any{
+		"settings":            map[string]any{"password": "", "oidcClientSecret": ""},
+		"providerConnections": []any{},
+		"combos":              []any{},
+		"apiKeys":             []any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/settings/database", bytes.NewReader(body))
+	req.Header.Set(cliTokenHeader, auth.CLIToken())
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second import failed: %d %s", rec.Code, rec.Body.String())
+	}
+	emptied, err := repo.GetSettingsRaw()
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	if emptied["password"] != string(hash) {
+		t.Errorf("an empty payload password must not clear the stored hash, got %#v", emptied["password"])
+	}
+	if emptied["oidcClientSecret"] != oidcSecret {
+		t.Errorf("an empty payload secret must not clear the stored value, got %#v", emptied["oidcClientSecret"])
+	}
 }
 
 // A legacy backup taken before the export sanitiser still carries its own

@@ -482,9 +482,10 @@ func (h *DashboardHandler) importDatabase(payload map[string]any) error {
 		}
 		// A backup that predates the export sanitiser — or one taken from a
 		// different runtime — still wins; only a missing key falls back to
-		// the live value.
+		// the live value. An empty value means "no password here", not
+		// "reset this machine to the default", so it falls back too.
 		for k, v := range liveSecrets {
-			if _, provided := restored[k]; !provided {
+			if s, provided := restored[k].(string); !provided || s == "" {
 				restored[k] = v
 			}
 		}
