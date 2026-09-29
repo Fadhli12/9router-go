@@ -10,7 +10,7 @@ AUTO_UPDATE ?= false
 
 LDFLAGS := -s -w -X '9router/proxy/internal/updater.CurrentVersion=$(VERSION)'
 
-.PHONY: build run dev version update test test-short vet bench bench-go cross mitm-enable mitm-disable mitm-status docker docker-build clean help web-build web-dev
+.PHONY: build run dev version update test test-short test-integration vet vet-integration bench bench-go cross mitm-enable mitm-disable mitm-status docker docker-build clean help web-build web-dev
 
 ## web-build — build frontend static assets (Svelte/Vite) into web/dist
 web-build:
@@ -50,6 +50,17 @@ test:
 ## test-short — run tests (quiet)
 test-short:
 	go test ./...
+
+# The integration suite imports internal/app -> internal/handlers -> web, and
+# web/embed.go embeds web/dist at compile time. web-build is a no-op once the
+# SPA has been built, so this costs nothing on a warm tree.
+## test-integration — run the feature-level integration suite (real router, real DB, fake upstreams)
+test-integration: web-build
+	go test -tags=integration -race -count=1 ./internal/integration/... -v
+
+## vet-integration — vet the integration suite, which the untagged `vet` target skips
+vet-integration: web-build
+	go vet -tags=integration ./internal/integration/...
 
 ## vet — run go vet static analysis
 vet:
