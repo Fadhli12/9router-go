@@ -454,7 +454,7 @@
         <div class="flex items-center justify-between">
           <div>
             <p class="font-semibold text-text-main">Require Password on Localhost</p>
-            <p class="text-[11px] text-text-subtle">Default password is <code class="font-mono text-brand-500">Mantep210</code></p>
+            <p class="text-[11px] text-text-subtle">Default password is <code class="font-mono text-brand-500">123456</code></p>
           </div>
         </div>
 
@@ -502,7 +502,7 @@
                   id="curr-pwd"
                   type="password"
                   bind:value={currentPassword}
-                  placeholder="Mantep210"
+                  placeholder="123456"
                   class="w-full px-3 py-1.5 rounded-lg bg-bg border border-border text-xs font-mono text-text-main focus:outline-none focus:border-brand-500"
                   required
                 />
