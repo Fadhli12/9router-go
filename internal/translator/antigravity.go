@@ -231,22 +231,15 @@ var (
 	harnessTagSystemConventions = regexp.MustCompile(`(?i)<(/?)system[-_]conventions>`)
 	harnessTagSystemDirective   = regexp.MustCompile(`(?i)<(/?)system[-_]directive>`)
 	harnessTagCritical          = regexp.MustCompile(`(?i)<(/?)critical>`)
-	harnessBrandOMPFull         = regexp.MustCompile(`(?i)Oh My Pi coding harness`)
-	harnessBrandOMP             = regexp.MustCompile(`(?i)Oh My Pi`)
-	harnessBrandOMPLive         = regexp.MustCompile(`(?i)omp Live`)
 	claudeBillingHeaderRegex    = regexp.MustCompile(`(?im)^x-anthropic-billing-header:[^\n]*(?:\r?\n)*`)
-	hermesIdentityRegex         = regexp.MustCompile(`(?i)You are Hermes Agent,\s*(an intelligent AI assistant)(?: created by Nous Research)?\.`)
 )
 
 // normalizeHarnessMarkers neutralizes harness fingerprint tags in system text.
-// Bodies are preserved; only the marker names change.
+// Bodies are preserved; only XML wrapper tag names change to bypass WAF filter without altering words or meaning.
 func normalizeHarnessMarkers(text string) string {
 	text = harnessTagSystemConventions.ReplaceAllString(text, "<${1}conventions>")
 	text = harnessTagSystemDirective.ReplaceAllString(text, "<${1}instructions>")
 	text = harnessTagCritical.ReplaceAllString(text, "<${1}important>")
-	text = harnessBrandOMPFull.ReplaceAllString(text, "AI coding assistant")
-	text = harnessBrandOMP.ReplaceAllString(text, "coding assistant")
-	text = harnessBrandOMPLive.ReplaceAllString(text, "coding assistant live")
 	return text
 }
 
@@ -254,16 +247,14 @@ func rewriteCompetingBranding(text string) string {
 	return rewriteBrandingText(text, true)
 }
 
-// rewriteBrandingText applies competitive-prompt rewrites. Harness markers
-// (tags + branding) are fingerprints of system-instruction text only;
-// user/model messages, tool definitions, arguments, and results keep the
-// existing Claude-SDK handling and are never harness-normalized.
+// rewriteBrandingText applies safe prompt normalization without altering semantic wording.
+// Only competitor Claude-SDK boilerplate and raw billing headers are stripped to prevent upstream 429 rejections.
+// Words, brands, tool names, and agent names (Hermes, Oh My Pi, OpenCode, etc.) are kept 100% intact.
 func rewriteBrandingText(text string, isSystemInstruction bool) string {
 	for _, phrase := range competitivePromptBlacklist {
 		text = strings.ReplaceAll(text, phrase, "")
 	}
 	text = claudeBillingHeaderRegex.ReplaceAllString(text, "")
-	text = hermesIdentityRegex.ReplaceAllString(text, "You are Hermes Agent. You are ${1}.")
 	if isSystemInstruction {
 		text = normalizeHarnessMarkers(text)
 	}

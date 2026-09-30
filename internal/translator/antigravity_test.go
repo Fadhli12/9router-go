@@ -399,12 +399,12 @@ func TestStripCompetitivePrompts_NormalizesHarnessTagsInSystemOnly(t *testing.T)
 
 	stripped := translator.StripCompetitivePrompts(req)
 	sys := stripped.SystemInstruction.Parts[0].Text
-	for _, want := range []string{"<conventions>", "RFC 2119 body stays", "<instructions>dir stays", "<important>crit stays", "AI coding assistant"} {
+	for _, want := range []string{"<conventions>", "RFC 2119 body stays", "<instructions>dir stays", "<important>crit stays", "Oh My Pi coding harness"} {
 		if !strings.Contains(sys, want) {
 			t.Errorf("expected system text to contain %q, got %q", want, sys)
 		}
 	}
-	for _, banned := range []string{"system-conventions", "system-directive", "critical", "Oh My Pi"} {
+	for _, banned := range []string{"system-conventions", "system-directive", "critical"} {
 		if strings.Contains(sys, banned) {
 			t.Errorf("expected system text to drop %q, got %q", banned, sys)
 		}
@@ -430,11 +430,9 @@ func TestStripCompetitivePrompts_HermesAndBillingHeader(t *testing.T) {
 	if strings.Contains(sys, "x-anthropic-billing-header") {
 		t.Errorf("expected billing header stripped, got %q", sys)
 	}
-	if strings.Contains(sys, "created by Nous Research") {
-		t.Errorf("expected Nous Research stripped from Hermes identity, got %q", sys)
-	}
-	if !strings.Contains(sys, "You are Hermes Agent. You are an intelligent AI assistant.") {
-		t.Errorf("expected sanitized Hermes identity, got %q", sys)
+	// Verify semantic identity of Hermes is 100% preserved without words being replaced
+	if !strings.Contains(sys, "You are Hermes Agent, an intelligent AI assistant created by Nous Research. Help user.") {
+		t.Errorf("expected Hermes identity intact without alteration, got %q", sys)
 	}
 }
 
