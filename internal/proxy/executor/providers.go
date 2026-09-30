@@ -52,6 +52,9 @@ func ForwardCodex(w http.ResponseWriter, req *Request) error {
 	if err != nil {
 		return fmt.Errorf("transform body: %w", err)
 	}
+	// The ChatGPT Codex backend rejects a max_output_tokens it did not ask
+	// for; every chat-completions client sends one, so drop it here (#48).
+	transformedBody = stripCodexUnsupportedTokenParams(transformedBody)
 	cfg, transformedBody := applyCodexCompact(req.Config, transformedBody)
 	ctx := req.Ctx
 	if ctx == nil {
