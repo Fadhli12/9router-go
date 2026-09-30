@@ -528,7 +528,24 @@ func (h *ChatHandler) applyConnectionStrategy(conns []*models.ProviderConnection
 		if stickyLimit <= 0 {
 			stickyLimit = 1
 		}
+		// Sort or filter by adaptive health score first if multiple connections are available
 		return h.selectByRecency(conns, stickyLimit)
+
+	case "adaptive", "health":
+		// Multi-factor scoring inspired by OmniRoute
+		scored := make([]*models.ProviderConnection, len(conns))
+		copy(scored, conns)
+		slices.SortStableFunc(scored, func(a, b *models.ProviderConnection) int {
+			scoreA := GlobalAdaptiveRouter.ScoreConnection(a)
+			scoreB := GlobalAdaptiveRouter.ScoreConnection(b)
+			if scoreA > scoreB {
+				return -1
+			} else if scoreA < scoreB {
+				return 1
+			}
+			return 0
+		})
+		return scored
 
 	case "random":
 		offset := rand.IntN(len(conns))

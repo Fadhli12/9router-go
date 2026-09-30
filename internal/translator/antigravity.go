@@ -237,7 +237,6 @@ var (
 	claudeBillingHeaderRegex    = regexp.MustCompile(`(?im)^x-anthropic-billing-header:[^\n]*(?:\r?\n)*`)
 	hermesIdentityRegex         = regexp.MustCompile(`(?i)You are Hermes Agent,\s*(an intelligent AI assistant)(?: created by Nous Research)?\.`)
 )
-var opencodeRegex = regexp.MustCompile(`(?i)\bopencode\b`)
 
 // normalizeHarnessMarkers neutralizes harness fingerprint tags in system text.
 // Bodies are preserved; only the marker names change.
@@ -258,7 +257,7 @@ func rewriteCompetingBranding(text string) string {
 // rewriteBrandingText applies competitive-prompt rewrites. Harness markers
 // (tags + branding) are fingerprints of system-instruction text only;
 // user/model messages, tool definitions, arguments, and results keep the
-// existing Claude-SDK + opencode handling and are never harness-normalized.
+// existing Claude-SDK handling and are never harness-normalized.
 func rewriteBrandingText(text string, isSystemInstruction bool) string {
 	for _, phrase := range competitivePromptBlacklist {
 		text = strings.ReplaceAll(text, phrase, "")
