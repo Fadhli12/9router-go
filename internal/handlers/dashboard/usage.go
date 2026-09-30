@@ -4,11 +4,43 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"time"
 
 	"9router/proxy/internal/fetchgate"
 	"9router/proxy/internal/handlerutil"
 )
+
+type cachedUsageEntry struct {
+	data      any
+	expiresAt time.Time
+}
+
+var (
+	usageCacheMu sync.RWMutex
+	usageCache   = make(map[string]cachedUsageEntry)
+)
+
+const usageCacheTTL = 60 * time.Second
+
+func getCachedUsage(key string) (any, bool) {
+	usageCacheMu.RLock()
+	defer usageCacheMu.RUnlock()
+	entry, ok := usageCache[key]
+	if !ok || time.Now().After(entry.expiresAt) {
+		return nil, false
+	}
+	return entry.data, true
+}
+
+func setCachedUsage(key string, data any) {
+	usageCacheMu.Lock()
+	defer usageCacheMu.Unlock()
+	usageCache[key] = cachedUsageEntry{
+		data:      data,
+		expiresAt: time.Now().Add(usageCacheTTL),
+	}
+}
 
 // quotaFetchGate paces every live quota read this handler makes (issue #30).
 //
@@ -50,6 +82,12 @@ func (h *DashboardHandler) HandleGetConnectionUsage(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// In-memory cache hit: serve immediately (< 1ms) to eliminate redundant Google quota calls
+	if cached, ok := getCachedUsage(connID); ok {
+		handlerutil.WriteJSON(w, http.StatusOK, cached)
+		return
+	}
+
 	conn, err := h.Repo.GetProviderConnectionByID(connID)
 	if err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
@@ -72,7 +110,9 @@ func (h *DashboardHandler) HandleGetConnectionUsage(w http.ResponseWriter, r *ht
 	}
 
 	if res, ok := fetchProviderUsage(r.Context(), conn.Provider, data); ok {
-		handlerutil.WriteJSON(w, http.StatusOK, res.toResponse())
+		resp := res.toResponse()
+		setCachedUsage(connID, resp)
+		handlerutil.WriteJSON(w, http.StatusOK, resp)
 		return
 	}
 
@@ -93,7 +133,9 @@ func (h *DashboardHandler) HandleGetConnectionUsage(w http.ResponseWriter, r *ht
 			defer cancel()
 
 			res := fetchAntigravityDashboardUsage(ctx, accessToken, projectID)
-			handlerutil.WriteJSON(w, http.StatusOK, res.toResponse())
+			resp := res.toResponse()
+			setCachedUsage(connID, resp)
+			handlerutil.WriteJSON(w, http.StatusOK, resp)
 			return
 		}
 	}
