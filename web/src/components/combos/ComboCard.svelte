@@ -1,13 +1,17 @@
 <script lang="ts">
   import {
     Check,
+    ChevronDown,
+    ChevronUp,
     Copy,
     Eye,
     Gavel,
     Layers,
+    Lock,
     Pencil,
     Sparkles,
     Trash2,
+    Wand2,
     X
   } from 'lucide-svelte'
   import type { Combo } from '../../api/client'
@@ -18,6 +22,7 @@
     hasReasoning,
     hasVision,
     resolveComboStrategy,
+    isAutoFreeCombo,
     type ComboStrategyInfo
   } from './types'
 
@@ -31,6 +36,9 @@
     onCopy: (name: string, id: string) => void
     onEdit: (combo: Combo) => void
     onDelete: (combo: Combo) => void
+    onReorder?: (combo: Combo, models: string[]) => void
+    isSelected?: boolean
+    onToggleSelect?: (combo: Combo) => void
   }
 
   let {
@@ -43,9 +51,26 @@
     onCopy,
     onEdit,
     onDelete,
+    onReorder,
+    isSelected = false,
+    onToggleSelect,
   }: Props = $props()
 
   let modelsList = $derived(getComboModels(combo))
+
+  function handleToggleSelect(e: Event) {
+    e.stopPropagation()
+    onToggleSelect?.(combo)
+  }
+
+  function moveModel(index: number, delta: -1 | 1) {
+    const next = modelsList.slice()
+    const target = index + delta
+    if (target < 0 || target >= next.length) return
+    ;[next[index], next[target]] = [next[target], next[index]]
+    onReorder?.(combo, next)
+  }
+  let isLocked = $derived(isAutoFreeCombo(combo))
   let currentStrategy = $derived(resolveComboStrategy(strategyInfo.fallbackStrategy || combo.strategy))
   let judgeModel = $derived(strategyInfo.judgeModel || '')
   let isFusion = $derived(currentStrategy === 'fusion')
@@ -55,17 +80,58 @@
   <div class="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
     <!-- Left: Icon, Name, Model Badges & Fusion Judge -->
     <div class="flex min-w-0 flex-1 items-start gap-3 sm:items-center">
+      <input
+        type="checkbox"
+        checked={isSelected}
+        onchange={handleToggleSelect}
+        disabled={isLocked}
+        class="mt-1 size-4 shrink-0 cursor-pointer accent-brand-500 disabled:cursor-not-allowed disabled:opacity-30"
+        title={isLocked ? 'Locked auto free-tier combo cannot be deleted' : 'Select for bulk delete'}
+      />
       <div class="size-8 rounded-lg bg-brand-500/10 flex items-center justify-center shrink-0">
         <Layers class="w-4 h-4 text-brand-500" />
       </div>
       <div class="min-w-0 flex-1">
         <code class="block truncate font-mono text-sm font-medium text-text-main">{combo.name}</code>
+        {#if isLocked}
+          <span class="mt-1 inline-flex items-center gap-1 rounded-full bg-brand-500/10 px-2 py-0.5 text-[10px] font-medium text-brand-500 border border-brand-500/30">
+            <Lock class="w-2.5 h-2.5" />
+            Auto Free Tier · reorder only
+          </span>
+        {:else if combo.kind?.startsWith('auto-')}
+          <span class="mt-1 inline-flex items-center gap-1 rounded-full bg-surface-3 px-2 py-0.5 text-[10px] font-medium text-text-muted border border-border">
+            <Wand2 class="w-2.5 h-2.5" />
+            Auto-generated
+          </span>
+        {/if}
         <div class="mt-1 flex min-w-0 flex-wrap items-center gap-1">
           {#if modelsList.length === 0}
             <span class="text-xs text-text-muted italic">No models</span>
           {:else}
-            {#each modelsList.slice(0, 3) as model}
+            {#each modelsList.slice(0, 3) as model, i}
               <code class="inline-flex items-center gap-1 rounded bg-black/5 dark:bg-white/5 px-1.5 py-0.5 font-mono text-xs text-text-muted">
+                {#if isLocked}
+                  <span class="inline-flex items-center">
+                    <button
+                      type="button"
+                      onclick={() => moveModel(i, -1)}
+                      disabled={i === 0}
+                      class="rounded p-0.5 text-text-muted/70 hover:text-primary disabled:opacity-20 disabled:cursor-not-allowed cursor-pointer"
+                      title="Move up"
+                    >
+                      <ChevronUp class="w-2.5 h-2.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onclick={() => moveModel(i, 1)}
+                      disabled={i === Math.min(modelsList.length, 3) - 1}
+                      class="rounded p-0.5 text-text-muted/70 hover:text-primary disabled:opacity-20 disabled:cursor-not-allowed cursor-pointer"
+                      title="Move down"
+                    >
+                      <ChevronDown class="w-2.5 h-2.5" />
+                    </button>
+                  </span>
+                {/if}
                 <span>{model}</span>
                 {#if hasVision(model)}
                   <Eye class="w-3 h-3 text-blue-500 shrink-0" title="Vision — Supports image input" />
@@ -146,20 +212,33 @@
           onclick={() => onEdit(combo)}
           class="flex flex-col items-center justify-center rounded px-2.5 py-1 text-text-muted transition-colors hover:bg-black/5 dark:hover:bg-white/5 hover:text-brand-500 cursor-pointer"
           title="Edit"
+          disabled={isLocked}
         >
           <Pencil class="w-4 h-4" />
           <span class="text-[10px] leading-tight">Edit</span>
         </button>
 
-        <button
-          type="button"
-          onclick={() => onDelete(combo)}
-          class="flex flex-col items-center justify-center rounded px-2.5 py-1 text-red-500 transition-colors hover:bg-red-500/10 cursor-pointer"
-          title="Delete"
-        >
-          <Trash2 class="w-4 h-4" />
-          <span class="text-[10px] leading-tight">Delete</span>
-        </button>
+        {#if isLocked}
+          <button
+            type="button"
+            onclick={() => onDelete(combo)}
+            class="flex flex-col items-center justify-center rounded px-2.5 py-1 text-text-muted/40 cursor-not-allowed"
+            title="Auto free-tier combo is locked"
+          >
+            <Trash2 class="w-4 h-4" />
+            <span class="text-[10px] leading-tight">Locked</span>
+          </button>
+        {:else}
+          <button
+            type="button"
+            onclick={() => onDelete(combo)}
+            class="flex flex-col items-center justify-center rounded px-2.5 py-1 text-red-500 transition-colors hover:bg-red-500/10 cursor-pointer"
+            title="Delete"
+          >
+            <Trash2 class="w-4 h-4" />
+            <span class="text-[10px] leading-tight">Delete</span>
+          </button>
+        {/if}
       </div>
     </div>
   </div>

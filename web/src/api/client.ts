@@ -629,6 +629,16 @@ export const api = {
     request<{ success: boolean }>(`/api/combos/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     }),
+  /** (Re)build the locked auto free-tier combo from the registry's free models. */
+  buildAutoFreeCombo: () =>
+    request<{ status: string; id: string; models: string[] }>('/api/combos/auto-free', {
+      method: 'POST',
+    }),
+  /** Group every usable chat model by family (any version, any provider) into one combo each. */
+  buildAutoFamilyCombos: () =>
+    request<{ status: string; created: string[]; count: number }>('/api/combos/auto-family', {
+      method: 'POST',
+    }),
 
   // API Keys
   getApiKeys: () => request<APIKey[]>('/api/keys'),

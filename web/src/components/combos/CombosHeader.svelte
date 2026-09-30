@@ -3,9 +3,27 @@
 
   interface Props {
     onCreateClick: () => void
+    onAutoFamilyClick?: () => void
+    isBuildingAutoFamily?: boolean
+    onAutoFreeClick?: () => void
+    isBuildingAutoFree?: boolean
+    selectedCount?: number
+    deletableCount?: number
+    onDeleteSelected?: () => void
+    onDeleteAll?: () => void
   }
 
-  let { onCreateClick }: Props = $props()
+  let {
+    onCreateClick,
+    onAutoFamilyClick,
+    isBuildingAutoFamily = false,
+    onAutoFreeClick,
+    isBuildingAutoFree = false,
+    selectedCount = 0,
+    deletableCount = 0,
+    onDeleteSelected,
+    onDeleteAll,
+  }: Props = $props()
 </script>
 
 <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -31,5 +49,49 @@
     <Button icon="add" onclick={onCreateClick} class="w-full sm:w-auto whitespace-nowrap">
       Create Combo
     </Button>
+    {#if onAutoFamilyClick}
+      <Button
+        icon="hub"
+        onclick={onAutoFamilyClick}
+        disabled={isBuildingAutoFamily}
+        variant="outline"
+        class="w-full sm:w-auto whitespace-nowrap"
+      >
+        {isBuildingAutoFamily ? 'Grouping...' : 'Auto Group by Model'}
+      </Button>
+    {/if}
+    {#if onAutoFreeClick}
+      <Button
+        icon="auto_awesome"
+        onclick={onAutoFreeClick}
+        disabled={isBuildingAutoFree}
+        variant="secondary"
+        class="w-full sm:w-auto whitespace-nowrap"
+      >
+        {isBuildingAutoFree ? 'Building...' : 'Auto Free Tier'}
+      </Button>
+    {/if}
+    {#if onDeleteSelected}
+      <Button
+        icon="delete"
+        onclick={onDeleteSelected}
+        disabled={selectedCount === 0}
+        variant="danger"
+        class="w-full sm:w-auto whitespace-nowrap"
+      >
+        Delete Selected ({selectedCount})
+      </Button>
+    {/if}
+    {#if onDeleteAll}
+      <Button
+        icon="delete_sweep"
+        onclick={onDeleteAll}
+        disabled={deletableCount === 0}
+        variant="outline"
+        class="w-full sm:w-auto whitespace-nowrap"
+      >
+        Delete All ({deletableCount})
+      </Button>
+    {/if}
   </div>
 </div>
