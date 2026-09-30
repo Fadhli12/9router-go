@@ -125,6 +125,9 @@ var museSparkOwners = []string{"opencode", "opencode-go", "opencode-zen"}
 // "ag/muse-spark-1.3-contributor-free" copied from a combo) reach the executor
 // that owns the model instead of failing upstream with 404/403.
 func routeModelToOwningProvider(provider, model string) string {
+	if (provider == "gemini-cli" || provider == "gemini") && strings.HasPrefix(model, "grok-") {
+		return "grok-cli"
+	}
 	if provider != "antigravity" && provider != "antigravity-go" {
 		return provider
 	}

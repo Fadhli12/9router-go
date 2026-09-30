@@ -609,6 +609,16 @@ export const api = {
     request<{ provider: string; connectionId: string; models: Array<{ id?: string; name?: string; model?: string } | string> }>(
       `/api/providers/${encodeURIComponent(connectionId)}/models`,
     ),
+  syncFromOmniRoute: () =>
+    request<{
+      success: boolean
+      message: string
+      customModels: number
+      modelAliases: number
+      modelCompatOverrides: number
+    }>('/api/sync/omniroute', {
+      method: 'POST',
+    }),
 
   // Combos
   getCombos: async () => {

@@ -41,7 +41,7 @@ var ProviderAliasMap = map[string]string{
 	"fl":             "featherless",
 	"fw":             "fireworks",
 	"gb":             "grok-cli",
-	"gc":             "gemini-cli",
+	"gc":             "grok-cli",
 	"gcli":           "grok-cli",
 	"gh":             "github",
 	"gl":             "gitlab",

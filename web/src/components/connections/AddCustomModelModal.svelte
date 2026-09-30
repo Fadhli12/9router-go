@@ -44,10 +44,19 @@
     }
   })
 
-  /** Strip provider's own alias prefix (e.g. "cc/model" -> "model" for cc provider). */
+  /** Strip provider's own alias prefix or common prefixes (e.g. "gc/model" -> "model"). */
   function stripAlias(id: string): string {
-    const prefix = `${providerAlias}/`
-    return id.startsWith(prefix) ? id.slice(prefix.length) : id
+    const prefixes = [providerAlias, 'gc', 'gb', 'gcli', 'grok-build', 'grok-cli']
+    for (const p of prefixes) {
+      if (p && id.startsWith(`${p}/`)) {
+        return id.slice(p.length + 1)
+      }
+    }
+    const slashIdx = id.indexOf('/')
+    if (slashIdx !== -1 && slashIdx < id.length - 1) {
+      return id.slice(slashIdx + 1)
+    }
+    return id
   }
 
   let cleanId = $derived(stripAlias(modelId.trim()))

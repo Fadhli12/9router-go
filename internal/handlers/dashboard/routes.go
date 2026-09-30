@@ -81,6 +81,7 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Get("/settings/database", h.HandleExportDatabase)
 		r.Post("/settings/database", h.HandleImportDatabase)
 		r.Post("/settings/proxy-test", h.HandleProxyTest)
+		r.Post("/sync/omniroute", h.HandleSyncFromOmniRoute)
 
 		// Tunnel & Tailscale
 		r.Get("/tunnel/status", h.HandleTunnelStatus)

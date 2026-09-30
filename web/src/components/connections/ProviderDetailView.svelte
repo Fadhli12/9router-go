@@ -2390,11 +2390,33 @@
       }
       const modelsData = await fetchProviderModelsData(providerId, storageAlias)
       customModels = modelsData.customModels
-      if (imported > 0) notifyCustomModelsChanged()
+      if (imported > 0) {
+        notifyCustomModelsChanged()
+        alert(`Successfully imported ${imported} new model(s) from ${providerName}!`)
+      } else {
+        alert(`All ${models.length} models returned from /models are already present in the catalog.`)
+      }
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to import models')
     } finally {
       isImportingLiveCatalogModels = false
+    }
+  }
+
+  let isSyncingOmniRoute = $state(false)
+
+  async function handleSyncOmniRoute() {
+    if (isSyncingOmniRoute) return
+    isSyncingOmniRoute = true
+    try {
+      const res = await api.syncFromOmniRoute()
+      notifyCustomModelsChanged()
+      await loadData()
+      alert(`Sync complete: ${res.customModels} custom models, ${res.modelAliases} aliases, ${res.modelCompatOverrides} overrides synced from OmniRoute.`)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to sync from OmniRoute')
+    } finally {
+      isSyncingOmniRoute = false
     }
   }
 </script>
@@ -3286,8 +3308,8 @@
   {:else}
   <div class="bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-soft)] p-6">
     <!-- Header -->
-    <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-      <div class="flex items-center gap-3">
+    <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div class="flex items-center gap-3 flex-wrap">
         <h2 class="text-lg font-semibold">Available Models</h2>
         {#if providerThinkingLevels}
         <select
@@ -3303,13 +3325,54 @@
         {/if}
       </div>
 
-      <div class="flex gap-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onclick={() => (showAddCustomModelModal = true)}
+          class="inline-flex items-center justify-center gap-1.5 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-brand-500 hover:bg-brand-600 text-white shadow-sm h-7 px-3 text-xs rounded-[8px]"
+        >
+          <span class="material-symbols-outlined text-[16px]">add</span>
+          Add Model
+        </button>
+
+        {#if providerConnections.some((c) => c.isActive !== 0)}
+          <button
+            type="button"
+            onclick={handleImportLiveCatalogModels}
+            disabled={isImportingLiveCatalogModels}
+            class="inline-flex items-center justify-center gap-1.5 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px]"
+            title="Fetch live models directly from provider API"
+          >
+            <span class="material-symbols-outlined text-[16px] {isImportingLiveCatalogModels ? 'animate-spin' : ''}">
+              {isImportingLiveCatalogModels ? 'progress_activity' : 'download'}
+            </span>
+            {isImportingLiveCatalogModels
+              ? 'Fetching...'
+              : providerId === 'qoder' || providerId === 'qoder-cn'
+                ? 'Fetch Qoder Models'
+                : 'Import from /models'}
+          </button>
+        {/if}
+
+        <button
+          type="button"
+          onclick={handleSyncOmniRoute}
+          disabled={isSyncingOmniRoute}
+          class="inline-flex items-center justify-center gap-1.5 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px]"
+          title="Sync models, custom models, and aliases from OmniRoute database"
+        >
+          <span class="material-symbols-outlined text-[16px] {isSyncingOmniRoute ? 'animate-spin' : ''}">
+            {isSyncingOmniRoute ? 'progress_activity' : 'sync'}
+          </span>
+          {isSyncingOmniRoute ? 'Syncing...' : 'Sync from OmniRoute'}
+        </button>
+
         <button
           type="button"
           onclick={handleToggleAllModels}
-          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px]"
+          class="inline-flex items-center justify-center gap-1.5 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px]"
         >
-          <span class="material-symbols-outlined text-[18px]">block</span>
+          <span class="material-symbols-outlined text-[16px]">block</span>
           {allDisabled ? 'Enable All' : 'Disable All'}
         </button>
       </div>
@@ -3415,7 +3478,7 @@
                 type="button"
                 onclick={() => testModel(model.id)}
                 disabled={isTestingThis}
-                class="rounded p-0.5 text-text-muted transition-opacity hover:bg-sidebar hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 cursor-pointer"
+                class="rounded p-0.5 text-text-muted transition-colors hover:bg-sidebar hover:text-primary cursor-pointer"
                 title={modelTestErrors[model.id] || (testStatus === 'ok' ? 'Test Passed' : 'Test')}
               >
                 {#if isTestingThis}
@@ -3462,7 +3525,7 @@
             <button
               type="button"
               onclick={() => handleDisableModel(model.id)}
-              class="ml-auto rounded p-0.5 text-text-muted opacity-100 transition-opacity hover:bg-red-500/10 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100 cursor-pointer"
+              class="ml-auto rounded p-0.5 text-text-muted transition-colors hover:bg-red-500/10 hover:text-red-500 cursor-pointer"
               title="Disable this model"
             >
               <span class="material-symbols-outlined text-sm">close</span>
@@ -3480,24 +3543,6 @@
         <span class="material-symbols-outlined text-sm">add</span>
         Add Model
       </button>
-
-      {#if (providerId === 'cline' || providerId === 'clinepass' || providerId === 'qoder' || providerId === 'qoder-cn') && providerConnections.some((c) => c.isActive !== 0)}
-        <button
-          type="button"
-          onclick={handleImportLiveCatalogModels}
-          disabled={isImportingLiveCatalogModels}
-          class="flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-surface-2 hover:bg-surface-3 px-3 py-2 text-xs text-text-main transition-colors sm:w-auto cursor-pointer disabled:opacity-50"
-        >
-          <span class="material-symbols-outlined text-sm {isImportingLiveCatalogModels ? 'animate-spin' : ''}">
-            {isImportingLiveCatalogModels ? 'progress_activity' : 'download'}
-          </span>
-          {isImportingLiveCatalogModels
-            ? 'Fetching...'
-            : providerId === 'qoder' || providerId === 'qoder-cn'
-              ? 'Fetch Qoder Models'
-              : 'Import from /models'}
-        </button>
-      {/if}
     </div>
     <!-- Suggested models from provider API — show only models not yet added -->
     {#if suggestedNotAdded.length > 0}

@@ -913,6 +913,81 @@ func (h *DashboardHandler) HandleGetConnectionModels(w http.ResponseWriter, r *h
 		return
 	}
 
+	if conn.Provider == "grok-cli" {
+		token := connData.AccessToken
+		if token == "" {
+			token = connData.APIKey
+		}
+		if token == "" {
+			handlerutil.WriteJSONError(w, http.StatusUnauthorized, "no valid token found")
+			return
+		}
+		headers := map[string]string{
+			"Authorization":            "Bearer " + token,
+			"Accept":                   "application/json",
+			"User-Agent":               "grok-cli/0.2.106",
+			"x-grok-client-identifier": "grok-shell",
+			"x-grok-client-version":    "0.2.106",
+			"x-xai-token-auth":         "xai-grok-cli",
+			"x-grok-client-mode":       "headless",
+		}
+		status, body, err := validateProbeDo(r.Context(), http.MethodGet, "https://cli-chat-proxy.grok.com/v1/models", headers, nil)
+		if err != nil {
+			handlerutil.WriteJSONError(w, http.StatusBadGateway, "failed to fetch grok-cli models: "+err.Error())
+			return
+		}
+		if status == http.StatusUnauthorized {
+			if connData.RefreshToken != "" {
+				probeData := connectionProbeData{
+					AccessToken:          connData.AccessToken,
+					RefreshToken:         connData.RefreshToken,
+					ProviderSpecificData: connData.ProviderSpecificData,
+				}
+				if refResult := h.refreshConnectionToken(r.Context(), conn.Provider, probeData, nil); refResult != nil && refResult.AccessToken != "" {
+					headers["Authorization"] = "Bearer " + refResult.AccessToken
+					var rawData map[string]any
+					if conn.Data != "" {
+						_ = json.Unmarshal([]byte(conn.Data), &rawData)
+					} else {
+						rawData = make(map[string]any)
+					}
+					rawData["accessToken"] = refResult.AccessToken
+					rawData["apiKey"] = refResult.AccessToken
+					if refResult.RefreshToken != "" {
+						rawData["refreshToken"] = refResult.RefreshToken
+					}
+					newBytes, _ := json.Marshal(rawData)
+					var connName string
+					if conn.Name != nil {
+						connName = *conn.Name
+					}
+					_ = h.Repo.UpdateProviderConnection(conn.ID, connName, conn.Priority, conn.IsActive == 1, string(newBytes))
+
+					status, body, err = validateProbeDo(r.Context(), http.MethodGet, "https://cli-chat-proxy.grok.com/v1/models", headers, nil)
+				}
+			}
+		}
+		if status != http.StatusOK {
+			handlerutil.WriteJSONError(w, status, fmt.Sprintf("failed to fetch models: %d", status))
+			return
+		}
+		var grokResp struct {
+			Data   []any `json:"data"`
+			Models []any `json:"models"`
+		}
+		_ = json.Unmarshal(body, &grokResp)
+		modelsList := grokResp.Data
+		if len(modelsList) == 0 {
+			modelsList = grokResp.Models
+		}
+		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+			"provider":     conn.Provider,
+			"connectionId": conn.ID,
+			"models":       modelsList,
+		})
+		return
+	}
+
 	if conn.Provider == "cline" || conn.Provider == "clinepass" {
 		token := connData.AccessToken
 		if token == "" {

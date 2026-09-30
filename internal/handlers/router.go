@@ -223,6 +223,7 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	r.Get("/api/settings/database", dashH.HandleExportDatabase)
 	r.Post("/api/settings/database", dashH.HandleImportDatabase)
 	r.Post("/api/settings/proxy-test", dashH.HandleProxyTest)
+	r.Post("/api/sync/omniroute", dashH.HandleSyncFromOmniRoute)
 
 	// Headroom token-compression proxy management (dashboard parity)
 	headroomH := media.NewHeadroomHandler(repo)
