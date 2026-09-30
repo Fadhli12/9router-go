@@ -761,6 +761,22 @@
       isSavingFreeProxy = false
     }
   }
+function formatErrorText(err: unknown): string {
+    if (!err) return ''
+    if (typeof err === 'string') return err
+    if (typeof err === 'object') {
+      const obj = err as Record<string, unknown>
+      if (typeof obj.message === 'string') return obj.message
+      if (typeof obj.error === 'string') return obj.error
+      try {
+        return JSON.stringify(err)
+      } catch {
+        return String(err)
+      }
+    }
+    return String(err)
+  }
+
   function getCooldownInfo(conn: ProviderConnection): { label: string; title: string; isExhausted: boolean; isLock?: boolean } | null {
     // 1. Check modelLock_* and rateLimitedUntil across conn, conn.data, and providerSpecificData (matching upstream ⏱ {timeLeft})
     const dataObj = conn.providerSpecificData as Record<string, unknown> | undefined
@@ -845,7 +861,7 @@
     }
     // 4. Check errorCode 429 or lastError indicating rate limit / quota
     const errCode = (conn as unknown as { errorCode?: number }).errorCode
-    const lastErr = conn.lastError || ''
+    const lastErr = formatErrorText(conn.lastError)
     if (
       errCode === 429 ||
       lastErr.includes('429') ||
@@ -2827,7 +2843,8 @@
           {@const specificData = conn.providerSpecificData as Record<string, unknown> | undefined}
           {@const assignedPoolId = (typeof specificData?.proxyPoolId === 'string' ? specificData.proxyPoolId : null)}
           {@const proxyBadge = proxyBadgeFor(conn)}
-          {@const lastErr = conn.lastError || status?.error}
+          {@const rawErr = conn.lastError || status?.error}
+          {@const lastErr = formatErrorText(rawErr)}
           {@const priorityNum = conn.priority ?? idx + 1}
           {@const isConnActive = conn.isActive === 1}
           {@const cooldownInfo = getCooldownInfo(conn)}

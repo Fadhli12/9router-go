@@ -499,7 +499,22 @@ export const api = {
         ...parsed,
         ...c,
         providerSpecificData: specific,
-        lastError: c.lastError || (typeof parsed.lastError === 'string' ? parsed.lastError : null),
+        lastError: (() => {
+          const val = c.lastError ?? parsed.lastError
+          if (!val) return null
+          if (typeof val === 'string') return val
+          if (typeof val === 'object') {
+            const obj = val as Record<string, unknown>
+            if (typeof obj.message === 'string') return obj.message
+            if (typeof obj.error === 'string') return obj.error
+            try {
+              return JSON.stringify(val)
+            } catch {
+              return String(val)
+            }
+          }
+          return String(val)
+        })(),
         errorCode: (typeof parsed.errorCode === 'number' ? parsed.errorCode : null),
         rateLimitedUntil: (typeof parsed.rateLimitedUntil === 'string' ? parsed.rateLimitedUntil : null),
         testStatus: c.testStatus || (typeof parsed.testStatus === 'string' ? parsed.testStatus : null),
