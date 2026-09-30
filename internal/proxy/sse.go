@@ -25,9 +25,9 @@ func WriteSSEHeaders(w http.ResponseWriter) http.Flusher {
 // SSECopy lives in sse_copy.go.
 
 // DefaultHeartbeatInterval is the default period for sending SSE keep-alive ping comments.
-// Set to 15 seconds so strict clients (Oh My Pi / Cline / Roo) with 30-60s idle timeouts
-// never consider the stream stalled during prolonged thinking/reasoning phases.
-const DefaultHeartbeatInterval = 15 * time.Second
+// Set to 5 seconds so strict clients (OpenCode / Cline / Roo) with aggressive idle timeouts
+// never drop socket during prolonged thinking/reasoning phases.
+const DefaultHeartbeatInterval = 5 * time.Second
 
 // HeartbeatWriter wraps an http.ResponseWriter to periodically emit SSE keep-alive
 // comments (": keep-alive\n\n") when no data has been written for the interval.

@@ -371,6 +371,19 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	httpClient := h.getClientForConnection(connData)
 	sessionID := handlerutil.GetSessionID(ctx)
 
+	// Inject telemetry headers on the response for observability (account & routing info)
+	if w != nil {
+		if connectionID != "" {
+			maskedID := connectionID
+			if len(maskedID) > 8 {
+				maskedID = maskedID[:8]
+			}
+			w.Header().Set("X-9Router-Connection", maskedID)
+		}
+		w.Header().Set("X-9Router-Provider", provider)
+		w.Header().Set("X-9Router-Model", model)
+	}
+
 	if exec := executor.Get(provider); exec != nil {
 		execReq := &executor.Request{
 			Ctx:            ctx,
