@@ -231,15 +231,16 @@
   })
 
   function topologyName(providerId: string, fallbackName?: string): string {
-    const nodeName = nodeNameById.get(providerId)
-    if (nodeName) return nodeName
-    const cat = PROVIDER_CATALOG.find((p) => p.id === providerId || p.alias === providerId)
+    const canonical = providerId.toLowerCase().trim()
+    const cat = PROVIDER_CATALOG.find((p) => p.id.toLowerCase() === canonical || (p.alias && p.alias.toLowerCase() === canonical))
     if (cat?.name) return cat.name
+    // If the provider ID is a custom node, use its name
+    const nodeName = nodeNameById.get(canonical)
+    if (nodeName) return nodeName
+    // Only fall back to customName if it's not a numeric ID and not an email/user label of a connection
     if (fallbackName && fallbackName !== providerId) {
-      // Numeric key names (e.g. "12") are connection labels, not provider names —
-      // fall back to the raw provider id so custom nodes never render as "12".
-      if (!/^\d+$/.test(fallbackName.trim())) return fallbackName
-      return providerId
+      const trimmed = fallbackName.trim()
+      if (!/^\d+$/.test(trimmed) && !trimmed.includes('@')) return fallbackName
     }
     return providerId
   }
