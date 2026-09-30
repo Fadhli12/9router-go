@@ -636,8 +636,11 @@ func handleCodexStream(w http.ResponseWriter, req *Request, upstream io.Reader) 
 		if len(state.UpstreamErr) > 0 {
 			return codexUpstreamError(state.UpstreamErr)
 		}
-		// Fallback empty response
-		converted = []byte(fmt.Sprintf(`{"id":"%s","object":"chat.completion","created":%d,"choices":[{"index":0,"message":{"role":"assistant","content":""},"finish_reason":"stop"}]}`, responseID, created))
+		// Upstream answered 200 with an event stream that never carried a
+		// completion. Fabricating `content: ""` here read to the client as a
+		// served empty turn and ended combo fallback on this model, so report
+		// the 502 and let the router move on.
+		return proxy.UpstreamFailure(http.StatusBadGateway, proxy.NoCompletionInStream)
 	}
 	return jsonResponse(req.Ctx, w, bytes.NewReader(converted), req.TranslateResp, req.ResponseBuf)
 }
@@ -967,7 +970,7 @@ func handleKiroNonStream(w http.ResponseWriter, req *Request, upstream io.Reader
 	}
 	folded, ok := sseToOpenAIJSON(collect.buf.Bytes())
 	if !ok {
-		return sseWithoutCompletionError("kiro returned no assistant response")
+		return proxy.UpstreamFailure(http.StatusBadGateway, proxy.NoCompletionInStream)
 	}
 	return jsonResponse(req.Ctx, w, bytes.NewReader(folded), req.TranslateResp, req.ResponseBuf)
 }

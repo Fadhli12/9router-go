@@ -4,6 +4,7 @@
   import {
     clearJudgeModel,
     getComboModels,
+    isAutoFreeCombo,
     parseCapacityAdapterSettings,
     updateComboStrategy,
     updateJudgeModel,
@@ -35,9 +36,10 @@
   }: Props = $props()
 
   // Upstream parity (combos page.js fetchData): webSearch/webFetch combos
-  // (notably search-combo) live under media-providers/web, not here.
+  // (notably search-combo) live under media-providers/web, not here. The
+  // auto-generated kinds are llm combos too and stay visible here.
   function isLlmCombo(c: Combo): boolean {
-    if (c.kind && c.kind !== 'llm') return false
+    if (c.kind && c.kind !== 'llm' && !c.kind.startsWith('auto-')) return false
     if (c.name === 'search-combo' || c.name.startsWith('search-combo-')) return false
     return true
   }
@@ -61,8 +63,32 @@
   let showModelPicker = $state(false)
   let modelPickerTarget = $state<'combo' | 'vision' | 'audio' | 'judge'>('combo')
 
-  // Confirm Delete Modal state (upstream confirmState parity)
-  let confirmState = $state<{ name: string; id: string } | null>(null)
+  // Confirm Delete Modal state (upstream confirmState parity). Carries the
+  // ids to remove; the locked auto free-tier combo can never be in here.
+  let confirmState = $state<{ name: string; ids: string[] } | null>(null)
+
+  // Bulk-delete selection. Set re-created on every toggle so Svelte 5 sees the
+  // change (mutating a Set in place is not tracked).
+  let selectedIds = $state<Set<string>>(new Set())
+
+  function toggleSelect(combo: Combo) {
+    if (isAutoFreeCombo(combo)) return
+    const next = new Set(selectedIds)
+    if (next.has(combo.id)) next.delete(combo.id)
+    else next.add(combo.id)
+    selectedIds = next
+  }
+
+  // Delete All still skips locked combos: the button count and the actual
+  // deletes must agree on what is removable.
+  let deletableCombos = $derived(llmCombos.filter((c) => !isAutoFreeCombo(c)))
+  let selectedDeletable = $derived(
+    deletableCombos.filter((c) => selectedIds.has(c.id))
+  )
+
+  function clearSelection() {
+    selectedIds = new Set()
+  }
 
   async function loadSettings() {
     try {
@@ -79,11 +105,21 @@
   }
 
   $effect(() => { loadSettings() })
+  // Reset the create form once per open. Unguarded, this looped forever: the
+  // effect bumps `modalNameResetKey`, which the `{#key}` block below reads, that
+  // block re-creates CreateComboModal, and that re-queues the effect. Svelte
+  // aborted the flush with effect_update_depth_exceeded after 1000 rounds, so
+  // "Add Model" never opened the picker at all.
+  let createSessionOpen = $state(false)
   $effect(() => {
-    if (isCreatingOpen && !editingCombo) {
-      modalModels = []
-      modalNameResetKey += 1
+    if (!isCreatingOpen) {
+      createSessionOpen = false
+      return
     }
+    if (editingCombo || createSessionOpen) return
+    createSessionOpen = true
+    modalModels = []
+    modalNameResetKey += 1
   })
 
   function copyName(name: string, id: string) {
@@ -223,22 +259,119 @@
       showModelPicker = false
     }
   }
-  async function handleDeleteCombo() {
+  async function handleDeleteCombos() {
     if (!confirmState) return
-    const id = confirmState.id
+    const ids = confirmState.ids
+    let deleted = 0
+    for (const id of ids) {
+      try {
+        await api.deleteCombo(id)
+        deleted++
+      } catch (e) {
+        console.error(`Failed to delete combo ${id}:`, e)
+      }
+    }
+    confirmState = null
+    clearSelection()
+    onRefresh()
+    if (deleted < ids.length) {
+      alert(`Deleted ${deleted} of ${ids.length} combo(s). Locked or failed combos were kept.`)
+    }
+  }
+
+  function handleDeleteSelected() {
+    if (selectedDeletable.length === 0) return
+    confirmState = {
+      name: selectedDeletable.map((c) => c.name).join(', '),
+      ids: selectedDeletable.map((c) => c.id),
+    }
+  }
+
+  function handleDeleteAll() {
+    if (deletableCombos.length === 0) return
+    confirmState = {
+      name: deletableCombos.map((c) => c.name).join(', '),
+      ids: deletableCombos.map((c) => c.id),
+    }
+  }
+
+  let isBuildingAutoFree = $state(false)
+
+  async function handleBuildAutoFree() {
+    isBuildingAutoFree = true
     try {
-      await api.deleteCombo(id)
-      confirmState = null
+      const res = await api.buildAutoFreeCombo()
+      if (res.models.length === 0) {
+        alert('No free-tier models found among providers you have connections for.')
+      }
       onRefresh()
     } catch (e) {
-      console.error('Failed to delete combo:', e)
+      alert(
+        'Failed to build auto free-tier combo: ' +
+          (e instanceof Error ? e.message : String(e))
+      )
+    } finally {
+      isBuildingAutoFree = false
+    }
+  }
+
+  let isBuildingAutoFamily = $state(false)
+
+  async function handleBuildAutoFamily() {
+    isBuildingAutoFamily = true
+    try {
+      const res = await api.buildAutoFamilyCombos()
+      if (res.count === 0) {
+        alert(
+          'No usable model families found. Add connections for providers with chat models, or enable disabled models.'
+        )
+      } else {
+        // A wide catalog yields dozens of families; show the head of the list
+        // rather than a wall of names.
+        const shown = res.created.slice(0, 8)
+        const extra = res.created.length - shown.length
+        alert(
+          `Grouped into ${res.count} combo(s): ${shown.join(', ')}` +
+            (extra > 0 ? ` (+${extra} more)` : '')
+        )
+      }
+      onRefresh()
+    } catch (e) {
+      alert(
+        'Failed to auto-group combos: ' + (e instanceof Error ? e.message : String(e))
+      )
+    } finally {
+      isBuildingAutoFamily = false
+    }
+  }
+
+  async function handleReorderCombo(combo: Combo, models: string[]) {
+    try {
+      await api.updateCombo(combo.id, {
+        name: combo.name,
+        kind: combo.kind ?? undefined,
+        models,
+      })
+      onRefresh()
+    } catch (e) {
+      console.error('Failed to reorder combo:', e)
     }
   }
 
 </script>
 
 <div class="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
-  <CombosHeader onCreateClick={openCreateModal} />
+  <CombosHeader
+    onCreateClick={openCreateModal}
+    onAutoFamilyClick={handleBuildAutoFamily}
+    {isBuildingAutoFamily}
+    onAutoFreeClick={handleBuildAutoFree}
+    {isBuildingAutoFree}
+    selectedCount={selectedDeletable.length}
+    deletableCount={deletableCombos.length}
+    onDeleteSelected={handleDeleteSelected}
+    onDeleteAll={handleDeleteAll}
+  />
 
   <!-- Combos List -->
   {#if llmCombos.length === 0}
@@ -266,7 +399,10 @@
           onClearJudge={clearJudge}
           onCopy={copyName}
           onEdit={openEditModal}
-          onDelete={(c) => (confirmState = { name: c.name, id: c.id })}
+          onDelete={(c) => (confirmState = { name: c.name, ids: [c.id] })}
+          onReorder={handleReorderCombo}
+          isSelected={selectedIds.has(combo.id)}
+          onToggleSelect={toggleSelect}
         />
       {/each}
     </div>
@@ -313,7 +449,13 @@
 <ConfirmModal
   isOpen={!!confirmState}
   title="Delete Combo"
-  message={confirmState ? `Delete combo "${confirmState.name}"?` : 'Delete this combo?'}
+  message={
+    confirmState
+      ? confirmState.ids.length === 1
+        ? `Delete combo "${confirmState.name}"?`
+        : `Delete ${confirmState.ids.length} combo(s)? (${confirmState.name})`
+      : 'Delete this combo?'
+  }
   onClose={() => (confirmState = null)}
-  onConfirm={handleDeleteCombo}
+  onConfirm={handleDeleteCombos}
 />

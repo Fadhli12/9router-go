@@ -3378,10 +3378,6 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "name": "Jev 1.13 Free",
       "kind": "systemone"
     },
-    {
-      "id": "union-alpha",
-      "name": "Union Alpha Free"
-    },
   ],
   "ocz": [
     {
@@ -3635,10 +3631,6 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "big-pickle",
       "name": "Big Pickle"
-    },
-    {
-      "id": "union-alpha",
-      "name": "Union Alpha"
     },
     {
       "id": "deepseek-v4-flash-free",

@@ -3,14 +3,32 @@
 
   interface Props {
     onCreateClick: () => void
+    onAutoFamilyClick?: () => void
+    isBuildingAutoFamily?: boolean
+    onAutoFreeClick?: () => void
+    isBuildingAutoFree?: boolean
+    selectedCount?: number
+    deletableCount?: number
+    onDeleteSelected?: () => void
+    onDeleteAll?: () => void
   }
 
-  let { onCreateClick }: Props = $props()
+  let {
+    onCreateClick,
+    onAutoFamilyClick,
+    isBuildingAutoFamily = false,
+    onAutoFreeClick,
+    isBuildingAutoFree = false,
+    selectedCount = 0,
+    deletableCount = 0,
+    onDeleteSelected,
+    onDeleteAll,
+  }: Props = $props()
 </script>
 
-<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+<div class="flex flex-col gap-4">
   <div class="min-w-0">
-    <p class="text-sm text-text-muted mt-1">
+    <p class="text-sm text-text-muted">
       Group models under one name, then pick a strategy per combo:
     </p>
     <ul class="text-sm text-text-muted mt-2 flex flex-col gap-1">
@@ -27,9 +45,73 @@
       </li>
     </ul>
   </div>
-  <div class="flex w-full flex-col gap-2 sm:w-auto sm:items-stretch">
-    <Button icon="add" onclick={onCreateClick} class="w-full sm:w-auto whitespace-nowrap">
+
+  <!-- One wrapping toolbar instead of a five-row column. Create stays primary and
+       always first; the two auto builders sit next to it; the destructive pair is
+       pushed to the far end so Delete All (which wipes every combo) can never sit
+       next to a plain selection control. -->
+  <div
+    class="flex flex-wrap items-center gap-2 border-t border-border pt-4"
+    role="group"
+    aria-label="Combo actions"
+  >
+    <Button icon="add" size="sm" onclick={onCreateClick} class="whitespace-nowrap">
       Create Combo
     </Button>
+    {#if onAutoFamilyClick}
+      <Button
+        icon="hub"
+        size="sm"
+        onclick={onAutoFamilyClick}
+        disabled={isBuildingAutoFamily}
+        variant="outline"
+        title="Create one combo per model family from your connected providers"
+        class="whitespace-nowrap"
+      >
+        {isBuildingAutoFamily ? 'Grouping…' : 'Auto Group by Model'}
+      </Button>
+    {/if}
+    {#if onAutoFreeClick}
+      <Button
+        icon="auto_awesome"
+        size="sm"
+        onclick={onAutoFreeClick}
+        disabled={isBuildingAutoFree}
+        variant="outline"
+        title="Build the locked free-tier combo from the providers you are connected to"
+        class="whitespace-nowrap"
+      >
+        {isBuildingAutoFree ? 'Building…' : 'Auto Free Tier'}
+      </Button>
+    {/if}
+    {#if onDeleteSelected}
+      <span class="flex-1"></span>
+      <Button
+        icon="delete"
+        size="sm"
+        onclick={onDeleteSelected}
+        disabled={selectedCount === 0}
+        variant="ghost"
+        title={selectedCount === 0
+          ? 'Select at least one combo first'
+          : `Delete ${selectedCount} selected combo(s)`}
+        class="whitespace-nowrap"
+      >
+        {selectedCount > 0 ? `Delete Selected (${selectedCount})` : 'Delete Selected'}
+      </Button>
+    {/if}
+    {#if onDeleteAll}
+      <Button
+        icon="delete_forever"
+        size="sm"
+        onclick={onDeleteAll}
+        disabled={deletableCount === 0}
+        variant="danger"
+        title={`Delete all ${deletableCount} deletable combo(s)`}
+        class="whitespace-nowrap"
+      >
+        Delete All ({deletableCount})
+      </Button>
+    {/if}
   </div>
 </div>

@@ -135,10 +135,7 @@ func (h *ChatHandler) handleAccountFallback(
 			currentBackoffLevel := h.Repo.GetConnectionBackoffLevel(connObj.ID)
 			// Classify error to get dynamic cooldown
 			classification := providers.ClassifyError(ue.StatusCode, errorText, currentBackoffLevel)
-			cooldownSec := int((classification.CooldownMs + 999) / 1000) // ceil to seconds
-			if dur, ok := extractResetDuration(ue.Body); ok {
-				cooldownSec = int(dur.Seconds())
-			}
+			cooldownSec := retryableCooldownSec(ue.StatusCode, time.Duration(classification.CooldownMs)*time.Millisecond, ue)
 			errMsg := errorText
 			if errMsg == "" {
 				errMsg = fmt.Sprintf("%d upstream error", ue.StatusCode)
@@ -773,11 +770,14 @@ func formatRetryAfter(isoTimestamp string) string {
 	if err != nil {
 		return ""
 	}
-	diffMs := time.Until(parsed)
-	if diffMs <= 0 {
+	// time.Until is a Duration in nanoseconds. Dividing by 1000 yielded
+	// milliseconds, so a 150s cooldown read as "reset after 41399h" and
+	// contradicted the Retry-After header sent alongside it.
+	remaining := time.Until(parsed)
+	if remaining <= 0 {
 		return "reset after 0s"
 	}
-	totalSec := int((diffMs + 999) / 1000) // ceil
+	totalSec := int((remaining + time.Second - 1) / time.Second) // ceil
 	h := totalSec / 3600
 	m := (totalSec % 3600) / 60
 	s := totalSec % 60

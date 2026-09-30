@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	json "encoding/json/v2"
-
 	"9router/proxy/internal/constants"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/proxy"
@@ -39,7 +37,27 @@ func ForwardOpenAI(w http.ResponseWriter, req *Request) error {
 	forwardUpstreamResponseHeaders(w, resp.Header)
 
 	if req.IsStream {
-		stallReader := proxy.NewStallReaderWithContext(req.Ctx, resp.Body, 0, "openai")
+		streamBody := io.ReadCloser(resp.Body)
+		if !isEventStreamResponse(resp.Header) {
+			// A 200 that is not an event stream is one document, not a
+			// stream. Piping it through the SSE scanner yields zero frames,
+			// SSECopy closes it with [DONE], and the client reads a
+			// successful empty completion while the router never gets a
+			// chance to fail over. Decide here, before any header is
+			// written: an SSE body mislabelled as JSON still streams, an
+			// HTML error page or a blank 200 is validated as JSON.
+			data, rerr := io.ReadAll(io.LimitReader(resp.Body, constants.MaxUpstreamBodyBytes))
+			if rerr != nil {
+				return fmt.Errorf("read upstream body: %w", rerr)
+			}
+			if !proxy.LooksLikeSSE(data) {
+				return jsonResponse(req.Ctx, w, bytes.NewReader(data), req.TranslateResp, req.ResponseBuf)
+			}
+			// An event stream the provider mislabelled: replay it from the
+			// buffer so a streaming client still gets its stream.
+			streamBody = io.NopCloser(bytes.NewReader(data))
+		}
+		stallReader := proxy.NewStallReaderWithContext(req.Ctx, streamBody, 0, "openai")
 		bodyCloser = stallReader
 		if req.UpstreamClaude {
 			// Upstream is Claude Messages, client is OpenAI (/v1/chat/completions):
@@ -73,6 +91,12 @@ func execSSEStream(w http.ResponseWriter, upstream io.Reader, req *Request) erro
 		W: w, Upstream: upstream, Translate: req.TranslateResp, StartTime: startTime,
 		TTFT: req.TTFT, Buf: req.ResponseBuf, Ctx: req.Ctx, ToolNameMap: req.ToolNameMap,
 	})
+}
+
+// isEventStreamResponse reports whether an upstream response is an event
+// stream. A missing Content-Type is not one: the body decides.
+func isEventStreamResponse(h http.Header) bool {
+	return strings.HasPrefix(strings.ToLower(h.Get("Content-Type")), "text/event-stream")
 }
 
 // sseStreamOpts bundles sseStream inputs. Eight positional params (an
@@ -165,12 +189,13 @@ func sseStream(o sseStreamOpts) error {
 			if writeErr != nil {
 				return fmt.Errorf("write to client: %w", writeErr)
 			}
-			// Truncated or mid-stream aborted upstream: synthesize a terminal
-			// error event (mirrors SSECopy's finish_reason synthesis, PR #4079)
-			// so native clients do not hang on a stream with no end.
+			// Truncated or mid-stream aborted upstream. HTTP 200 is already
+			// on the wire, so report the failure in-band: openai-python
+			// raises on a `data:` payload carrying `error` rather than
+			// keeping the truncated text (upstream 93001213).
 			if err != nil || !sawTerminal {
-				term := "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"upstream stream ended before completion\"}}\n\n"
-				_, _ = hw.Write([]byte(term))
+				code, message := proxy.ClassifyStreamAbort(err)
+				_, _ = hw.Write(proxy.BuildStreamErrorBytes(code, message, proxy.SSEFormatClaude))
 				if flusher != nil {
 					flusher.Flush()
 				}
@@ -262,15 +287,23 @@ func jsonResponse(ctx context.Context, w http.ResponseWriter, upstream io.Reader
 	// client text its JSON.parse cannot read, so fold the stream into one
 	// chat.completion first. A body whose first line is not `data:`/`event:`
 	// is not SSE and is left exactly as it was.
-	if looksLikeSSE(body) {
+	if proxy.LooksLikeSSE(body) {
 		folded, ok := sseToOpenAIJSON(body)
 		if !ok {
 			// SSE-shaped but carrying no completion chunk. Relabelling it as
 			// JSON would repeat the bug, and a 502 lets combo fallback move
 			// on to the next account.
-			return sseWithoutCompletionError("upstream answered with an event stream containing no completion")
+			return proxy.UpstreamFailure(http.StatusBadGateway, proxy.NoCompletionInStream)
 		}
 		body = folded
+	}
+
+	// A 200 that carries no completion (blank body, HTML error page, a
+	// `{"error": ...}` envelope, a choice with empty content) reads to every
+	// layer above as a served turn, which both ends combo fallback and
+	// clears the account cooldown. Report it as the 502 it is.
+	if err := proxy.EmptyUpstreamError(body); err != nil {
+		return err
 	}
 
 	if buf != nil {
@@ -322,20 +355,6 @@ func jsonResponse(ctx context.Context, w http.ResponseWriter, upstream io.Reader
 	return nil
 }
 
-// looksLikeSSE reports whether a non-streaming body is actually an event
-// stream. Only the first non-empty line decides: a JSON body starts with `{`,
-// so requiring an SSE field prefix there cannot misfire on one.
-func looksLikeSSE(body []byte) bool {
-	for _, line := range strings.Split(string(body), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		return strings.HasPrefix(trimmed, "data:") || strings.HasPrefix(trimmed, "event:")
-	}
-	return false
-}
-
 // sseDataFrames returns the JSON payload of every `data:` frame.
 func sseDataFrames(body []byte) [][]byte {
 	var frames [][]byte
@@ -356,17 +375,3 @@ func sseDataFrames(body []byte) [][]byte {
 	return frames
 }
 
-// sseWithoutCompletionError reports an event stream that carried no
-// completion chunk. Answering 200 with an empty body reads as a successful
-// empty completion and silently ends combo fallback, so this is a 502 the
-// fallback layer can act on.
-func sseWithoutCompletionError(message string) error {
-	body, _ := json.Marshal(map[string]any{
-		"error": map[string]any{
-			"message": message,
-			"type":    "upstream_error",
-			"code":    http.StatusBadGateway,
-		},
-	})
-	return &proxy.UpstreamError{StatusCode: http.StatusBadGateway, Body: body}
-}

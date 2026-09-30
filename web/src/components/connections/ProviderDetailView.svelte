@@ -34,7 +34,7 @@
     getIconPath,
     isChatModel,
     type CustomModelData,
-    type ProviderModelItem,
+    type ModelItem,
     type SuggestedModel
   } from './types'
   import { proxyBadgeInfo } from './proxyBadge'
@@ -173,7 +173,7 @@
       (m) => (m.providerAlias === storageAlias || m.providerAlias === providerId) && isChatModel(m)
     )
   )
-  let allAvailableModels = $derived<ProviderModelItem[]>(
+  let allAvailableModels = $derived<ModelItem[]>(
     buildAvailableModels(builtInModels, providerCustomModels)
   )
   // Registry order, like upstream: `models` there is getModelsByProviderId()
@@ -2183,12 +2183,16 @@ function formatErrorText(err: unknown): string {
     setTimeout(() => (copiedModelId = null), 2000)
   }
 
-  async function testModel(modelId: string) {
+  async function testModel(modelId: string, silent = false) {
+    // Probes take seconds; if the panel switches provider mid-flight the
+    // verdict belongs to the old provider and must not be written here.
+    const pid = providerId
     modelTestStatuses[modelId] = 'testing'
     modelTestErrors[modelId] = null
-    activeModelTestError = null
+    if (!silent) activeModelTestError = null
     try {
       const res = await api.testModel(`${storageAlias}/${modelId}`)
+      if (pid !== providerId) return
       if (res.ok) {
         modelTestStatuses[modelId] = 'ok'
         modelTestErrors[modelId] = null
@@ -2196,13 +2200,14 @@ function formatErrorText(err: unknown): string {
         modelTestStatuses[modelId] = 'error'
         const err = res.error || 'Model test failed'
         modelTestErrors[modelId] = err
-        activeModelTestError = `${modelId}: ${err}`
+        if (!silent) activeModelTestError = `${modelId}: ${err}`
       }
     } catch (err) {
+      if (pid !== providerId) return
       modelTestStatuses[modelId] = 'error'
       const msg = err instanceof Error ? err.message : 'Model test failed'
       modelTestErrors[modelId] = msg
-      activeModelTestError = `${modelId}: ${msg}`
+      if (!silent) activeModelTestError = `${modelId}: ${msg}`
     }
   }
 
@@ -3648,6 +3653,19 @@ function formatErrorText(err: unknown): string {
             >
               <span class="material-symbols-outlined text-sm">close</span>
             </button>
+            {#if testStatus === 'error'}
+              <!-- Unusable model: delete it. Custom models are removed from the
+                   store; built-in registry models are static, so those are
+                   disabled instead (the closest equivalent). -->
+              <button
+                type="button"
+                onclick={() => handleDeleteModel(model.id)}
+                class="rounded p-0.5 text-red-500 opacity-100 transition-opacity hover:bg-red-500/10 hover:text-red-600 sm:opacity-0 sm:group-hover:opacity-100 cursor-pointer"
+                title={model.isCustom ? 'Delete unusable model' : 'Unusable — disable this registry model'}
+              >
+                <span class="material-symbols-outlined text-sm">delete</span>
+              </button>
+            {/if}
           </div>
         </div>
       {/each}
@@ -3662,6 +3680,31 @@ function formatErrorText(err: unknown): string {
         Add Model
       </button>
     </div>
+
+    {#if latestModels.length > 0 || latestError}
+      <div class="w-full mt-2 rounded-lg border border-border bg-surface-2 p-3">
+        {#if latestModels.length > 0}
+          <p class="text-xs text-text-muted mb-2">{latestModels.length} new model(s) not yet added:</p>
+          <div class="flex flex-col gap-1.5">
+            {#each latestModels as m (m.id)}
+              <div class="flex items-center gap-2">
+                <code class="flex-1 truncate text-xs font-mono bg-sidebar px-1.5 py-1 rounded">{m.id}</code>
+                <button
+                  type="button"
+                  onclick={() => handleAddLatestModel(m.id, m.name)}
+                  class="shrink-0 inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-primary hover:bg-primary/10 border border-primary/40 cursor-pointer"
+                >
+                  <span class="material-symbols-outlined text-[13px]">add</span>
+                  Add
+                </button>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <p class="text-xs text-text-muted">{latestError}</p>
+        {/if}
+      </div>
+    {/if}
     <!-- Suggested models from provider API — show only models not yet added -->
     {#if suggestedNotAdded.length > 0}
       <div class="w-full mt-2">
