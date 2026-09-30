@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import {
     api,
     type ConnectionUsageResponse,
@@ -139,6 +139,10 @@
         clearInterval(freebuffPollTimer)
         freebuffPollTimer = null
       }
+      if (stickyDebounceTimer) {
+        clearTimeout(stickyDebounceTimer)
+        stickyDebounceTimer = null
+      }
     }
   })
 
@@ -250,11 +254,12 @@
   })
   let canImportCompatible = $derived(providerConnections.some((c) => c.isActive !== 0))
 
-  // Settings & Strategies
-  let settings = $state<Settings | null>(null)
+  // Settings & Strategies (local in-memory cache, non-reactive to prevent reactivity cascades)
+  let settings: Settings | null = null
   let isRoundRobin = $state(false)
   let stickyLimit = $state('1')
   let thinkingLevel = $state('auto')
+  let stickyDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
   // Proxy Pools
   let proxyPools = $state<ProxyPool[]>([])
@@ -888,7 +893,9 @@ function formatErrorText(err: unknown): string {
 
   $effect(() => {
     if (providerId) {
-      loadData()
+      untrack(() => {
+        loadData()
+      })
     }
   })
 
@@ -904,29 +911,78 @@ function formatErrorText(err: unknown): string {
         updated[providerId] = {
           ...(updated[providerId] || {}),
           fallbackStrategy: 'round-robin',
-          stickyRoundRobinLimit: Number(sticky) || 3
+          stickyRoundRobinLimit: Number(sticky) || 1
         }
       } else {
-        delete updated[providerId]
+        if (updated[providerId]) {
+          const entry = { ...updated[providerId] }
+          delete entry.fallbackStrategy
+          delete entry.stickyRoundRobinLimit
+          if (Object.keys(entry).length > 0) {
+            updated[providerId] = entry
+          } else {
+            delete updated[providerId]
+          }
+        }
       }
-      if (settings) settings.providerStrategies = updated
+      if (settings) {
+        settings = { ...settings, providerStrategies: updated }
+      }
       await api.updateSettings({ providerStrategies: updated })
     } catch (err) {
       console.error('Error saving provider strategy:', err)
+      throw err
     }
   }
 
   async function toggleRoundRobin() {
-    isRoundRobin = !isRoundRobin
-    if (isRoundRobin && !stickyLimit) {
+    const prevRoundRobin = isRoundRobin
+    const prevSticky = stickyLimit
+    const nextRoundRobin = !prevRoundRobin
+
+    // Optimistic UI update (instant toggle, zero lag)
+    isRoundRobin = nextRoundRobin
+    if (nextRoundRobin && (!stickyLimit || stickyLimit === '0')) {
       stickyLimit = '1'
     }
-    await saveProviderStrategy(isRoundRobin ? 'round-robin' : null, stickyLimit)
+
+    try {
+      await saveProviderStrategy(nextRoundRobin ? 'round-robin' : null, stickyLimit)
+    } catch (err) {
+      // Rollback on failure
+      isRoundRobin = prevRoundRobin
+      stickyLimit = prevSticky
+    }
+  }
+
+  function handleStickyLimitInput(event: Event) {
+    const val = (event.target as HTMLInputElement).value
+    stickyLimit = val
+    if (!isRoundRobin) return
+
+    if (stickyDebounceTimer) {
+      clearTimeout(stickyDebounceTimer)
+    }
+    stickyDebounceTimer = setTimeout(async () => {
+      try {
+        await saveProviderStrategy('round-robin', stickyLimit)
+      } catch (err) {
+        console.error('Failed to save debounced sticky limit:', err)
+      }
+    }, 400)
   }
 
   async function handleStickyLimitChange() {
+    if (stickyDebounceTimer) {
+      clearTimeout(stickyDebounceTimer)
+      stickyDebounceTimer = null
+    }
     if (isRoundRobin) {
-      await saveProviderStrategy('round-robin', stickyLimit)
+      try {
+        await saveProviderStrategy('round-robin', stickyLimit)
+      } catch (err) {
+        console.error('Failed to save sticky limit on change:', err)
+      }
     }
   }
 
@@ -2742,6 +2798,7 @@ function formatErrorText(err: unknown): string {
                 type="number"
                 min="1"
                 bind:value={stickyLimit}
+                oninput={handleStickyLimitInput}
                 onchange={handleStickyLimitChange}
                 placeholder="1"
                 class="w-14 px-2 py-1 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
