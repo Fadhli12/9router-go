@@ -1077,6 +1077,37 @@ function formatErrorText(err: unknown): string {
     isStoppingOneByOne = true
   }
 
+  // Individual Connection Health Test
+  let testingSingleConnId = $state<string | null>(null)
+
+  async function handleTestSingleConnection(conn: ProviderConnection) {
+    if (testingSingleConnId || isTestingOneByOne) return
+    testingSingleConnId = conn.id
+    oneByOneStatuses = { ...oneByOneStatuses, [conn.id]: { state: 'testing', error: null } }
+    try {
+      const res = await api.testConnection(conn.id)
+      if (res?.valid) {
+        oneByOneStatuses = { ...oneByOneStatuses, [conn.id]: { state: 'success', error: null } }
+      } else {
+        oneByOneStatuses = {
+          ...oneByOneStatuses,
+          [conn.id]: { state: 'failed', error: res?.error || 'Test failed' }
+        }
+      }
+    } catch (err) {
+      oneByOneStatuses = {
+        ...oneByOneStatuses,
+        [conn.id]: {
+          state: 'failed',
+          error: err instanceof Error ? err.message : 'Test failed'
+        }
+      }
+    } finally {
+      testingSingleConnId = null
+      onRefresh()
+    }
+  }
+
   // Priority reordering.
   // Single server-side transactional call instead of two independent PUTs:
   // a partial failure between those two writes left two rows sharing a
@@ -3055,7 +3086,20 @@ function formatErrorText(err: unknown): string {
 
                 <!-- Right actions -->
                 <div class="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-end">
-                  <div class="grid flex-1 grid-cols-3 gap-1 sm:flex sm:flex-none">
+                  <div class="flex flex-1 items-center gap-1 sm:flex-none">
+                    <!-- Individual Test Connection button -->
+                    <button
+                      type="button"
+                      onclick={() => handleTestSingleConnection(conn)}
+                      disabled={testingSingleConnId === conn.id || isTestingOneByOne}
+                      class="flex flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50 text-text-muted hover:text-primary cursor-pointer"
+                      title="Test this connection"
+                    >
+                      <span class="material-symbols-outlined text-[18px] {testingSingleConnId === conn.id ? 'animate-spin text-primary' : ''}">
+                        {testingSingleConnId === conn.id ? 'progress_activity' : 'network_check'}
+                      </span>
+                      <span class="text-[10px] leading-tight">Test</span>
+                    </button>
                     <!-- Proxy dropdown (upstream: hidden while no pools exist) -->
                     {#if proxyPools.length > 0}
                     <div class="relative">
