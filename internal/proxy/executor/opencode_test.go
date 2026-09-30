@@ -92,9 +92,11 @@ func TestForwardOpencode_MuseSpark_EdgeRelay(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotTarget = r.Header.Get("x-relay-target")
 		gotPath = r.Header.Get("x-relay-path")
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"id":"resp_123","output":[{"type":"message","content":[{"type":"text","text":"relay ok"}]}]}`))
+		// buildResponsesBody forces stream:true, so the /responses upstream
+		// answers with an event stream even for a non-streaming client.
+		w.Write([]byte(responsesEventStream("relay ok")))
 	}))
 	defer srv.Close()
 
@@ -175,9 +177,9 @@ func TestForwardOpencode_MuseSparkResponsesRouting(t *testing.T) {
 		if parsed["input"] == nil {
 			t.Errorf("expected input array in Responses API format, got: %s", string(body))
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"id":"resp_123","output":[{"type":"message","content":[{"type":"text","text":"4"}]}]}`))
+		w.Write([]byte(responsesEventStream("4")))
 	}))
 	defer srv.Close()
 
@@ -215,9 +217,9 @@ func TestForwardOpencode_MuseSpark13_ResponsesRouting(t *testing.T) {
 		if parsed["model"] != "muse-spark-1.3-contributor-free" {
 			t.Errorf("expected model muse-spark-1.3, got %v", parsed["model"])
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"id":"resp_13","output":[{"type":"message","content":[{"type":"text","text":"ok 1.3"}]}]}`))
+		w.Write([]byte(responsesEventStream("ok 1.3")))
 	}))
 	defer srv.Close()
 
@@ -241,8 +243,9 @@ func TestForwardOpencode_MuseSpark_OCPrefix(t *testing.T) {
 		if !strings.HasSuffix(r.URL.Path, "/responses") {
 			t.Errorf("expected /responses for oc/ prefix, got %s", r.URL.Path)
 		}
+		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"id":"resp_oc","output":[{"type":"message","content":[{"type":"text","text":"ok"}]}]}`))
+		w.Write([]byte(responsesEventStream("ok")))
 	}))
 	defer srv.Close()
 	cfg := &providers.ProviderConfig{BaseURL: srv.URL + "/chat/completions"}
@@ -369,9 +372,11 @@ func TestForwardOpencode_UnionAlpha_InjectsMaxTokens(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &capturedBody)
 
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"id":"msg_ua","type":"message","role":"assistant","content":[{"type":"text","text":"hello from union-alpha"}]}`))
+		// The Messages route is always asked for stream:true, so the upstream
+		// answers with Claude events, not a single message document.
+		w.Write([]byte(claudeEventStream("hello from union-alpha")))
 	}))
 	defer srv.Close()
 
@@ -390,6 +395,11 @@ func TestForwardOpencode_UnionAlpha_InjectsMaxTokens(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	// The fold is the whole point of this route: the served body must carry
+	// the assistant text, not an empty completion.
+	if got := rec.Body.String(); !strings.Contains(got, "hello from union-alpha") {
+		t.Errorf("served body lost the answer: %s", got)
 	}
 	if capturedHeader != "2023-06-01" {
 		t.Errorf("expected anthropic-version 2023-06-01, got %s", capturedHeader)
@@ -512,9 +522,9 @@ func TestForwardOpencode_UnionAlpha_ConvertsOpenAIToolsInRequest(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &capturedBody)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"id":"msg_ua","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}]}`))
+		w.Write([]byte(claudeEventStream("ok")))
 	}))
 	defer srv.Close()
 
@@ -548,6 +558,9 @@ func TestForwardOpencode_UnionAlpha_ConvertsOpenAIToolsInRequest(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	if got := rec.Body.String(); !strings.Contains(got, `"content":"ok"`) {
+		t.Errorf("served body lost the answer: %s", got)
 	}
 
 	// Upstream received Claude-formatted tools
@@ -666,4 +679,28 @@ func TestBuildResponsesBody_EmptyArrayInput(t *testing.T) {
 	if !ok || len(inputList) == 0 {
 		t.Fatalf("expected non-empty placeholder input array, got %v", parsed["input"])
 	}
+}
+
+// responsesEventStream is what a /responses upstream sends for the request
+// buildResponsesBody builds: stream:true is forced, so an event stream comes
+// back even when the client asked for a single JSON answer.
+func responsesEventStream(text string) string {
+	return "event: response.output_text.delta\n" +
+		`data: {"type":"response.output_text.delta","delta":"` + text + `"}` + "\n\n" +
+		"event: response.completed\n" +
+		`data: {"type":"response.completed"}` + "\n\n"
+}
+
+// claudeEventStream is the Messages API answer to a stream:true request.
+func claudeEventStream(text string) string {
+	return "event: message_start\n" +
+		`data: {"type":"message_start","message":{"id":"msg_ua","role":"assistant","content":[]}}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + text + `"}}` + "\n\n" +
+		"event: message_delta\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}` + "\n\n" +
+		"event: message_stop\n" +
+		`data: {"type":"message_stop"}` + "\n\n"
 }

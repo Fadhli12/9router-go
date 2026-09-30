@@ -703,7 +703,11 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		})
 		converted, ok := sseToOpenAIJSON(sseChunks)
 		if !ok {
-			converted = sseChunks
+			// The Messages API was asked for stream:true, so an empty fold
+			// means the upstream produced no assistant response. Serving the
+			// empty buffer as a 200 reads as a served empty turn and pins the
+			// router to this model; a 502 lets combo fallback move on.
+			return proxy.UpstreamFailure(http.StatusBadGateway, "union-alpha returned no assistant response")
 		}
 		return jsonResponse(req.Ctx, w, bytes.NewReader(converted), req.TranslateResp, req.ResponseBuf)
 	}
