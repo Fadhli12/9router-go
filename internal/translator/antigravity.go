@@ -268,16 +268,6 @@ func rewriteBrandingText(text string, isSystemInstruction bool) string {
 	if isSystemInstruction {
 		text = normalizeHarnessMarkers(text)
 	}
-	text = opencodeRegex.ReplaceAllStringFunc(text, func(m string) string {
-		switch m {
-		case "OpenCode":
-			return "Antigravity"
-		case "OPENCODE":
-			return "ANTIGRAVITY"
-		default:
-			return "antigravity"
-		}
-	})
 	return strings.TrimSpace(text)
 }
 

@@ -5,8 +5,12 @@ package oauth
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
+	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // TokenResult holds the result of a token refresh.
@@ -35,6 +39,36 @@ type Refresher func(ctx context.Context, p *Params) (*TokenResult, error)
 var (
 	registryMu sync.RWMutex
 	registry   = map[string]Refresher{}
+
+	// DefaultOAuthTransport is an optimized HTTP transport with connection pooling and keep-alives for OAuth.
+	DefaultOAuthTransport = &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+	}
+
+	// DefaultTransport is an alias for DefaultOAuthTransport.
+	DefaultTransport = DefaultOAuthTransport
+
+	// DefaultOAuthClient is the shared optimized HTTP client for OAuth token refreshes with keep-alive transport.
+	DefaultOAuthClient = &http.Client{
+		Transport: DefaultOAuthTransport,
+		Timeout:   30 * time.Second,
+	}
+
+	// DefaultClient is an alias for DefaultOAuthClient.
+	DefaultClient = DefaultOAuthClient
+
+	refreshFlight singleflight.Group
 )
 
 // Register adds a refresher for the given provider.
@@ -52,11 +86,44 @@ func Get(provider string) Refresher {
 }
 
 // Refresh calls the provider's refresher, or falls back to standard OAuth2.
+// Concurrent calls for the same provider and refresh token are deduplicated via singleflight.
 func Refresh(ctx context.Context, p *Params) (*TokenResult, error) {
-	if fn := Get(p.Provider); fn != nil {
-		return fn(ctx, p)
+	if p == nil {
+		return nil, fmt.Errorf("oauth: params cannot be nil")
 	}
-	return nil, fmt.Errorf("no OAuth refresher for: %s", p.Provider)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	fn := Get(p.Provider)
+	if fn == nil {
+		return nil, fmt.Errorf("no OAuth refresher for: %s", p.Provider)
+	}
+
+	pCopy := *p
+	if pCopy.Client == nil {
+		pCopy.Client = DefaultOAuthClient
+	}
+
+	if pCopy.RefreshToken == "" {
+		return fn(ctx, &pCopy)
+	}
+
+	key := pCopy.Provider + ":" + pCopy.RefreshToken
+	res, err, _ := refreshFlight.Do(key, func() (any, error) {
+		return fn(ctx, &pCopy)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if res == nil {
+		return nil, nil
+	}
+	tr, ok := res.(*TokenResult)
+	if !ok || tr == nil {
+		return nil, fmt.Errorf("oauth: unexpected token result type")
+	}
+	resultCopy := *tr
+	return &resultCopy, nil
 }
 
 // StringMap flattens a connection providerSpecificData blob to the string
