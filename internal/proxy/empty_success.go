@@ -17,6 +17,14 @@ import (
 // on (providers.RetryableStatusCodes), so combo routing moves on to the next
 // model instead of sticking to the one that just said nothing.
 
+// NoCompletionInStream is the one wording for the failure every event-stream
+// fold shares: the stream carried no completion chunk, so there is no answer
+// to serve. It names neither provider nor model — those are already fields on
+// the failure row and on the `fallback` log line, and a model name spelled
+// into the message only goes stale when the model id changes. One constant so
+// four call sites cannot drift into four different sentences.
+const NoCompletionInStream = "upstream event stream carried no completion chunk"
+
 // UpstreamFailure builds the error an unusable 200 body is reported as.
 // Pass a status that providers.RetryableStatusCodes lists (502) so the
 // fallback layer both retries the next connection and records the lock.

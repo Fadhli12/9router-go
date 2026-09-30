@@ -293,7 +293,7 @@ func jsonResponse(ctx context.Context, w http.ResponseWriter, upstream io.Reader
 			// SSE-shaped but carrying no completion chunk. Relabelling it as
 			// JSON would repeat the bug, and a 502 lets combo fallback move
 			// on to the next account.
-			return proxy.UpstreamFailure(http.StatusBadGateway, "upstream answered with an event stream containing no completion")
+			return proxy.UpstreamFailure(http.StatusBadGateway, proxy.NoCompletionInStream)
 		}
 		body = folded
 	}

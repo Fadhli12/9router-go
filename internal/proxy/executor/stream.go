@@ -640,7 +640,7 @@ func handleCodexStream(w http.ResponseWriter, req *Request, upstream io.Reader) 
 		// completion. Fabricating `content: ""` here read to the client as a
 		// served empty turn and ended combo fallback on this model, so report
 		// the 502 and let the router move on.
-		return proxy.UpstreamFailure(http.StatusBadGateway, "upstream answered 200 with an event stream containing no completion")
+		return proxy.UpstreamFailure(http.StatusBadGateway, proxy.NoCompletionInStream)
 	}
 	return jsonResponse(req.Ctx, w, bytes.NewReader(converted), req.TranslateResp, req.ResponseBuf)
 }
@@ -970,7 +970,7 @@ func handleKiroNonStream(w http.ResponseWriter, req *Request, upstream io.Reader
 	}
 	folded, ok := sseToOpenAIJSON(collect.buf.Bytes())
 	if !ok {
-		return proxy.UpstreamFailure(http.StatusBadGateway, "kiro returned no assistant response")
+		return proxy.UpstreamFailure(http.StatusBadGateway, proxy.NoCompletionInStream)
 	}
 	return jsonResponse(req.Ctx, w, bytes.NewReader(folded), req.TranslateResp, req.ResponseBuf)
 }

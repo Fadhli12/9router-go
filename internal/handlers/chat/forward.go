@@ -352,7 +352,7 @@ func (h *ChatHandler) handleJSONResponse(ctx context.Context, w http.ResponseWri
 	if internalproxy.LooksLikeSSE(body) {
 		folded, ok := sseToClaudeJSON(body)
 		if !ok {
-			return internalproxy.UpstreamFailure(http.StatusBadGateway, "upstream answered with an event stream containing no completion")
+			return internalproxy.UpstreamFailure(http.StatusBadGateway, internalproxy.NoCompletionInStream)
 		}
 		body = folded
 	}

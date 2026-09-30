@@ -707,7 +707,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 			// means the upstream produced no assistant response. Serving the
 			// empty buffer as a 200 reads as a served empty turn and pins the
 			// router to this model; a 502 lets combo fallback move on.
-			return proxy.UpstreamFailure(http.StatusBadGateway, "union-alpha returned no assistant response")
+			return proxy.UpstreamFailure(http.StatusBadGateway, proxy.NoCompletionInStream)
 		}
 		return jsonResponse(req.Ctx, w, bytes.NewReader(converted), req.TranslateResp, req.ResponseBuf)
 	}
