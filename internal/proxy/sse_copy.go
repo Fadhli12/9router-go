@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 )
 
 // Frames appended when an upstream OpenAI SSE stream ends without the
@@ -42,12 +43,17 @@ const (
 //     `finish_reason: "stop"` frame first, otherwise the client fails with
 //     "stream closed before a finish_reason was received";
 //   - EOF or a read error before [DONE] gains an in-band error frame.
+var sseCopyBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 4096)
+		return &b
+	},
+}
+
 func SSECopy(w http.ResponseWriter, upstream io.Reader, flusher http.Flusher, onChunk func([]byte)) error {
-	// Allocate a local buffer instead of using the shared pool. The buffer is
-	// alive for the entire read loop, so there is no safe point to return it
-	// to the pool, and the pool would add a race window between ReleaseByteSlice
-	// and the next iteration's write/flush completing.
-	buf := make([]byte, 4096)
+	bufPtr := sseCopyBufPool.Get().(*[]byte)
+	defer sseCopyBufPool.Put(bufPtr)
+	buf := *bufPtr
 	c := &sseCopier{w: w, flusher: flusher, trailingNL: 2}
 	for {
 		n, err := upstream.Read(buf)

@@ -4,7 +4,32 @@ import (
 	"bufio"
 	"bytes"
 	"io"
+	"sync"
 )
+
+const (
+	scannerInitBufSize = 64 * 1024
+	scannerMaxLineSize = 10 * 1024 * 1024 // Allow lines up to 10MB (tool calls, multimodal data)
+)
+
+var scannerBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, scannerInitBufSize)
+		return &b
+	},
+}
+
+func acquireScannerBuf() *[]byte {
+	return scannerBufPool.Get().(*[]byte)
+}
+
+func releaseScannerBuf(b *[]byte) {
+	if b == nil || cap(*b) > 1024*1024 {
+		return
+	}
+	*b = (*b)[:scannerInitBufSize]
+	scannerBufPool.Put(b)
+}
 
 // ScanStream reads an SSE stream from r, accumulates complete events
 // (per the SSE spec: fields separated by \n, an event ends at a blank
@@ -16,8 +41,9 @@ import (
 // leading space after the colon is stripped per the spec.
 func ScanStream(r io.Reader, onChunk func([]byte)) error {
 	scanner := bufio.NewScanner(r)
-	buf := make([]byte, 64*1024)
-	scanner.Buffer(buf, 10*1024*1024) // Allow lines up to 10MB (tool calls, multimodal data)
+	bufPtr := acquireScannerBuf()
+	defer releaseScannerBuf(bufPtr)
+	scanner.Buffer(*bufPtr, scannerMaxLineSize)
 
 	var dataLines [][]byte
 	emit := func() {

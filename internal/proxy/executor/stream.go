@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"9router/proxy/internal/log"
@@ -1057,6 +1058,13 @@ func ParseCommandCodeError(event map[string]any) (int, string) {
 	return statusCode, message
 }
 
+var commandcodeScannerBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 256*1024)
+		return &b
+	},
+}
+
 func handleCommandcodeStream(w http.ResponseWriter, req *Request, upstream io.Reader, model string) error {
 	state := &CommandcodeStreamState{
 		ResponseID: fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
@@ -1064,8 +1072,16 @@ func handleCommandcodeStream(w http.ResponseWriter, req *Request, upstream io.Re
 		Model:      model,
 	}
 
+	bufPtr := commandcodeScannerBufPool.Get().(*[]byte)
+	defer func() {
+		if bufPtr != nil && cap(*bufPtr) <= 1024*1024 {
+			*bufPtr = (*bufPtr)[:256*1024]
+			commandcodeScannerBufPool.Put(bufPtr)
+		}
+	}()
+
 	scanner := bufio.NewScanner(upstream)
-	scanner.Buffer(make([]byte, 256*1024), 256*1024)
+	scanner.Buffer(*bufPtr, 256*1024)
 
 	var headersWritten bool
 
