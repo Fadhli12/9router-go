@@ -210,8 +210,8 @@
         <button
           type="button"
           onclick={() => onEdit(combo)}
-          class="flex flex-col items-center justify-center rounded px-2.5 py-1 text-text-muted transition-colors hover:bg-black/5 dark:hover:bg-white/5 hover:text-brand-500 cursor-pointer"
-          title="Edit"
+          class="flex flex-col items-center justify-center rounded px-2.5 py-1 text-text-muted transition-colors hover:bg-black/5 dark:hover:bg-white/5 hover:text-brand-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-text-muted"
+          title={isLocked ? 'Auto free-tier combo is locked — reorder only' : 'Edit'}
           disabled={isLocked}
         >
           <Pencil class="w-4 h-4" />
@@ -221,9 +221,9 @@
         {#if isLocked}
           <button
             type="button"
-            onclick={() => onDelete(combo)}
             class="flex flex-col items-center justify-center rounded px-2.5 py-1 text-text-muted/40 cursor-not-allowed"
             title="Auto free-tier combo is locked"
+            disabled
           >
             <Trash2 class="w-4 h-4" />
             <span class="text-[10px] leading-tight">Locked</span>
