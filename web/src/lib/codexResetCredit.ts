@@ -61,3 +61,13 @@ export function getResetCreditConfirmation(credit: CodexResetCreditView): string
   const title = getResetCreditWindowTitle(credit)
   return `Redeeming immediately resets the eligible Codex usage windows and permanently consumes this credit (${title}). It cannot be undone.`
 }
+
+// newResetCreditIdempotencyKey mints the key that makes a redeem idempotent
+// upstream: the same key sent twice redeems once. An empty key is not "no
+// key" — the server replaces it with a freshly minted one per request, which
+// is exactly the double-spend this exists to prevent — so the caller must never
+// dispatch a consume without a real value.
+export function newResetCreditIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+  return `reset-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}

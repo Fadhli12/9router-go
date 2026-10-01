@@ -11,6 +11,7 @@
     getCodexResetCreditExpiryLabel,
     getResetCreditConfirmation,
     getResetCreditWindowTitle,
+    newResetCreditIdempotencyKey,
   } from '../lib/codexResetCredit'
   import { PROVIDER_CATALOG } from '../lib/providers'
   import { copyToClipboard } from '../lib/clipboard'
@@ -202,11 +203,6 @@
   }
 
 
-  function newIdempotencyKey(): string {
-    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
-    return `reset-${Date.now()}-${Math.random().toString(16).slice(2)}`
-  }
-
   function closeResetCredits() {
     if (resetCreditConsuming) return
     resetCreditConn = null
@@ -216,6 +212,7 @@
     resetCreditCount = 0
     resetCreditConfirming = false
     resetCreditPending = null
+    resetCreditIdempotencyKey = ''
   }
 
   async function openResetCredits(conn: ProviderConnection) {
@@ -226,6 +223,12 @@
     resetCreditCount = 0
     resetCreditConfirming = false
     resetCreditPending = null
+    // Mint here, not at declare time: an empty key is not "no key", it is a
+    // key the server replaces with a fresh one per request, which is exactly
+    // the double-redeem this was meant to prevent. Every attempt within one
+    // open session then shares a key, so a retried or double-submitted confirm
+    // cannot spend a second credit.
+    resetCreditIdempotencyKey = newIdempotencyKey()
     resetCreditLoading = true
     try {
       const res = await api.listCodexResetCredits(conn.id)
@@ -251,7 +254,9 @@
     const credit = resetCreditPending
     // The token is carried from the confirm step, not the radio selection, so
     // exactly the credit the warning was shown for is the one that gets spent.
-    if (!conn || !credit || resetCreditConsuming) return
+    // An empty key would let the server mint a fresh one per request, which is
+    // the double-spend this guard exists to prevent — refuse rather than send one.
+    if (!conn || !credit || resetCreditConsuming || !resetCreditIdempotencyKey) return
     resetCreditConsuming = true
     resetCreditError = ''
     try {

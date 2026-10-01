@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"9router/proxy/internal/auth"
 	"9router/proxy/internal/config"
 	"9router/proxy/internal/constants"
 	"9router/proxy/internal/log"
@@ -24,6 +27,15 @@ const StartupTimeout = 20 * time.Second
 
 // stopGraceMS is how long Stop waits for the daemon to exit before killing it.
 const stopGraceMS = 5000
+
+const (
+	// shutdownAPI is the endpoint the dashboard button and the updater already
+	// use to drain the process; Stop reuses it so every platform gets the same
+	// orderly shutdown instead of a platform-specific signal.
+	shutdownAPI = "/api/version/shutdown"
+	// defaultPort matches config.LoadConfig's fallback when no port is set.
+	defaultPort = 20130
+)
 
 // ErrAlreadyRunning is returned when a live daemon already owns the port.
 var ErrAlreadyRunning = errors.New("9router-go is already running")
@@ -152,10 +164,24 @@ func Start(url string, extraArgs []string) (StartResult, error) {
 
 // Stop terminates the daemon, escalating to a kill when it does not exit
 // within the graceful window.
+//
+// The request goes through the server's own shutdown endpoint first, because a
+// signal is not a portable option: Windows has no SIGTERM and TerminateProcess
+// cuts every in-flight SSE stream and any open SQLite write off mid-transaction.
+// The endpoint is what the dashboard button and the updater already use, it is
+// the one path that lets server.Shutdown drain, and the force-kill below stays
+// as the fallback for a daemon too broken to answer.
 func Stop() (StopResult, error) {
 	pid := RunningPID()
 	if pid == 0 {
 		return StopResult{Reason: "not_running"}, nil
+	}
+
+	if requestGracefulStop() {
+		if waitExit(pid, stopGraceMS) {
+			clearPID()
+			return StopResult{Stopped: true, PID: pid}, nil
+		}
 	}
 
 	if gone := proc.Terminate(pid, stopGraceMS); !gone {
@@ -164,6 +190,56 @@ func Stop() (StopResult, error) {
 	}
 	clearPID()
 	return StopResult{Stopped: true, PID: pid}, nil
+}
+
+// requestGracefulStop asks the daemon to drain over the loopback HTTP endpoint
+// it already serves, so the listener closes in an orderly shutdown instead of
+// a TerminateProcess. It reports whether the request was accepted; a refusal
+// means the caller falls back to the force path.
+func requestGracefulStop() bool {
+	url := strings.TrimSuffix(daemonLocalURL(), "/") + shutdownAPI
+	// The endpoint is always-protected, so a bare POST is refused with 401 and
+	// would send every stop down the force-kill path. The CLI token is this
+	// machine's own credential and is the one non-session caller it accepts.
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader("{}"))
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(auth.CLITokenHeader, auth.CLIToken())
+	resp, err := healthClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	return resp.StatusCode == http.StatusOK
+}
+
+// waitExit polls until the pid is gone or the budget runs out.
+func waitExit(pid int, waitMS int) bool {
+	deadline := time.Now().Add(time.Duration(waitMS) * time.Millisecond)
+	for {
+		if !proc.Alive(pid) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// daemonLocalURL mirrors the listener the server opened, so the stop request
+// lands on the process this pid file claims rather than on whatever else
+// answers the configured port.
+func daemonLocalURL() string {
+	cfg := config.LoadConfig()
+	port := cfg.Port
+	if port <= 0 {
+		port = defaultPort
+	}
+	return "http://127.0.0.1:" + strconv.Itoa(port)
 }
 
 // Restart replaces the daemon with a fresh one.

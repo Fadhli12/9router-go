@@ -355,19 +355,20 @@ func (t *Tracker) scheduleBroadcastLocked(repo *db.Repo) {
 	t.broadcastDebounce = time.AfterFunc(50*time.Millisecond, func() {
 		t.ensureRingInitialized(repo)
 		t.mu.RLock()
+		defer t.mu.RUnlock()
+
 		payload := t.buildPayloadLocked(repo)
 		b, err := json.Marshal(payload)
 		if err != nil {
-			t.mu.RUnlock()
 			return
 		}
-		subs := make([]chan []byte, 0, len(t.subscribers))
-		for ch := range t.subscribers {
-			subs = append(subs, ch)
-		}
-		t.mu.RUnlock()
 
-		for _, ch := range subs {
+		// The send stays under the read lock: unsubscribe closes the channel
+		// while holding the write lock, and a send racing that close panics
+		// with "send on closed channel". Snapshotting the channels first and
+		// sending after RUnlock left exactly that window open — the map was
+		// read safely, the channel itself was not.
+		for ch := range t.subscribers {
 			select {
 			case ch <- b:
 			default:

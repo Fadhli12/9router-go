@@ -2,6 +2,88 @@
 
 ## [Unreleased]
 
+## [v1.9.6] - 2026-10-01
+
+### 🐛 Pre-release review: 5 blocker yang lolos semua gate (#70)
+
+Audit 42 commit `v1.9.5..main` sebelum rilis menemukan lima cacat yang **tidak**
+tertangkap `go vet`, `bun test`, maupun `-race`, karena test yang ada memock
+hal yang sama persis dengan jalur kodenya. Kelimanya sudah diperbaiki dan
+diuji dengan uji regresi yang gagal bila fix-nya dibalik (*mutation-checked*).
+
+- 🔴 **`9router-go status|stop|logs` buta terhadap `DATA_DIR` dari `.env`.**
+  `daemonURL()` dan `daemon.Dir()` membaca `os.Getenv`, sedangkan server
+  menyelesaikannya lewat viper yang membaca `.env`. Pada deployment yang
+  dikonfigurasi lewat `.env` saja — termasuk setiap docker compose — proses CLI
+  melihat direktori berbeda dari daemon yang sedang jalan: `status` melaporkan
+  *"not running"* padahal ada listener hidup, `stop` menolak untuk halt, dan
+  `logs` mengklaim tidak ada log padahal file-nya 50 KB. `ResolveDataDir()`
+  kini membaca `.env` (dengan urutan env → `.env` → default platform) dan
+  `daemonURL()` memakai `config.LoadConfig()` sehingga port yang diprobe sama
+  dengan yang di-bind.
+- 🔴 **Nama tool ter-fit bocor ke client di lane Claude `TranslateResp`.**
+  `handleClaudeMessagesStream` `return` di baris 19–46, **sebelum**
+  `decloaker := NewClaudeStreamDecloaker(req.ToolNameMap)` di baris 78. Request
+  sudah di-fit di `fallback.go:362`, jadi `content_block_start` tool_use sampai
+  ke client dengan nama 64 karakter dan tidak bisa di-dispatch. Non-stream
+  punya cacat serupa (passthrough di `claude_messages.go:191` keluar sebelum
+  decloak) — keduanya sekarang decloak sebelum branch mana pun. Decloaker
+  di-hoist ke atas `TranslateResp`.
+- 🔴 **Lane Responses: request tidak konsisten dengan dirinya sendiri.**
+  `FitToolNames` tidak punya walker `input[]` (hanya `tools`/`functions`/
+  `messages`/`contents`/`tool_choice`), padahal `RestoreToolNames` tetap
+  me-restore `output[]` (`fingerprint.go:282-311`). Akibatnya deklarasi tool
+  ter-fit ke 64 karakter sementara history masih memanggil nama aslinya 71
+  karakter — upstream menerima request yang bertentangan dengan dirinya, dan
+  fix 400-nya sendiri tidak benar-benar terpakai, karena nama panjang tetap
+  dibawa lewat `input`. Ditambahkan `visitInput`/`replaceInInput`
+  (`tool_fit.go`) yang berbagi satu walker untuk kedua arah, dan
+  `passthroughResponses` kini menerapkan `req.ToolNameMap` pada body non-stream
+  maupun lewat `sseStreamOpts` pada stream.
+- 🔴 **Idempotency key reset-credit kosong — proteksi double-redeem tidak
+  pernah ada.** `resetCreditIdempotencyKey` dideklarasikan tapi tidak pernah
+  di-assign di mana pun (`newIdempotencyKey()` adalah dead code), sehingga
+  tiap request mengirim `idempotencyKey: ""` dan server memint key baru per
+  request (`usage_codex_reset.go:176-178`) → dua submit innocuous =
+  dua kredit terbuang. Key kini di-mint saat modal dibuka, di-reset saat ditutup,
+  dan `confirmResetCredit` menolak mengirim key kosong. Helper-nya dipindah ke
+  `lib/codexResetCredit.ts` agar unit-testable sesuai konvensi repo.
+- 🔴 **`9router-go stop` di Windows tidak pernah graceful.** `stopGraceMS = 5000`
+  dideklarasikan, tapi `requestStop` di `proc_windows.go` selalu
+  `ErrStopUnsupported`, jadi `proc.Terminate` langsung `ForceKill` — drain
+  `server.Shutdown` 5 detik yang dirancang di `server.go:99-101` **tidak pernah
+  jalan** di Windows: setiap `stop`/`restart`/auto-update memotong SSE
+  in-flight dan SQL transaction setengah jalan. `Stop()` kini POST ke
+  `/api/version/shutdown` lebih dulu **dengan CLI token** (endpoint-nya
+  always-protected; tanpa token selalu 401 dan jatuh ke force-kill), dengan
+  `proc.Terminate` sebagai fallback untuk daemon yang tidak menjawab. Terverifikasi
+  live: log `Server stopped gracefully` pada 4 siklus restart beruntun.
+- 🔴 **Data race `usagetracker`** (ketemu saat rerun `-race`, pre-existing dan
+  tidak terkait 5 fix di atas): `scheduleBroadcastLocked` menyalin daftar
+  subscriber lalu melepas lock **sebelum** send, sedangkan `unsubscribe` menutup
+  channel di bawah write lock → *send on closed channel*. Map-nya terbaca aman,
+  channel-nya tidak. Kirim dipindah ke bawah `RLock`. Catatan: `8520e4e`
+  mengklaim "fix data race in usagetracker" tetapi hanya menambal ring seeding.
+- **Batas 64 karakter sekarang benar-benar diuji.** Fixture lama adalah 63 dan
+  65 karakter, jadi tidak ada yang mem-*pin* tepat di batas — dan batas itulah
+  yang jadi inti fitur ini. Ditambah `TestFitToolNames_ExactBoundary`.
+- **Verifikasi:** `go vet ./...` + `-tags=integration` 0 warning;
+  `go test -race -count=1 ./...` exit 0; `go test -tags=integration` ok;
+  `bun test` 115/115; `tsc -b`/`oxlint`/`bun run build` bersih;
+  `make build` + `make cross` (5 platform) sukses. Live: lifecycle daemon
+  start/status/restart/stop tanpa `DATA_DIR` ter-export, tool 71 karakter
+  kembali ke client sebagai 71 karakter, 7 route dashboard tanpa console
+  error.
+- **Ditunda (bukan blocker, tidak ikut PR ini):** self-update bisa memasang
+  binary tanpa verifikasi saat manifest tidak punya `sha256` (`updater.go:411`;
+  `release.yml` sudah menerbitkan `SHA256SUMS.txt` tapi tidak ada kode Go yang
+  membacanya); `parseSemver` membuang suffix prerelease sehingga RC bisa
+  terbaca lebih baru dari final dan di-auto-apply; `RunningPID` hanya percaya
+  PID telanjang sehingga PID daur-ulang bisa membuat `stop` membunuh proses
+  lain; `gateway.log` tidak pernah dirotasi dan dibaca utuh tiap 150 ms;
+  `signalSelfShutdown` kini dead code di kedua varian build; `tools[].toolSpec.name`
+  (Bedrock Converse) direkam tapi tidak ditulis.
+
 ### 🐛 MCP tools dengan nama fungsi > 64 karakter mental dengan HTTP 400 (#68)
 
 - **Masalah:** Spesifikasi fungsi OpenAI / OpenAI-compatible membatasi panjang `function.name` maksimal 64 karakter (`^[a-zA-Z0-9_-]{1,64}$`). Coding agent dengan integrasi server MCP sering kali menggunakan nama namespaced (misal `mcp__server_name__action_detail_something`) yang melebihi 64 karakter, menyebabkan upstream provider (OpenAI, Console, Responses API, dll.) menolak request dengan status 400 Bad Request (`name must be at most 64 characters, got XX`).

@@ -288,3 +288,101 @@ func TestRestoreToolNames_AllFormats(t *testing.T) {
 		}
 	})
 }
+
+// A /v1/responses request keeps its conversation history in `input`, not
+// `messages`. Without a walker there the declaration was fitted but the history
+// still called the tool by its original long name, so the upstream received a
+// request that contradicted itself and the 64-char fix never actually applied
+// on the Responses-native lane.
+func TestFitToolNames_ResponsesInputStaysConsistent(t *testing.T) {
+	longName := "mcp__server_name__action_detail_something_very_long_indeed_action_12345"
+	body := []byte(`{
+		"model": "gpt-5",
+		"tools": [{"type": "function", "name": "` + longName + `", "parameters": {"type": "object"}}],
+		"input": [
+			{"type": "function_call", "call_id": "call_1", "name": "` + longName + `"},
+			{"role": "user", "content": [{"type": "input_text", "text": "go on"}]}
+		]
+	}`)
+
+	got, toolMap := FitToolNames(body)
+	if len(toolMap) != 1 {
+		t.Fatalf("expected the long name to be fitted, got map %v", toolMap)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	declared := parsed["tools"].([]any)[0].(map[string]any)["name"].(string)
+	inHistory := parsed["input"].([]any)[0].(map[string]any)["name"].(string)
+
+	if len(declared) > MaxToolNameLength {
+		t.Errorf("declared name %q is %d chars, over the %d limit", declared, len(declared), MaxToolNameLength)
+	}
+	if declared != inHistory {
+		t.Errorf("request contradicts itself: declared %q but input history says %q", declared, inHistory)
+	}
+	if inHistory == longName {
+		t.Error("the long name still travelled in input; the 64-char fix did not apply")
+	}
+
+	// The upstream answers with the fitted name; the client must receive the
+	// name it actually declared, so the map has to reverse it on output[].
+	resp := []byte(`{"output":[{"type":"function_call","call_id":"call_1","name":"` + declared + `"}]}`)
+	restored := RestoreToolNamesInPayload(resp, toolMap)
+	if !strings.Contains(string(restored), longName) {
+		t.Errorf("expected %q restored for the client, got: %s", longName, restored)
+	}
+}
+
+// The upstream echoes the fitted name in output[]; the client must receive the
+// name it actually declared. The Responses passthrough relays the body itself,
+// so this is where the map has to be applied.
+func TestRestoreToolNames_ResponsesOutputItem(t *testing.T) {
+	longName := "mcp__server_name__action_detail_something_very_long_indeed_action_12345"
+	shortName := "mcp__server_name__action_detail_something_very_long_indeed_act_1"
+	toolMap := map[string]string{shortName: longName}
+
+	body := []byte(`{"output":[{"type":"function_call","call_id":"call_1","name":"` + shortName + `"}]}`)
+	restored := RestoreToolNamesInPayload(body, toolMap)
+	if !strings.Contains(string(restored), longName) {
+		t.Errorf("expected %q restored in Responses output[], got: %s", longName, restored)
+	}
+}
+
+// The fit boundary is "<= 64 is left alone, 65 is fitted". The existing
+// fixtures were 63 and 65, so nothing pinned the exact boundary — which is the
+// line this whole feature turns on.
+func TestFitToolNames_ExactBoundary(t *testing.T) {
+	exactly64 := "mcp__boundary_tool_name_that_is_exactly_sixty_four_characters_xy"
+	if len(exactly64) != MaxToolNameLength {
+		t.Fatalf("fixture is %d chars; it must be exactly %d for this test to mean anything",
+			len(exactly64), MaxToolNameLength)
+	}
+	exactly65 := exactly64 + "x"
+
+	for _, tc := range []struct {
+		name    string
+		fixture string
+		wantFit bool
+	}{
+		{"exactly 64 is left alone", exactly64, false},
+		{"65 is fitted", exactly65, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"model":"gpt-4","tools":[{"type":"function","function":{"name":"` + tc.fixture + `"}}]}`)
+			got, toolMap := FitToolNames(body)
+			if tc.wantFit && len(toolMap) != 1 {
+				t.Fatalf("expected %d-char name to be fitted, got map %v", len(tc.fixture), toolMap)
+			}
+			if !tc.wantFit && len(toolMap) != 0 {
+				t.Fatalf("expected %d-char name to be left alone, got map %v", len(tc.fixture), toolMap)
+			}
+			if !tc.wantFit && string(got) != string(body) {
+				t.Errorf("body must be untouched at the limit, got: %s", got)
+			}
+		})
+	}
+}
