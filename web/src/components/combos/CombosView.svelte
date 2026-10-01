@@ -4,7 +4,6 @@
   import {
     clearJudgeModel,
     getComboModels,
-    isAutoFreeCombo,
     parseCapacityAdapterSettings,
     updateComboStrategy,
     updateJudgeModel,
@@ -63,8 +62,8 @@
   let showModelPicker = $state(false)
   let modelPickerTarget = $state<'combo' | 'vision' | 'audio' | 'judge'>('combo')
 
-  // Confirm Delete Modal state (upstream confirmState parity). Carries the
-  // ids to remove; the locked auto free-tier combo can never be in here.
+  // Confirm Delete Modal state (upstream confirmState parity). Carries the ids
+  // to remove.
   let confirmState = $state<{ name: string; ids: string[] } | null>(null)
 
   // Bulk-delete selection. Set re-created on every toggle so Svelte 5 sees the
@@ -72,19 +71,13 @@
   let selectedIds = $state<Set<string>>(new Set())
 
   function toggleSelect(combo: Combo) {
-    if (isAutoFreeCombo(combo)) return
     const next = new Set(selectedIds)
     if (next.has(combo.id)) next.delete(combo.id)
     else next.add(combo.id)
     selectedIds = next
   }
 
-  // Delete All still skips locked combos: the button count and the actual
-  // deletes must agree on what is removable.
-  let deletableCombos = $derived(llmCombos.filter((c) => !isAutoFreeCombo(c)))
-  let selectedDeletable = $derived(
-    deletableCombos.filter((c) => selectedIds.has(c.id))
-  )
+  let selectedDeletable = $derived(llmCombos.filter((c) => selectedIds.has(c.id)))
 
   function clearSelection() {
     selectedIds = new Set()
@@ -275,7 +268,7 @@
     clearSelection()
     onRefresh()
     if (deleted < ids.length) {
-      alert(`Deleted ${deleted} of ${ids.length} combo(s). Locked or failed combos were kept.`)
+      alert(`Deleted ${deleted} of ${ids.length} combo(s). The rest could not be removed.`)
     }
   }
 
@@ -288,10 +281,10 @@
   }
 
   function handleDeleteAll() {
-    if (deletableCombos.length === 0) return
+    if (llmCombos.length === 0) return
     confirmState = {
-      name: deletableCombos.map((c) => c.name).join(', '),
-      ids: deletableCombos.map((c) => c.id),
+      name: llmCombos.map((c) => c.name).join(', '),
+      ids: llmCombos.map((c) => c.id),
     }
   }
 
@@ -345,19 +338,6 @@
     }
   }
 
-  async function handleReorderCombo(combo: Combo, models: string[]) {
-    try {
-      await api.updateCombo(combo.id, {
-        name: combo.name,
-        kind: combo.kind ?? undefined,
-        models,
-      })
-      onRefresh()
-    } catch (e) {
-      console.error('Failed to reorder combo:', e)
-    }
-  }
-
 </script>
 
 <div class="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
@@ -368,7 +348,7 @@
     onAutoFreeClick={handleBuildAutoFree}
     {isBuildingAutoFree}
     selectedCount={selectedDeletable.length}
-    deletableCount={deletableCombos.length}
+    deletableCount={llmCombos.length}
     onDeleteSelected={handleDeleteSelected}
     onDeleteAll={handleDeleteAll}
   />
@@ -400,7 +380,6 @@
           onCopy={copyName}
           onEdit={openEditModal}
           onDelete={(c) => (confirmState = { name: c.name, ids: [c.id] })}
-          onReorder={handleReorderCombo}
           isSelected={selectedIds.has(combo.id)}
           onToggleSelect={toggleSelect}
         />

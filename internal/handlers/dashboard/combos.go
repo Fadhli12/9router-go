@@ -133,12 +133,6 @@ func (h *DashboardHandler) HandleUpdateCombo(w http.ResponseWriter, r *http.Requ
 	if kind == "" && existing.Kind != nil {
 		kind = *existing.Kind
 	}
-	if existing.Kind != nil && *existing.Kind == autoFreeComboKind {
-		if err := validateLockedReorder(existing, req, name, kind); err != nil {
-			handlerutil.WriteJSONError(w, http.StatusForbidden, err.Error())
-			return
-		}
-	}
 	modelsJSON := existing.Models
 	if req.Models != nil {
 		switch m := req.Models.(type) {
@@ -170,17 +164,22 @@ func (h *DashboardHandler) HandleUpdateCombo(w http.ResponseWriter, r *http.Requ
 }
 
 // autoFreeComboKind marks a combo that the dashboard auto-generates from the
-// registry's free-tier models. Such combos are locked: they can be reordered
-// (fallback order matters) but neither deleted nor edited by hand.
+// registry's free-tier models. The kind is informational: it tags the combo as
+// machine-generated so the card can badge it, and it is what Auto Free Tier
+// rewrites on every rebuild. It grants no lock — a generated combo is an
+// ordinary row that can be renamed, edited and deleted like any other, and
+// rebuilding after a delete recreates it.
 const autoFreeComboKind = "auto-free"
 
 // AutoFreeComboID is the stable id of the auto-generated free-tier combo.
 const AutoFreeComboID = "auto-free-tier"
 
 // HandleAutoFreeCombo handles POST /api/combos/auto-free.
-// (Re)builds the locked free-tier combo from registry models of providers the
-// user actually has a connection for, so the combo never references
-// unreachable providers.
+// (Re)builds the free-tier combo from registry models of providers the user
+// actually has a connection for, so the combo never references unreachable
+// providers. The write is an upsert on AutoFreeComboID, so rebuilding an
+// edited combo replaces the edits — which is why the rebuild is an explicit
+// button rather than something that happens on connection changes.
 func (h *DashboardHandler) HandleAutoFreeCombo(w http.ResponseWriter, r *http.Request) {
 	models, err := h.freeTierComboModels(r.Context())
 	if err != nil {
@@ -244,43 +243,6 @@ func (h *DashboardHandler) freeTierComboModels(ctx context.Context) ([]string, e
 	return out, nil
 }
 
-// validateLockedReorder allows only a pure permutation of the locked combo's
-// models: the dashboard may reorder the fallback chain, but the model set,
-// name and kind stay the provider's registry truth.
-func validateLockedReorder(existing *models.Combo, req struct {
-	Name     string `json:"name"`
-	Kind     string `json:"kind"`
-	Models   any    `json:"models"`
-	Strategy string `json:"strategy"`
-}, name, kind string) error {
-	if name != "" && name != existing.Name {
-		return fmt.Errorf("auto free-tier combo name is locked")
-	}
-	if kind != "" && kind != *existing.Kind {
-		return fmt.Errorf("auto free-tier combo kind is locked")
-	}
-
-	// A partial update (strategy only, no models field) leaves the model set
-	// untouched — the dashboard card's strategy dropdown works this way. Only a
-	// request that actually sends models must prove it is a pure permutation.
-	if req.Models == nil {
-		return nil
-	}
-
-	current, err := comboModels(existing.Models)
-	if err != nil {
-		return err
-	}
-	next, err := comboModels(req.Models)
-	if err != nil {
-		return err
-	}
-	if len(next) != len(current) || !sameModelSet(current, next) {
-		return fmt.Errorf("auto free-tier combo models are locked; reorder only")
-	}
-	return nil
-}
-
 // comboModels extracts the model id array of a combo's stored models field,
 // accepting either the raw JSON string or an already-decoded array value.
 func comboModels(v any) ([]string, error) {
@@ -312,35 +274,11 @@ func comboModels(v any) ([]string, error) {
 	}
 }
 
-// sameModelSet reports whether two arrays hold the same ids in any order.
-func sameModelSet(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	seen := make(map[string]int, len(a))
-	for _, id := range a {
-		seen[id]++
-	}
-	for _, id := range b {
-		if seen[id] == 0 {
-			return false
-		}
-		seen[id]--
-	}
-	return true
-}
-
 // HandleDeleteCombo handles DELETE /api/combos/{id}.
-// Deletes combo, unless it is the locked auto free-tier combo.
 func (h *DashboardHandler) HandleDeleteCombo(w http.ResponseWriter, r *http.Request) {
 	id := getURLParam(r, "id")
 	if id == "" {
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing combo id")
-		return
-	}
-
-	if combo, _ := h.Repo.GetComboById(id); combo != nil && combo.Kind != nil && *combo.Kind == autoFreeComboKind {
-		handlerutil.WriteJSONError(w, http.StatusForbidden, "auto free-tier combo is locked")
 		return
 	}
 
