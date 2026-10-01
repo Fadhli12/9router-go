@@ -40,6 +40,8 @@ func (h *ChatHandler) handleAccountFallback(
 	endpoint string,
 ) error {
 	body = repairToolCallIDsInJSON(body)
+	prefixHash := computePrefixHash(body)
+
 	if pinnedConnectionID != "" {
 		connObj, connData, err := h.getBestConnection(provider, pinnedConnectionID, nil, model)
 		if err != nil {
@@ -50,6 +52,7 @@ func (h *ChatHandler) handleAccountFallback(
 			Ctx: ctx, W: w, Provider: provider, Model: model,
 			ConnectionID: connObj.ID, ConnData: connData, Body: body,
 			IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
+			PrefixHash: prefixHash,
 		})
 	}
 
@@ -70,6 +73,7 @@ func (h *ChatHandler) handleAccountFallback(
 				Ctx: ctx, W: w, Provider: provider, Model: model,
 				ConnectionID: "default", ConnData: &ConnectionData{APIKey: apiKey, ProxyPoolID: proxyPoolID}, Body: body,
 				IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
+				PrefixHash: prefixHash,
 			})
 		}
 		return fmt.Errorf("no active connections for provider: %s", provider)
@@ -93,7 +97,7 @@ func (h *ChatHandler) handleAccountFallback(
 				}
 			}
 			if strat.RotateStrategy != "" && strat.RotateStrategy != "none" {
-				allConns = h.applyConnectionStrategy(allConns, strat)
+				allConns = h.applyConnectionStrategy(allConns, strat, prefixHash)
 			}
 		}
 	}
@@ -122,6 +126,7 @@ func (h *ChatHandler) handleAccountFallback(
 			Ctx: ctx, W: w, Provider: provider, Model: model,
 			ConnectionID: c.ID, ConnData: connData, Body: body,
 			IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
+			PrefixHash: prefixHash,
 		}); err == nil {
 			return nil
 		} else {
@@ -212,14 +217,17 @@ type forwardRequestParams struct {
 	IsStream          bool
 	TranslateResponse bool
 	Endpoint          string
+	PrefixHash        string
 }
 
 func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
+	startTime := time.Now()
 	ctx, w := f.Ctx, f.W
 	provider, model := f.Provider, f.Model
 	connectionID, connData := f.ConnectionID, f.ConnData
 	body, isStream := f.Body, f.IsStream
 	translateResponse, endpoint := f.TranslateResponse, f.Endpoint
+	prefixHash := f.PrefixHash
 	ctx = translator.WithUsageCapture(ctx)
 
 	providerCfg, err := h.getProviderConfig(provider, connData)
@@ -358,7 +366,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	} else if err != nil {
 		log.Warn("fallback", "sanitize failed", "provider", provider, "model", model, "error", err)
 	}
-	start := time.Now()
+	start := startTime
 	metrics := &streamMetrics{}
 	var fwdErr error
 
@@ -532,6 +540,10 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			Endpoint:     endpoint,
 		}
 		h.logUsage(logInfo, usage, latencyMs, body, metrics)
+		GlobalAdaptiveRouter.RecordSuccess(connectionID, time.Since(startTime))
+		if prefixHash != "" {
+			SetPromptCacheAffinity(prefixHash, connectionID)
+		}
 		fwdErr = nil
 		return nil
 	}
@@ -556,6 +568,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		body,
 		metrics,
 	)
+	GlobalAdaptiveRouter.RecordFailure(connectionID, !providers.RetryableStatusCodes[statusCode])
 	if isClientCanceled(ctx, fwdErr) {
 		log.Info("fallback", "client canceled request", "provider", provider, "model", model, "conn", connectionID)
 	} else if projectProbeCached(connectionID) {

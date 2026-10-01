@@ -156,10 +156,11 @@ func (h *ChatHandler) getBestConnection(provider string, connectionID string, ex
 					strat.StickyLimit = settings.StickyRoundRobinLimit
 				}
 			}
-			if strat.RotateStrategy != "" && strat.RotateStrategy != "none" {
-				connections = h.applyConnectionStrategy(connections, strat)
-			}
+		if strat.RotateStrategy != "" && strat.RotateStrategy != "none" {
+			connections = h.applyConnectionStrategy(connections, strat, "")
 		}
+	}
+
 
 		excludeSet := make(map[string]bool, len(excludeIDs))
 		for _, id := range excludeIDs {
@@ -514,12 +515,29 @@ func canonicalLockModel(provider, model string) string {
 
 // ApplyConnectionStrategy rotates candidate connections according to the provider's configured strategy.
 func (h *ChatHandler) ApplyConnectionStrategy(conns []*models.ProviderConnection, strat db.ProviderStrategy) []*models.ProviderConnection {
-	return h.applyConnectionStrategy(conns, strat)
+	return h.applyConnectionStrategy(conns, strat, "")
 }
 
-func (h *ChatHandler) applyConnectionStrategy(conns []*models.ProviderConnection, strat db.ProviderStrategy) []*models.ProviderConnection {
+func (h *ChatHandler) applyConnectionStrategy(conns []*models.ProviderConnection, strat db.ProviderStrategy, prefixHash string) []*models.ProviderConnection {
 	if len(conns) <= 1 {
 		return conns
+	}
+
+	if prefixHash != "" {
+		if targetID, ok := GetPromptCacheAffinity(prefixHash); ok {
+			for i, c := range conns {
+				if c != nil && c.ID == targetID {
+					if i != 0 {
+						reordered := make([]*models.ProviderConnection, 0, len(conns))
+						reordered = append(reordered, conns[i])
+						reordered = append(reordered, conns[:i]...)
+						reordered = append(reordered, conns[i+1:]...)
+						conns = reordered
+					}
+					break
+				}
+			}
+		}
 	}
 
 	switch strings.ToLower(strings.TrimSpace(strat.RotateStrategy)) {

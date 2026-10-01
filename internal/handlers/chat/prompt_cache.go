@@ -77,6 +77,16 @@ func GetPromptCacheAffinity(prefixHash string) (string, bool) {
 	return entry.connectionID, true
 }
 
+func computePrefixHash(body []byte) string {
+	var req struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil || len(req.Messages) == 0 {
+		return ""
+	}
+	return AnalyzePromptPrefix(req.Messages).PrefixHash
+}
+
 // AnalyzePromptPrefix inspects messages to compute a stable SHA-256 hash
 // of the static prompt prefix (system messages, tools, initial turn).
 func AnalyzePromptPrefix(messages []map[string]any) PromptPrefixAnalysis {
