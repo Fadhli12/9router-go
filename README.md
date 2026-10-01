@@ -87,6 +87,24 @@ irm https://raw.githubusercontent.com/luqman-v1/9router-go/main/install.ps1 | ie
 ```
 > Already use upstream 9Router? Point Go at the same data dir — it opens the **same `DATA_DIR/db/data.sqlite`**: providers, connections, combos, and usage carry over. Details in [`DATABASE.md`](DATABASE.md).
 
+**Keep the terminal free (background mode):**
+
+```bash
+9router-go start          # same as: 9router-go --background   (or -d)
+9router-go status         # is it running? (pid, dashboard, log)
+9router-go restart        # replace the running daemon
+9router-go logs -n 100    # tail the background log
+9router-go stop           # stop it
+```
+
+The detached process records itself in `DATA_DIR/run/gateway.pid` and writes its
+output to `DATA_DIR/run/gateway.log`. A second `start` while one is running
+refuses instead of fighting over the port, and a daemon killed from Task Manager
+leaves nothing behind: the stale pid file is cleaned on the next command.
+> Windows stops the process with `TerminateProcess` instead of `SIGTERM`, so
+> stopping skips the graceful drain; use the dashboard's Shutdown button or
+> `9router-go restart` when you want in-flight streams to finish first.
+
 **2. Connect a FREE provider (no signup needed):**
 
 Dashboard → Providers → Connect **Kiro AI** (~50 credits/month free) or **OpenCode Free** (no auth) → Done!
