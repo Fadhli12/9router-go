@@ -3,19 +3,9 @@
 
   interface Props {
     onCreateClick: () => void
-    selectedCount?: number
-    deletableCount?: number
-    onDeleteSelected?: () => void
-    onDeleteAll?: () => void
   }
 
-  let {
-    onCreateClick,
-    selectedCount = 0,
-    deletableCount = 0,
-    onDeleteSelected,
-    onDeleteAll,
-  }: Props = $props()
+  let { onCreateClick }: Props = $props()
 </script>
 
 <div class="flex flex-col gap-4">
@@ -38,9 +28,9 @@
     </ul>
   </div>
 
-  <!-- One wrapping toolbar instead of a five-row column. Create stays primary and
-       always first; the destructive pair is pushed to the far end so Delete All
-       (which wipes every combo) can never sit next to a plain selection control. -->
+  <!-- Upstream parity: the header carries one control. Bulk actions live in the
+       selection bar next to the combos, so a destructive button never sits
+       permanently beside Create. -->
   <div
     class="flex flex-wrap items-center gap-2 border-t border-border pt-4"
     role="group"
@@ -49,34 +39,5 @@
     <Button icon="add" size="sm" onclick={onCreateClick} class="whitespace-nowrap">
       Create Combo
     </Button>
-    {#if onDeleteSelected}
-      <span class="flex-1"></span>
-      <Button
-        icon="delete"
-        size="sm"
-        onclick={onDeleteSelected}
-        disabled={selectedCount === 0}
-        variant="ghost"
-        title={selectedCount === 0
-          ? 'Select at least one combo first'
-          : `Delete ${selectedCount} selected combo(s)`}
-        class="whitespace-nowrap"
-      >
-        {selectedCount > 0 ? `Delete Selected (${selectedCount})` : 'Delete Selected'}
-      </Button>
-    {/if}
-    {#if onDeleteAll}
-      <Button
-        icon="delete_forever"
-        size="sm"
-        onclick={onDeleteAll}
-        disabled={deletableCount === 0}
-        variant="danger"
-        title={`Delete all ${deletableCount} deletable combo(s)`}
-        class="whitespace-nowrap"
-      >
-        Delete All ({deletableCount})
-      </Button>
-    {/if}
   </div>
 </div>

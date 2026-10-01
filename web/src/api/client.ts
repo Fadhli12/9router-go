@@ -661,15 +661,6 @@ export const api = {
     request<{ success: boolean }>(`/api/combos/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     }),
-  /**
-   * (Re)build the generated free-tier combo from the registry's free chat
-   * models of connected providers. Reached from the combo card's own Rebuild
-   * button — the upsert overwrites whatever the combo holds.
-   */
-  buildAutoFreeCombo: () =>
-    request<{ status: string; id: string; models: string[] }>('/api/combos/auto-free', {
-      method: 'POST',
-    }),
 
   // API Keys
   getApiKeys: () => request<APIKey[]>('/api/keys'),

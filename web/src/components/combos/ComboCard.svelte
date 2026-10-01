@@ -6,7 +6,6 @@
     Gavel,
     Layers,
     Pencil,
-    RefreshCw,
     Sparkles,
     Trash2,
     Wand2,
@@ -35,9 +34,6 @@
     onEdit: (combo: Combo) => void
     onDelete: (combo: Combo) => void
     isSelected?: boolean
-    /** Provided only for combos an "Auto …" header action regenerates. */
-    onRebuild?: () => void
-    rebuilding?: boolean
     onToggleSelect?: (combo: Combo) => void
   }
 
@@ -52,8 +48,6 @@
     onEdit,
     onDelete,
     isSelected = false,
-    onRebuild,
-    rebuilding = false,
     onToggleSelect,
   }: Props = $props()
 
@@ -157,7 +151,7 @@
       </div>
 
       <!-- Icon buttons with labels -->
-      <div class="grid gap-1 sm:flex sm:items-center {onRebuild ? 'grid-cols-4' : 'grid-cols-3'}">
+      <div class="grid grid-cols-3 gap-1 sm:flex sm:items-center">
         <button
           type="button"
           onclick={() => onCopy(combo.name, combo.id)}
@@ -182,19 +176,6 @@
           <Pencil class="w-4 h-4" />
           <span class="text-[10px] leading-tight">Edit</span>
         </button>
-
-        {#if onRebuild}
-        <button
-          type="button"
-          onclick={onRebuild}
-          disabled={rebuilding}
-          class="flex flex-col items-center justify-center rounded px-2.5 py-1 text-text-muted transition-colors hover:bg-black/5 dark:hover:bg-white/5 hover:text-brand-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-          title="Rebuild from the free-tier models of your connected providers"
-        >
-          <RefreshCw class="w-4 h-4 {rebuilding ? 'animate-spin' : ''}" />
-          <span class="text-[10px] leading-tight">{rebuilding ? 'Working…' : 'Rebuild'}</span>
-        </button>
-        {/if}
 
         <button
           type="button"
