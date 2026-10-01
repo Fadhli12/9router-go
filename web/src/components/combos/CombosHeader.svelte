@@ -3,10 +3,6 @@
 
   interface Props {
     onCreateClick: () => void
-    onAutoFamilyClick?: () => void
-    isBuildingAutoFamily?: boolean
-    onAutoFreeClick?: () => void
-    isBuildingAutoFree?: boolean
     selectedCount?: number
     deletableCount?: number
     onDeleteSelected?: () => void
@@ -15,10 +11,6 @@
 
   let {
     onCreateClick,
-    onAutoFamilyClick,
-    isBuildingAutoFamily = false,
-    onAutoFreeClick,
-    isBuildingAutoFree = false,
     selectedCount = 0,
     deletableCount = 0,
     onDeleteSelected,
@@ -47,9 +39,8 @@
   </div>
 
   <!-- One wrapping toolbar instead of a five-row column. Create stays primary and
-       always first; the two auto builders sit next to it; the destructive pair is
-       pushed to the far end so Delete All (which wipes every combo) can never sit
-       next to a plain selection control. -->
+       always first; the destructive pair is pushed to the far end so Delete All
+       (which wipes every combo) can never sit next to a plain selection control. -->
   <div
     class="flex flex-wrap items-center gap-2 border-t border-border pt-4"
     role="group"
@@ -58,32 +49,6 @@
     <Button icon="add" size="sm" onclick={onCreateClick} class="whitespace-nowrap">
       Create Combo
     </Button>
-    {#if onAutoFamilyClick}
-      <Button
-        icon="hub"
-        size="sm"
-        onclick={onAutoFamilyClick}
-        disabled={isBuildingAutoFamily}
-        variant="outline"
-        title="Create one combo per model family from your connected providers"
-        class="whitespace-nowrap"
-      >
-        {isBuildingAutoFamily ? 'Grouping…' : 'Auto Group by Model'}
-      </Button>
-    {/if}
-    {#if onAutoFreeClick}
-      <Button
-        icon="auto_awesome"
-        size="sm"
-        onclick={onAutoFreeClick}
-        disabled={isBuildingAutoFree}
-        variant="outline"
-        title="Build the locked free-tier combo from the providers you are connected to"
-        class="whitespace-nowrap"
-      >
-        {isBuildingAutoFree ? 'Building…' : 'Auto Free Tier'}
-      </Button>
-    {/if}
     {#if onDeleteSelected}
       <span class="flex-1"></span>
       <Button

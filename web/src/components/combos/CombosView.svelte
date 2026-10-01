@@ -292,9 +292,10 @@
 
   // Rebuilding is an upsert: it replaces the combo's name, models and strategy
   // with what the registry currently offers, so edits made since the last
-  // build are discarded. That is why it is an explicit button, offered both in
-  // the header and on the generated card itself.
-  async function handleBuildAutoFree(origin: 'header' | 'card' = 'header') {
+  // build are discarded. It is reached from the combo's own Rebuild button
+  // rather than from the header, so the card that will be overwritten is the
+  // one you press it on.
+  async function handleRebuildAutoFree() {
     if (isBuildingAutoFree) return
     isBuildingAutoFree = true
     try {
@@ -302,9 +303,7 @@
       onRefresh()
     } catch (e) {
       alert(
-        (origin === 'card'
-          ? 'Failed to rebuild the free-tier combo: '
-          : 'Failed to build auto free-tier combo: ') +
+        'Failed to rebuild the free-tier combo: ' +
           (e instanceof Error ? e.message : String(e))
       )
     } finally {
@@ -312,45 +311,12 @@
     }
   }
 
-  let isBuildingAutoFamily = $state(false)
-
-  async function handleBuildAutoFamily() {
-    isBuildingAutoFamily = true
-    try {
-      const res = await api.buildAutoFamilyCombos()
-      if (res.count === 0) {
-        alert(
-          'No usable model families found. Add connections for providers with chat models, or enable disabled models.'
-        )
-      } else {
-        // A wide catalog yields dozens of families; show the head of the list
-        // rather than a wall of names.
-        const shown = res.created.slice(0, 8)
-        const extra = res.created.length - shown.length
-        alert(
-          `Grouped into ${res.count} combo(s): ${shown.join(', ')}` +
-            (extra > 0 ? ` (+${extra} more)` : '')
-        )
-      }
-      onRefresh()
-    } catch (e) {
-      alert(
-        'Failed to auto-group combos: ' + (e instanceof Error ? e.message : String(e))
-      )
-    } finally {
-      isBuildingAutoFamily = false
-    }
-  }
 
 </script>
 
 <div class="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
   <CombosHeader
     onCreateClick={openCreateModal}
-    onAutoFamilyClick={handleBuildAutoFamily}
-    {isBuildingAutoFamily}
-    onAutoFreeClick={() => handleBuildAutoFree('header')}
-    {isBuildingAutoFree}
     selectedCount={selectedDeletable.length}
     deletableCount={llmCombos.length}
     onDeleteSelected={handleDeleteSelected}
@@ -385,7 +351,7 @@
           onEdit={openEditModal}
           onDelete={(c) => (confirmState = { name: c.name, ids: [c.id] })}
           isSelected={selectedIds.has(combo.id)}
-          onRebuild={combo.kind === 'auto-free' ? () => handleBuildAutoFree('card') : undefined}
+          onRebuild={combo.kind === 'auto-free' ? handleRebuildAutoFree : undefined}
           rebuilding={isBuildingAutoFree}
           onToggleSelect={toggleSelect}
         />
