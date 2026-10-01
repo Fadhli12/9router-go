@@ -3,6 +3,9 @@
 package proc
 
 import (
+	"bytes"
+	"fmt"
+	"os"
 	"path/filepath"
 	"syscall"
 	"time"
@@ -14,9 +17,22 @@ func pidAlive(pid int) bool {
 		return false
 	}
 	err := syscall.Kill(pid, 0)
-	return err == nil || err == syscall.EPERM
+	if err != nil {
+		return err == syscall.EPERM
+	}
+	// On Linux, a terminated child process lingers as a zombie in the process
+	// table until wait() is called, but syscall.Kill(pid, 0) still returns nil.
+	// Inspect /proc/<pid>/stat when available so zombie state reads as dead.
+	if data, rerr := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); rerr == nil {
+		if idx := bytes.LastIndexByte(data, ')'); idx != -1 && idx+2 < len(data) {
+			state := data[idx+2]
+			if state == 'Z' || state == 'X' {
+				return false
+			}
+		}
+	}
+	return true
 }
-
 // requestStop sends SIGTERM, the port's "drain in-flight work and exit" signal.
 func requestStop(pid int) error {
 	return syscall.Kill(pid, syscall.SIGTERM)

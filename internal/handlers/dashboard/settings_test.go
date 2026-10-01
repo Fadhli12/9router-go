@@ -281,6 +281,60 @@ func TestHandleExportImportDatabase_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestHandleExportImportDatabase_ZipFormat(t *testing.T) {
+	repo, cleanup := setupSettingsTestDB(t)
+	defer cleanup()
+	router := setupTestRouter(repo)
+
+	// Seed initial data
+	if _, err := repo.RawDB().Exec(
+		`INSERT INTO providerConnections (id, provider, authType, isActive, priority, data, createdAt, updatedAt)
+		 VALUES ('conn-zip', 'deepseek', 'apikey', 1, 1, '{"apiKey":"sk-zip","model":"deepseek-chat"}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+	); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+
+	// Export with format=zip
+	req := httptest.NewRequest(http.MethodGet, "/api/settings/database?format=zip", nil)
+	req.Header.Set(cliTokenHeader, auth.CLIToken())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export zip failed: %d %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/zip" {
+		t.Errorf("expected Content-Type application/zip, got %q", ct)
+	}
+	zipBytes := rec.Body.Bytes()
+	if len(zipBytes) < 4 || zipBytes[0] != 'P' || zipBytes[1] != 'K' {
+		t.Fatalf("expected zip signature PK, got %v", zipBytes[:4])
+	}
+
+	// Wipe
+	if _, err := repo.RawDB().Exec(`DELETE FROM providerConnections`); err != nil {
+		t.Fatalf("wipe failed: %v", err)
+	}
+
+	// Import the zip archive
+	req = httptest.NewRequest(http.MethodPost, "/api/settings/database", bytes.NewReader(zipBytes))
+	req.Header.Set(cliTokenHeader, auth.CLIToken())
+	req.Header.Set("Content-Type", "application/zip")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("import zip failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify restored
+	var data string
+	if err := repo.RawDB().QueryRow(`SELECT data FROM providerConnections WHERE id='conn-zip'`).Scan(&data); err != nil {
+		t.Fatalf("query restored connection: %v", err)
+	}
+	if !strings.Contains(data, "sk-zip") {
+		t.Errorf("expected restored connection with sk-zip, got %s", data)
+	}
+}
+
 // The backup file lands in the user's Downloads folder and gets shared like
 // any other file, so credentials must not travel in it: the dashboard
 // password hash and the live OIDC client secret are stripped, while ordinary

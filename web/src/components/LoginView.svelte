@@ -122,13 +122,15 @@
     errorMessage = ''
 
     try {
-      await api.patchSettings({ currentPassword: password, newPassword })
-      sessionStorage.setItem('9router_auth', 'true')
-      localStorage.setItem('9router_auth', 'true')
-      if (onSuccess) {
-        onSuccess()
+      const res = await api.login(password, newPassword)
+      if (res.success) {
+        if (onSuccess) {
+          onSuccess()
+        } else {
+          window.location.assign('/dashboard')
+        }
       } else {
-        window.location.assign('/dashboard')
+        errorMessage = res.error || 'Failed to set password'
       }
     } catch (err: unknown) {
       errorMessage = err instanceof Error ? err.message : 'Failed to set password'

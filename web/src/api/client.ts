@@ -1118,11 +1118,11 @@ export const api = {
     } catch {}
     return { requireLogin: false }
   },
-  login: async (password: string): Promise<LoginResponse> => {
+  login: async (password: string, newPassword?: string): Promise<LoginResponse> => {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ password, ...(newPassword ? { newPassword } : {}) }),
     })
     if (res.ok) {
       const data = await res.json()

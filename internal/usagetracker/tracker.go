@@ -138,6 +138,8 @@ func (t *Tracker) TrackPending(model, provider, connectionID string, started boo
 
 // PushRecent adds a completed request to the ring buffer and notifies subscribers.
 func (t *Tracker) PushRecent(req RecentRequest, repo *db.Repo) {
+	t.ensureRingInitialized(repo)
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -151,8 +153,39 @@ func (t *Tracker) PushRecent(req RecentRequest, repo *db.Repo) {
 	t.scheduleBroadcastLocked(repo)
 }
 
+func (t *Tracker) ensureRingInitialized(repo *db.Repo) {
+	if repo == nil {
+		return
+	}
+	t.mu.RLock()
+	initialized := t.ringInitialized
+	t.mu.RUnlock()
+	if initialized {
+		return
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.ringInitialized {
+		return
+	}
+	t.ringInitialized = true
+	if rows, err := repo.GetRecentUsageHistory(ringCap); err == nil {
+		seeded := make([]RecentRequest, 0, len(rows))
+		for _, rh := range rows {
+			seeded = append(seeded, recentFromHistoryRow(rh))
+		}
+		t.recentRing = append(t.recentRing, seeded...)
+		if len(t.recentRing) > ringCap {
+			t.recentRing = t.recentRing[:ringCap]
+		}
+	}
+}
+
 // GetActiveState computes the current active state for SSE streaming.
 func (t *Tracker) GetActiveState(repo *db.Repo) StreamPayload {
+	t.ensureRingInitialized(repo)
+
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -160,26 +193,6 @@ func (t *Tracker) GetActiveState(repo *db.Repo) StreamPayload {
 }
 
 func (t *Tracker) buildPayloadLocked(repo *db.Repo) StreamPayload {
-	// Seed the in-memory ring from DB history once (upstream ensureRingInitialized).
-	// Without it a fresh process streams a ring holding only post-restart rows,
-	// so the first request after restart shrinks the dashboard list from the
-	// DB-backed 20 rows to 1 until the ring refills.
-	if !t.ringInitialized && repo != nil {
-		t.ringInitialized = true
-		if rows, err := repo.GetRecentUsageHistory(ringCap); err == nil {
-			seeded := make([]RecentRequest, 0, len(rows))
-			for _, rh := range rows {
-				seeded = append(seeded, recentFromHistoryRow(rh))
-			}
-			// Keep any rows pushed while the query was in flight ahead of the
-			// seed; the ring is newest-first, DB rows are already newest-first.
-			t.recentRing = append(t.recentRing, seeded...)
-			if len(t.recentRing) > ringCap {
-				t.recentRing = t.recentRing[:ringCap]
-			}
-		}
-	}
-
 	// Build connection name map
 	connMap := make(map[string]string)
 	if repo != nil {
@@ -339,6 +352,7 @@ func (t *Tracker) scheduleBroadcastLocked(repo *db.Repo) {
 	}
 
 	t.broadcastDebounce = time.AfterFunc(50*time.Millisecond, func() {
+		t.ensureRingInitialized(repo)
 		t.mu.RLock()
 		payload := t.buildPayloadLocked(repo)
 		b, err := json.Marshal(payload)

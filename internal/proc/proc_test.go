@@ -17,9 +17,11 @@ func longLivedPID(t *testing.T) int {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start helper: %v", err)
 	}
+	go func() {
+		_ = cmd.Wait()
+	}()
 	t.Cleanup(func() {
 		_ = ForceKill(cmd.Process.Pid)
-		_, _ = cmd.Process.Wait()
 	})
 	return cmd.Process.Pid
 }

@@ -1,3 +1,8 @@
+<script module lang="ts">
+  import type { ResolvedPickerExtras } from './pickerExtras'
+  let cachedPickerExtras: ResolvedPickerExtras | null = null
+</script>
+
 <script lang="ts">
   import { Info, Search, X } from 'lucide-svelte'
   import { api, type Combo, type ProviderConnection, type ProviderNode } from '../../api/client'
@@ -43,7 +48,7 @@
   }: Props = $props()
 
   let searchQuery = $state('')
-  let fetchedExtras = $state<ResolvedPickerExtras>(EMPTY_PICKER_EXTRAS)
+  let fetchedExtras = $state<ResolvedPickerExtras>(cachedPickerExtras ?? EMPTY_PICKER_EXTRAS)
 
   $effect(() => {
     if (isOpen) {
@@ -52,7 +57,10 @@
       // passthrough + custom-node rows; customs/disabled complete the merge.
       // One batch, one write: three chained fetches each published their own
       // $state and rebuilt the whole pill list on every settle (#61).
-      void loadPickerExtras(api).then((extras) => (fetchedExtras = extras))
+      void loadPickerExtras(api).then((extras) => {
+        cachedPickerExtras = extras
+        fetchedExtras = extras
+      })
     }
   })
 

@@ -225,29 +225,24 @@
     isDownloadingBackup = true
     const password = dbPassword
     try {
-      const res = await fetch('/api/settings/database', {
+      const res = await fetch('/api/settings/database?format=zip', {
         headers: { ...getAuthHeaders(), 'x-9r-password': password },
       })
       if (!res.ok) {
-        // This route is always-protected, so the middleware answers a
-        // sessionless request with the nested {"error":{...}} envelope rather
-        // than the handler's flat {"error":"..."}. responseErrorMessage unwraps
-        // both; reading `data.error` alone stringifies the envelope to
-        // "[object Object]".
         throw new Error(await responseErrorMessage(res, 'Failed to export database'))
       }
-      const payload = await res.json()
-      const content = JSON.stringify(payload, null, 2)
-      const blob = new Blob([content], { type: 'application/json' })
+      const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       const stamp = new Date().toISOString().replace(/[.:]/g, '-')
       a.href = url
-      a.download = `9router-backup-${stamp}.json`
+      a.download = `9router-backup-${stamp}.zip`
       document.body.appendChild(a)
       a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
+      setTimeout(() => {
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+      }, 1000)
     } catch (err) {
       alert(`Failed to download backup: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
@@ -278,18 +273,27 @@
     const password = dbPassword
     isImportingBackup = true
     try {
-      const raw = await file.text()
-      const payload = JSON.parse(raw)
-
-      const res = await fetch('/api/settings/database', {
-        method: 'POST',
-        headers: { ...getAuthHeaders(), 'x-9r-password': password },
-        body: JSON.stringify(payload),
-      })
+      let res: Response
+      const isZip = file.name.endsWith('.zip') || file.type === 'application/zip'
+      if (isZip) {
+        const buffer = await file.arrayBuffer()
+        res = await fetch('/api/settings/database', {
+          method: 'POST',
+          headers: { ...getAuthHeaders(), 'x-9r-password': password, 'Content-Type': 'application/zip' },
+          body: buffer,
+        })
+      } else {
+        const raw = await file.text()
+        const payload = JSON.parse(raw)
+        res = await fetch('/api/settings/database', {
+          method: 'POST',
+          headers: { ...getAuthHeaders(), 'x-9r-password': password, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+      }
       if (!res.ok) {
         throw new Error(await responseErrorMessage(res, 'Failed to import database'))
       }
-
       alert('Database backup imported successfully! Reloading page...')
       window.location.reload()
     } catch (err) {
@@ -386,7 +390,7 @@
 
           <input
             type="file"
-            accept=".json"
+            accept=".zip,.json,application/zip,application/json"
             bind:this={fileInput}
             onchange={handleFileSelected}
             class="hidden"
@@ -726,7 +730,7 @@
         <p class="text-text-muted">
           {pendingImportFile
             ? `Import "${pendingImportFile.name}"? This will overwrite existing server data.`
-            : 'Download a full backup of the dashboard database?'}
+            : 'Download a full backup of the dashboard database (.zip archive)?'}
         </p>
         <Input
           type="password"
