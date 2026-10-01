@@ -17,7 +17,7 @@ import (
 // Refresh when expiry is within 30 minutes (upstream BACKGROUND_REFRESH_LEAD_MS parity).
 const (
 	backgroundRefreshLead     = 30 * time.Minute
-	backgroundRefreshInterval = 5 * time.Minute
+	backgroundRefreshInterval = 2 * time.Minute
 	backgroundInitialDelay    = 10 * time.Second
 	backgroundNormalDelay     = 1500 * time.Millisecond
 	backgroundSensitiveDelay  = 12 * time.Second
