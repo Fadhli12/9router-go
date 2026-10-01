@@ -290,17 +290,21 @@
 
   let isBuildingAutoFree = $state(false)
 
-  async function handleBuildAutoFree() {
+  // Rebuilding is an upsert: it replaces the combo's name, models and strategy
+  // with what the registry currently offers, so edits made since the last
+  // build are discarded. That is why it is an explicit button, offered both in
+  // the header and on the generated card itself.
+  async function handleBuildAutoFree(origin: 'header' | 'card' = 'header') {
+    if (isBuildingAutoFree) return
     isBuildingAutoFree = true
     try {
-      const res = await api.buildAutoFreeCombo()
-      if (res.models.length === 0) {
-        alert('No free-tier models found among providers you have connections for.')
-      }
+      await api.buildAutoFreeCombo()
       onRefresh()
     } catch (e) {
       alert(
-        'Failed to build auto free-tier combo: ' +
+        (origin === 'card'
+          ? 'Failed to rebuild the free-tier combo: '
+          : 'Failed to build auto free-tier combo: ') +
           (e instanceof Error ? e.message : String(e))
       )
     } finally {
@@ -345,7 +349,7 @@
     onCreateClick={openCreateModal}
     onAutoFamilyClick={handleBuildAutoFamily}
     {isBuildingAutoFamily}
-    onAutoFreeClick={handleBuildAutoFree}
+    onAutoFreeClick={() => handleBuildAutoFree('header')}
     {isBuildingAutoFree}
     selectedCount={selectedDeletable.length}
     deletableCount={llmCombos.length}
@@ -381,6 +385,8 @@
           onEdit={openEditModal}
           onDelete={(c) => (confirmState = { name: c.name, ids: [c.id] })}
           isSelected={selectedIds.has(combo.id)}
+          onRebuild={combo.kind === 'auto-free' ? () => handleBuildAutoFree('card') : undefined}
+          rebuilding={isBuildingAutoFree}
           onToggleSelect={toggleSelect}
         />
       {/each}

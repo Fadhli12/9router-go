@@ -6,6 +6,7 @@ import (
 	json "encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"9router/proxy/internal/db"
@@ -14,13 +15,14 @@ import (
 )
 
 // seedConnection inserts one providerConnections row so the auto free-tier
-// combo has a reachable provider to draw models from.
+// combo has a reachable provider to draw models from. The id is derived from
+// the provider so a test can seed several providers without a key collision.
 func seedConnection(t *testing.T, db *sql.DB, provider string) {
 	t.Helper()
 	if _, err := db.Exec(
 		`INSERT INTO providerConnections (id, provider, authType, name, data, createdAt, updatedAt)
-		 VALUES ('c1', ?, 'api-key', 'test', '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
-		provider,
+		 VALUES ('c-' || ?, ?, 'api-key', 'test', '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+		provider, provider,
 	); err != nil {
 		t.Fatalf("seed connection: %v", err)
 	}
@@ -170,6 +172,38 @@ func TestAutoFreeComboEmptyWithoutConnections(t *testing.T) {
 	rec := postJSON(t, router, "/api/combos/auto-free", nil)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("no free models expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAutoFreeComboExcludesNonChatFreeModels(t *testing.T) {
+	repo, cleanup := setupTestDB(t)
+	defer cleanup()
+	router := setupTestRouter(repo)
+
+	// ":free" is a naming convention, not a service kind. openrouter's only
+	// free-suffixed registry model is the embedding one
+	// ("nvidia/llama-nemotron-embed-vl-1b-v2:free"), so a combo built from it
+	// alone must report nothing usable rather than a chat chain that cannot
+	// answer a single turn.
+	seedConnection(t, repo.RawDB(), "openrouter")
+	rec := postJSON(t, router, "/api/combos/auto-free", nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("embedding-only free models expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Adding a provider that does have a free chat model keeps the combo, and
+	// the embedding entry must not be in it.
+	seedConnection(t, repo.RawDB(), "bazaarlink")
+	rec = postJSON(t, router, "/api/combos/auto-free", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("auto-free expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	members, err := comboModels(mustCombo(t, repo, AutoFreeComboID).Models)
+	if err != nil {
+		t.Fatalf("comboModels: %v", err)
+	}
+	if want := []string{"bzl/auto:free"}; !slices.Equal(members, want) {
+		t.Errorf("combo members = %v, want %v (the embedding model must be excluded)", members, want)
 	}
 }
 

@@ -224,6 +224,13 @@ func (h *DashboardHandler) HandleAutoFreeCombo(w http.ResponseWriter, r *http.Re
 // freeTierComboModels returns "alias/model" ids for every free-tier registry
 // model of providers with at least one connection, ordered by provider alias
 // then model id so regenerating yields a stable, diffable list.
+//
+// The free-tier marker is a naming convention, not a service kind: ":free" /
+// "/free" / "-free" also lands on embedding, image, tts and stt models
+// (openrouter's "nvidia/llama-nemotron-embed-vl-1b-v2:free" is one). The
+// registry carries the real kind, so a combo that cannot serve a chat turn
+// never enters the fallback chain — same gate usableModelFamilies applies to
+// the auto-family combos.
 func (h *DashboardHandler) freeTierComboModels(ctx context.Context) ([]string, error) {
 	active, err := h.Repo.GetConnectedProviders(ctx)
 	if err != nil {
@@ -234,6 +241,9 @@ func (h *DashboardHandler) freeTierComboModels(ctx context.Context) ([]string, e
 	for providerID := range active {
 		for _, modelID := range providers.GetProviderModels(providerID) {
 			if !providers.IsFreeTierModel(modelID) {
+				continue
+			}
+			if kind := providers.GetProviderModelKind(providerID, modelID); kind != "" && kind != "llm" {
 				continue
 			}
 			out = append(out, providers.GetProviderAlias(providerID)+"/"+modelID)
