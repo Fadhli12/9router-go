@@ -6,6 +6,7 @@
   import Button from '../lib/ui/Button.svelte'
   import Input from '../lib/ui/Input.svelte'
   import { api, type Settings } from '../api/client'
+  import { copyToClipboard } from '../lib/clipboard'
 
   interface Props {
     settings?: Settings
@@ -399,8 +400,9 @@
     patchSetting({ ponytailLevel: levelId })
   }
 
-  function copyInstallCommand() {
-    navigator.clipboard.writeText('pip install "headroom-ai[proxy]"')
+  async function copyInstallCommand() {
+    const ok = await copyToClipboard('pip install "headroom-ai[proxy]"')
+    if (!ok) return
     copiedInstallCmd = true
     setTimeout(() => (copiedInstallCmd = false), 2000)
   }

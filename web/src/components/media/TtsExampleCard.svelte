@@ -4,6 +4,7 @@
   import { getModelKind, getModelsByProviderId } from '../../lib/models'
   import { TTS_PROVIDER_CONFIG } from '../../lib/ttsProviders'
   import Card from '../../lib/ui/Card.svelte'
+  import { copyToClipboard } from '../../lib/clipboard'
 
   interface Props {
     providerId: string
@@ -167,7 +168,8 @@
   })
 
   async function handleCopyCurl() {
-    await navigator.clipboard.writeText(curlSnippet)
+    const ok = await copyToClipboard(curlSnippet)
+    if (!ok) return
     copiedCurl = true
     setTimeout(() => { copiedCurl = false }, 2000)
   }

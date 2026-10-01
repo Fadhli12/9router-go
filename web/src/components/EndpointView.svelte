@@ -21,6 +21,7 @@
   import Card from '../lib/ui/Card.svelte'
   import Toggle from '../lib/ui/Toggle.svelte'
   import { api, type APIKey, type Settings, type TunnelStatusResponse } from '../api/client'
+  import { copyToClipboard } from '../lib/clipboard'
 
   interface Props {
     apiKeys?: APIKey[]
@@ -223,8 +224,9 @@
     }
   })
 
-  function copy(text: string, id: string) {
-    navigator.clipboard.writeText(text)
+  async function copy(text: string, id: string) {
+    const ok = await copyToClipboard(text)
+    if (!ok) return
     copiedId = id
     setTimeout(() => {
       if (copiedId === id) copiedId = null

@@ -19,6 +19,7 @@
   import ModelPickerModal from './ModelPickerModal.svelte'
   import CapacityAdapterSection from './CapacityAdapterSection.svelte'
   import ConfirmModal from '../../lib/ui/ConfirmModal.svelte'
+  import { copyToClipboard } from '../../lib/clipboard'
   interface Props {
     combos?: Combo[]
     connections?: ProviderConnection[]
@@ -122,8 +123,9 @@
     modalNameResetKey += 1
   })
 
-  function copyName(name: string, id: string) {
-    navigator.clipboard.writeText(name)
+  async function copyName(name: string, id: string) {
+    const ok = await copyToClipboard(name)
+    if (!ok) return
     copiedId = id
     setTimeout(() => {
       if (copiedId === id) copiedId = null

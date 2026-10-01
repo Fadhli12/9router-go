@@ -10,6 +10,7 @@
   import NoAuthProxyCard from './NoAuthProxyCard.svelte'
   import TtsExampleCard from './TtsExampleCard.svelte'
   import SttExampleCard from './SttExampleCard.svelte'
+  import { copyToClipboard } from '../../lib/clipboard'
 
   interface Props {
     provider: ProviderCatalogItem
@@ -255,9 +256,10 @@
     return `${p}/${rawModelId}`
   }
 
-  function handleCopyModel(id: string) {
+  async function handleCopyModel(id: string) {
     const full = resolveQualifiedModel(id)
-    navigator.clipboard.writeText(full)
+    const ok = await copyToClipboard(full)
+    if (!ok) return
     copiedModelId = id
     setTimeout(() => { copiedModelId = null }, 2000)
   }
@@ -465,8 +467,9 @@
     return `{\n  "title": "Example Domain",\n  "text": "Hello world..."\n}`
   })
 
-  function copyCurl() {
-    navigator.clipboard.writeText(exampleCurl)
+  async function copyCurl() {
+    const ok = await copyToClipboard(exampleCurl)
+    if (!ok) return
     copiedCurl = true
     setTimeout(() => { copiedCurl = false }, 2000)
   }

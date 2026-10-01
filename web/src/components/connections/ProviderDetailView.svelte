@@ -27,6 +27,7 @@
   } from '../../lib/oauth-handoff'
   import { getModelsByProviderId, PROVIDER_ID_TO_ALIAS } from '../../lib/models'
   import { notifyCustomModelsChanged } from '../../lib/customModels'
+  import { copyToClipboard } from '../../lib/clipboard'
   import {
     buildAvailableModels,
     fetchProviderModelsData,
@@ -1903,11 +1904,13 @@ function formatErrorText(err: unknown): string {
     }
   }
 
-  function copyAuthUrl() {
+  async function copyAuthUrl() {
     if (!oauthAuthUrl) return
-    navigator.clipboard.writeText(oauthAuthUrl)
-    copiedAuthUrl = true
-    setTimeout(() => (copiedAuthUrl = false), 2000)
+    const ok = await copyToClipboard(oauthAuthUrl)
+    if (ok) {
+      copiedAuthUrl = true
+      setTimeout(() => (copiedAuthUrl = false), 2000)
+    }
   }
 
   async function submitManualCallback() {
@@ -2175,12 +2178,14 @@ function formatErrorText(err: unknown): string {
   }
 
   // Model actions
-  function copyModelId(modelId: string) {
+  async function copyModelId(modelId: string) {
     const level = resolveThinkingSuffix(modelId)
     const full = `${storageAlias}/${modelId}${level ? `(${level})` : ''}`
-    navigator.clipboard.writeText(full)
-    copiedModelId = modelId
-    setTimeout(() => (copiedModelId = null), 2000)
+    const ok = await copyToClipboard(full)
+    if (ok) {
+      copiedModelId = modelId
+      setTimeout(() => (copiedModelId = null), 2000)
+    }
   }
 
   async function testModel(modelId: string, silent = false) {
@@ -2402,10 +2407,12 @@ function formatErrorText(err: unknown): string {
     }
   }
 
-  function copyCompatibleModel(modelId: string) {
-    navigator.clipboard.writeText(`${displayAlias()}/${modelId}`)
-    copiedModelId = modelId
-    setTimeout(() => (copiedModelId = null), 2000)
+  async function copyCompatibleModel(modelId: string) {
+    const ok = await copyToClipboard(`${displayAlias()}/${modelId}`)
+    if (ok) {
+      copiedModelId = modelId
+      setTimeout(() => (copiedModelId = null), 2000)
+    }
   }
 
   async function handleImportCompatibleModels() {

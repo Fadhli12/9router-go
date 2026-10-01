@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type SystemVersionInfo } from '../api/client'
   import { marked } from 'marked'
+  import { copyToClipboard } from '../lib/clipboard'
 
   let {
     isOpen = $bindable(false),
@@ -101,15 +102,18 @@
 
   async function copyInstallCmd(): Promise<boolean> {
     try {
-      await navigator.clipboard.writeText(INSTALL_CMD)
+      const ok = await copyToClipboard(INSTALL_CMD)
+      if (!ok) {
+        return false
+      }
+      copied = true
+      setTimeout(() => {
+        copied = false
+      }, 2000)
+      return true
     } catch {
       return false
     }
-    copied = true
-    setTimeout(() => {
-      copied = false
-    }, 2000)
-    return true
   }
 
   async function shutdownServer() {
@@ -149,25 +153,33 @@
     if (shutdownPending || shutdownTimer !== null) return
     const token = ++shutdownToken
     shutdownPending = true
-    const didCopy = await copyInstallCmd()
-    // Dismissed (or superseded) while the clipboard call was in flight.
-    if (token !== shutdownToken) return
-    shutdownPending = false
-    if (!didCopy) {
-      updateStatus = 'error'
-      updateMsg = `Could not copy "${INSTALL_CMD}". Copy it manually before stopping the server.`
-      return
-    }
-    let remaining = 5
-    shutdownCountdown = remaining
-    shutdownTimer = setInterval(() => {
-      remaining -= 1
-      shutdownCountdown = remaining
-      if (remaining <= 0) {
-        clearShutdownTimer()
-        shutdownServer()
+    try {
+      const didCopy = await copyInstallCmd()
+      // Dismissed (or superseded) while the clipboard call was in flight.
+      if (token !== shutdownToken) return
+      shutdownPending = false
+      if (!didCopy) {
+        updateStatus = 'error'
+        updateMsg = `Could not copy "${INSTALL_CMD}". Copy it manually before stopping the server.`
+        return
       }
-    }, 1000)
+      let remaining = 5
+      shutdownCountdown = remaining
+      shutdownTimer = setInterval(() => {
+        remaining -= 1
+        shutdownCountdown = remaining
+        if (remaining <= 0) {
+          clearShutdownTimer()
+          shutdownServer()
+        }
+      }, 1000)
+    } catch {
+      if (token === shutdownToken) {
+        shutdownPending = false
+        updateStatus = 'error'
+        updateMsg = `Could not copy "${INSTALL_CMD}". Copy it manually before stopping the server.`
+      }
+    }
   }
 </script>
 

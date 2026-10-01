@@ -4,6 +4,7 @@
   import { getModelKind, getModelsByProviderId, PROVIDER_ID_TO_ALIAS } from '../../lib/models'
   import { parseCustomModelsResponse, subscribeCustomModelsChanged } from '../../lib/customModels'
   import Card from '../../lib/ui/Card.svelte'
+  import { copyToClipboard } from '../../lib/clipboard'
 
   interface Props {
     providerId: string
@@ -98,14 +99,16 @@
   })
 
   async function handleCopyCurl() {
-    await navigator.clipboard.writeText(curlSnippet)
+    const ok = await copyToClipboard(curlSnippet)
+    if (!ok) return
     copiedCurl = true
     setTimeout(() => { copiedCurl = false }, 2000)
   }
 
   async function handleCopyRes() {
     if (!resultStr) return
-    await navigator.clipboard.writeText(resultStr)
+    const ok = await copyToClipboard(resultStr)
+    if (!ok) return
     copiedRes = true
     setTimeout(() => { copiedRes = false }, 2000)
   }
