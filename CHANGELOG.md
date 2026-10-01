@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v1.9.6] - 2026-10-01
+
 ### 🐛 Pre-release review: 5 blocker yang lolos semua gate (#70)
 
 Audit 42 commit `v1.9.5..main` sebelum rilis menemukan lima cacat yang **tidak**
