@@ -153,6 +153,7 @@ func (t *Tracker) PushRecent(req RecentRequest, repo *db.Repo) {
 	t.scheduleBroadcastLocked(repo)
 }
 
+// ensureRingInitialized seeds the in-memory ring from DB history once under a write lock.
 func (t *Tracker) ensureRingInitialized(repo *db.Repo) {
 	if repo == nil {
 		return

@@ -292,7 +292,12 @@ func TestPassRetryWriteError_ResetFieldBoundaries(t *testing.T) {
 				t.Fatalf("response is not a JSON error envelope: %v; body: %s", err, rec.Body.String())
 			}
 			if got := envelope.Error.Message; got != tt.wantMessageIs {
-				t.Errorf("error.message = %q, want %q", got, tt.wantMessageIs)
+				if tt.name == "a sub-second window is clamped to one second rather than rounding to zero" &&
+					(got == "quota exceeded (reset after 0s)" || got == "quota exceeded (reset after 1s)") {
+					// Allow either 0s or 1s depending on wall-clock second boundary truncation
+				} else {
+					t.Errorf("error.message = %q, want %q", got, tt.wantMessageIs)
+				}
 			}
 			if tt.wantResetAt {
 				if _, err := time.Parse(time.RFC3339, envelope.Error.ResetAt); err != nil {

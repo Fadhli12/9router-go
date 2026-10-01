@@ -11,15 +11,26 @@ import (
 	"time"
 )
 
-// pidAlive probes a PID with signal 0 (process.kill(pid, 0)).
+// pidAlive probes a PID with signal 0 (process.kill(pid, 0)) and reaps/checks zombies.
 func pidAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	err := syscall.Kill(pid, 0)
-	if err != nil {
-		return err == syscall.EPERM
+	// If the process is a direct child of the current process, check and reap non-blockingly.
+	var ws syscall.WaitStatus
+	wpid, err := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil)
+	if err == nil && wpid == pid {
+		return false
 	}
+	if wpid == 0 {
+		return true
+	}
+
+	err = syscall.Kill(pid, 0)
+	if err != nil && err != syscall.EPERM {
+		return false
+	}
+
 	// On Linux, a terminated child process lingers as a zombie in the process
 	// table until wait() is called, but syscall.Kill(pid, 0) still returns nil.
 	// Inspect /proc/<pid>/stat when available so zombie state reads as dead.
