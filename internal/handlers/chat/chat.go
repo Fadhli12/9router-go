@@ -434,7 +434,7 @@ func queryFlagEnabled(v string) bool {
 // candidate catalog from a usable model list.
 func (h *ChatHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	mode := modelsListModeFromQuery(r)
-	result := h.buildModelsListResult(r.Context(), mode)
+	result := h.modelsListResultCached(r.Context(), mode)
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
 		"object":      "list",
 		"data":        result.Models,

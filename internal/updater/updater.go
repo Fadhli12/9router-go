@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -360,6 +361,10 @@ func PerformSelfUpdate(downloadURL, expectedSHA256 string) error {
 		return fmt.Errorf("missing download URL for platform %s_%s", runtime.GOOS, runtime.GOARCH)
 	}
 
+	if isReleasePageURL(downloadURL) {
+		return fmt.Errorf("invalid download URL %q: target is a release page rather than a direct asset download URL", downloadURL)
+	}
+
 	updateProgressMu.Lock()
 	if updateInProgress {
 		updateProgressMu.Unlock()
@@ -394,6 +399,11 @@ func PerformSelfUpdate(downloadURL, expectedSHA256 string) error {
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download asset returned status %d", resp.StatusCode)
+	}
+
+	ctype := resp.Header.Get("Content-Type")
+	if strings.Contains(strings.ToLower(ctype), "text/html") {
+		return fmt.Errorf("downloaded asset returned HTML content (%s), expected binary executable", ctype)
 	}
 
 	rawBytes, err := io.ReadAll(io.LimitReader(resp.Body, 150<<20)) // 150MB limit
@@ -531,7 +541,28 @@ func extractExecutableBytes(data []byte, filenameOrURL string) ([]byte, error) {
 	if isELF(data) || isMachO(data) || isPE(data) {
 		return data, nil
 	}
-	return data, nil
+	return nil, fmt.Errorf("downloaded asset is not a valid executable binary (magic bytes check failed)")
+}
+
+func isReleasePageURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		trimmed := strings.TrimRight(rawURL, "/")
+		return strings.HasSuffix(trimmed, "/releases/latest")
+	}
+
+	cleanPath := strings.TrimRight(parsed.Path, "/")
+	if strings.HasSuffix(cleanPath, "/releases/latest") {
+		return true
+	}
+
+	host := strings.ToLower(parsed.Host)
+	if host == "github.com" || strings.HasSuffix(host, ".github.com") {
+		if strings.Contains(cleanPath, "/releases") && !strings.Contains(cleanPath, "/releases/download/") {
+			return true
+		}
+	}
+	return false
 }
 
 // scoreArchiveEntry returns a confidence score for an archive entry being the

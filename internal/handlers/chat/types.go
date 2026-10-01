@@ -25,6 +25,10 @@ type ChatHandler struct {
 	TokenSaver  *shared.TokenSaverConfig
 	stickyMu    sync.Mutex
 	stickyState map[string]*comboStickyState
+	// modelsCache memoizes the /v1/models catalog per ModelsListMode. It is a
+	// value field (not a pointer) so a zero-value ChatHandler is usable; the
+	// handler is only ever used through *ChatHandler, never copied.
+	modelsCache modelsCache
 }
 
 // Type aliases for shared types

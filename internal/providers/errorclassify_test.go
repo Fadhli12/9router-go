@@ -61,3 +61,17 @@ func TestClassifyError_RequestScoped4xxNoFallback(t *testing.T) {
 		t.Errorf("expected fallback for 404, got %+v", cls)
 	}
 }
+
+func TestClassifyError_Status408FallbackWithBackoff(t *testing.T) {
+	// 408 Request Timeout is retryable: status rule grants fallback with backoff.
+	cls := ClassifyError(http.StatusRequestTimeout, "", 0)
+	if !cls.ShouldFallback {
+		t.Errorf("expected fallback for 408, got %+v", cls)
+	}
+	if cls.NewBackoffLevel != 1 {
+		t.Errorf("expected backoff level 1 for 408, got %d", cls.NewBackoffLevel)
+	}
+	if cls.CooldownMs != 2000 {
+		t.Errorf("expected 2000ms cooldown for 408, got %d", cls.CooldownMs)
+	}
+}

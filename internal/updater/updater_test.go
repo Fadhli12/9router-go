@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -224,5 +225,153 @@ func TestAutoUpdate_StatusAndToggle(t *testing.T) {
 	SetAutoUpdate(false)
 	if IsAutoUpdateEnabled() {
 		t.Errorf("expected autoUpdate to be false")
+	}
+}
+
+func TestExtractExecutableBytes_RejectsHTML(t *testing.T) {
+	htmlData := []byte("<!DOCTYPE html><html><head><title>Release</title></head><body><h1>Not an executable</h1></body></html>")
+
+	tests := []struct {
+		name     string
+		filename string
+	}{
+		{name: "raw html asset", filename: "9router-go"},
+		{name: "fake tar.gz with html content", filename: "9router-go_darwin_arm64.tar.gz"},
+		{name: "fake zip with html content", filename: "9router-go_windows_amd64.zip"},
+		{name: "plain text file", filename: "release-notes.txt"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			extracted, err := extractExecutableBytes(htmlData, tt.filename)
+			if err == nil {
+				t.Fatalf("expected error for non-executable content, got nil")
+			}
+			if extracted != nil {
+				t.Errorf("expected nil extracted bytes, got %d bytes", len(extracted))
+			}
+			if !strings.Contains(err.Error(), "magic bytes check failed") {
+				t.Errorf("expected magic bytes error, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestExtractExecutableBytes_ValidBinaries(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		data     []byte
+	}{
+		{
+			name:     "valid elf binary",
+			filename: "9router-go_linux_amd64",
+			data:     []byte{0x7f, 'E', 'L', 'F', 0x02, 0x01, 0x01, 0x00},
+		},
+		{
+			name:     "valid mach-o 64-bit binary",
+			filename: "9router-go_darwin_arm64",
+			data:     []byte{0xfe, 0xed, 0xfa, 0xcf, 0x00, 0x00, 0x00, 0x01},
+		},
+		{
+			name:     "valid pe binary",
+			filename: "9router-go_windows_amd64.exe",
+			data:     []byte{'M', 'Z', 0x90, 0x00, 0x03, 0x00},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			extracted, err := extractExecutableBytes(tt.data, tt.filename)
+			if err != nil {
+				t.Fatalf("extractExecutableBytes failed: %v", err)
+			}
+			if !bytes.Equal(extracted, tt.data) {
+				t.Errorf("extracted data does not match input binary")
+			}
+		})
+	}
+}
+
+func TestPerformSelfUpdate_RejectsHTMLContentType(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<!DOCTYPE html><html><body>GitHub Release Page</body></html>"))
+	}))
+	defer server.Close()
+
+	err := PerformSelfUpdate(server.URL, "")
+	if err == nil {
+		t.Fatal("expected error when downloading HTML content-type, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "downloaded asset returned HTML content") {
+		t.Errorf("expected HTML content error, got: %v", err)
+	}
+}
+
+func TestPerformSelfUpdate_RejectsHTMLBodyWithoutContentType(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<!DOCTYPE html><html><body>Fake Octet Stream</body></html>"))
+	}))
+	defer server.Close()
+
+	err := PerformSelfUpdate(server.URL, "")
+	if err == nil {
+		t.Fatal("expected error when downloading non-executable binary bytes, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "magic bytes check failed") {
+		t.Errorf("expected magic bytes check failure, got: %v", err)
+	}
+}
+
+func TestPerformSelfUpdate_RejectsReleasePageURL(t *testing.T) {
+	urls := []string{
+		"https://github.com/luqman-v1/9router-go/releases/latest",
+		"https://github.com/luqman-v1/9router-go/releases/latest/",
+		"https://github.com/luqman-v1/9router-go/releases/tag/v1.9.6",
+		"https://github.com/luqman-v1/9router-go/releases",
+		"https://example.com/downloads/releases/latest",
+	}
+
+	for _, u := range urls {
+		t.Run(u, func(t *testing.T) {
+			err := PerformSelfUpdate(u, "")
+			if err == nil {
+				t.Fatalf("expected error for release page URL %s, got nil", u)
+			}
+			if !strings.Contains(err.Error(), "release page") {
+				t.Errorf("expected release page error for %s, got: %v", u, err)
+			}
+		})
+	}
+}
+
+func TestIsReleasePageURL(t *testing.T) {
+	tests := []struct {
+		url      string
+		expected bool
+	}{
+		{"https://github.com/luqman-v1/9router-go/releases/latest", true},
+		{"https://github.com/luqman-v1/9router-go/releases/latest/", true},
+		{"https://github.com/luqman-v1/9router-go/releases/tag/v1.9.6", true},
+		{"https://github.com/luqman-v1/9router-go/releases", true},
+		{"https://example.com/repo/releases/latest", true},
+		{"https://github.com/luqman-v1/9router-go/releases/download/v1.9.6/9router-go_linux_amd64.tar.gz", false},
+		{"https://objects.githubusercontent.com/github-production-release-asset-2e65be/asset.tar.gz", false},
+		{"https://example.com/downloads/9router-go", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			got := isReleasePageURL(tt.url)
+			if got != tt.expected {
+				t.Errorf("isReleasePageURL(%q) = %v, want %v", tt.url, got, tt.expected)
+			}
+		})
 	}
 }

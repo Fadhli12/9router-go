@@ -56,6 +56,7 @@ var ErrorRules = []ErrorRule{
 	{Status: 402, CooldownMs: cooldownLong},
 	{Status: 403, CooldownMs: cooldownLong},
 	{Status: 404, CooldownMs: cooldownLong},
+	{Status: 408, Backoff: true},
 	{Status: 429, Backoff: true},
 	{Status: 502, Backoff: true},
 	{Status: 503, Backoff: true},
@@ -125,7 +126,7 @@ func ClassifyError(statusCode int, errorText string, backoffLevel int) ErrorClas
 	// request-scoped 4xx that match no rule say nothing about the credential,
 	// so the account must not be cooled down. Account-scoped statuses keep
 	// their rules above (401/402/403/404/429 + quota/capacity text rules).
-	if statusCode >= 400 && statusCode < 500 && statusCode != 401 && statusCode != 402 && statusCode != 403 && statusCode != 429 {
+	if statusCode >= 400 && statusCode < 500 && statusCode != 401 && statusCode != 402 && statusCode != 403 && statusCode != 408 && statusCode != 429 {
 		return ErrorClassification{ShouldFallback: false}
 	}
 
