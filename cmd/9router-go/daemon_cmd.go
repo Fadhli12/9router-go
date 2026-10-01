@@ -2,27 +2,44 @@ package main
 
 import (
 	"fmt"
-	"os"
+	"strconv"
 	"strings"
 
 	"github.com/urfave/cli/v2"
 
+	"9router/proxy/internal/config"
 	"9router/proxy/internal/daemon"
 )
 
 // daemonURL is the address the background daemon is expected to answer on.
-// A custom HOST/PORT only takes effect when the operator set it in the
-// environment; the default listener is what the flag-free start path uses.
+//
+// The port comes from the same resolved config the server binds, not from
+// os.Getenv. A deployment that sets PORT in .env — the common case, and every
+// compose file — was probed on 20130 while the child bound its real port, so
+// waitHealthy polled a dead address for the full 20s StartupTimeout and then
+// reported a start that had actually succeeded as a failure.
 func daemonURL() string {
-	if host := strings.TrimSpace(os.Getenv("HOST")); host != "" {
-		if port := strings.TrimSpace(os.Getenv("PORT")); port != "" {
-			return "http://" + joinHostPort(host, port)
-		}
+	cfg := config.LoadConfig()
+	if cfg.Port <= 0 {
+		return "http://127.0.0.1:20130"
 	}
-	if port := strings.TrimSpace(os.Getenv("PORT")); port != "" {
-		return "http://127.0.0.1:" + port
+	port := strconv.Itoa(cfg.Port)
+	// BIND_ADDR defaults to a wildcard bind, which is not dialable; only an
+	// explicit loopback address is used to build the probe URL.
+	if host := strings.TrimSpace(cfg.Host); host != "" && !isWildcardHost(host) {
+		return "http://" + joinHostPort(host, port)
 	}
-	return "http://127.0.0.1:20130"
+	return "http://127.0.0.1:" + port
+}
+
+// isWildcardHost reports whether a bind address accepts every interface, in
+// which case probing it would target 0.0.0.0 rather than the local listener.
+func isWildcardHost(host string) bool {
+	switch host {
+	case "0.0.0.0", "::", "[::]", "*":
+		return true
+	}
+	return false
 }
 
 // joinHostPort wraps bare IPv6 literals in brackets.

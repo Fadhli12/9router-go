@@ -4,10 +4,10 @@ import {
   getCodexResetCreditExpiryLabel,
   getResetCreditConfirmation,
   getResetCreditWindowTitle,
+  newResetCreditIdempotencyKey,
 } from './codexResetCredit'
 
 const NOW = Date.parse('2026-09-29T12:00:00Z')
-
 // OmniRoute coarsens to the unit that fits and floors a credit that is
 // already expired at "0m" rather than a negative countdown.
 describe('formatRelativeExpiry', () => {
@@ -81,5 +81,22 @@ describe('getResetCreditConfirmation', () => {
     expect(text).toContain('permanently consumes')
     expect(text).toContain('cannot be undone')
     expect(text).toContain('5-hour window reset')
+  })
+})
+
+// A redeem spends the credit for good, so the whole double-spend protection
+// rests on the key being non-empty: the server replaces an empty key with a
+// fresh one per request, which makes a second submit a second real redeem.
+describe('newResetCreditIdempotencyKey', () => {
+  it('never returns an empty value', () => {
+    for (let i = 0; i < 50; i++) {
+      expect(newResetCreditIdempotencyKey()).not.toBe('')
+    }
+  })
+
+  it('returns a distinct key per call, so two sessions cannot collide', () => {
+    const keys = new Set<string>()
+    for (let i = 0; i < 50; i++) keys.add(newResetCreditIdempotencyKey())
+    expect(keys.size).toBe(50)
   })
 })

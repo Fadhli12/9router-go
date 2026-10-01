@@ -198,10 +198,15 @@ func responsesWriter(o sseStreamOpts, hw *proxy.HeartbeatWriter, flusher http.Fl
 // previous_response_id, reasoning item ids, store — so the body is copied
 // byte for byte instead.
 func passthroughResponses(w http.ResponseWriter, req *Request, upstream io.Reader) error {
+	// Relaying "byte for byte" means byte for byte *except* the tool names this
+	// request had to have fitted for the upstream's 64-char limit. Forwarding
+	// the fitted name would leave the client holding a tool_call it never
+	// declared, which is the same class of break the fitting exists to avoid.
 	if req.IsStream {
 		return sseStream(sseStreamOpts{
 			W: w, Upstream: upstream, Translate: false,
 			StartTime: req.StartTime, TTFT: req.TTFT, Buf: req.ResponseBuf, Ctx: req.Ctx,
+			ToolNameMap: req.ToolNameMap,
 		})
 	}
 	body, err := io.ReadAll(io.LimitReader(upstream, constants.MaxUpstreamBodyBytes))
@@ -213,6 +218,9 @@ func passthroughResponses(w http.ResponseWriter, req *Request, upstream io.Reade
 	// still be caught before the client reads it as a completed turn.
 	if err := proxy.EmptyUpstreamError(body); err != nil {
 		return err
+	}
+	if len(req.ToolNameMap) > 0 {
+		body = translator.RestoreToolNames(body, req.ToolNameMap)
 	}
 	if req.ResponseBuf != nil {
 		req.ResponseBuf.Write(body)

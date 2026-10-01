@@ -98,7 +98,7 @@ func collectToolNames(req map[string]any) (map[string]bool, []string) {
 	visitMessages(req, record)
 	visitContents(req, record)
 	visitToolChoice(req, record)
-
+	visitInput(req, record)
 	return existing, longNames
 }
 
@@ -141,6 +141,7 @@ func replaceToolNamesInMap(req map[string]any, origToShort map[string]string) {
 	replaceInMessages(req, mutate)
 	replaceInContents(req, mutate)
 	replaceInToolChoice(req, mutate)
+	replaceInInput(req, mutate)
 }
 
 func visitTools(req map[string]any, record func(string)) {
@@ -402,5 +403,72 @@ func replaceInToolChoice(req map[string]any, mutate func(string) string) {
 	}
 	if n, ok := tc["name"].(string); ok {
 		tc["name"] = mutate(n)
+	}
+}
+
+// visitInput walks the OpenAI Responses `input` array, the conversation history
+// of a /v1/responses request. Every item shape that names a tool is recorded:
+// function_call / custom_tool_call carry the name directly, and a nested
+// message content block holds a tool_use or an assistant tool_call.
+//
+// Without this the Responses lane fitted the declaration but left the history
+// calling the tool by its original long name, so the upstream saw a request
+// that contradicted itself — and the 64-char fix it was meant to deliver never
+// actually applied, because the long name still travelled in `input`.
+func visitInput(req map[string]any, record func(string)) {
+	forEachInputName(req, func(n string) string {
+		record(n)
+		return n
+	})
+}
+
+// replaceInInput mirrors visitInput: every name it could have recorded is
+// rewritten here, so the fitted request stays internally consistent.
+func replaceInInput(req map[string]any, mutate func(string) string) {
+	forEachInputName(req, mutate)
+}
+
+// forEachInputName applies fn to every tool name reachable from the Responses
+// `input` array. One walker serves both directions so a name the collect pass
+// records is always a name the replace pass rewrites — the asymmetry that let
+// the declaration and the history drift apart.
+func forEachInputName(req map[string]any, fn func(string) string) {
+	items, _ := req["input"].([]any) // the API also accepts a bare string
+	for _, item := range items {
+		im, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		applyName(fn, im)
+		applyName(fn, im["function"])
+
+		if tc, ok := im["tool_calls"].([]any); ok {
+			for _, call := range tc {
+				if cm, ok := call.(map[string]any); ok {
+					applyName(fn, cm["function"])
+				}
+			}
+		}
+		content, _ := im["content"].([]any)
+		for _, block := range content {
+			bm, ok := block.(map[string]any)
+			if !ok {
+				continue
+			}
+			applyName(fn, bm)
+			applyName(fn, bm["function"])
+		}
+	}
+}
+
+// applyName rewrites holder["name"] in place when it holds a string. A nil or
+// non-map holder is skipped, so the same call is safe for optional shapes.
+func applyName(mutate func(string) string, holder any) {
+	hm, ok := holder.(map[string]any)
+	if !ok {
+		return
+	}
+	if n, ok := hm["name"].(string); ok {
+		hm["name"] = mutate(n)
 	}
 }
