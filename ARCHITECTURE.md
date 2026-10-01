@@ -39,7 +39,7 @@ The Go binary owns proxy routing, dashboard APIs, auth, persistence, OAuth, medi
 
 | Path | Responsibility |
 | --- | --- |
-| `cmd/9router-go/` | CLI parser, commands, signal handling, Fx start/stop |
+| `cmd/9router-go/` | CLI parser, commands, daemon lifecycle sub-commands, signal handling, Fx start/stop |
 | `internal/app/` | Fx modules, dependency graph, server and DB lifecycle |
 | `internal/config/` | Viper/env configuration, data and database path resolution, JWT secret |
 | `internal/handlers/` | Chi route composition, chat, media, OAuth, dashboard, SSO, usage |
@@ -51,28 +51,48 @@ The Go binary owns proxy routing, dashboard APIs, auth, persistence, OAuth, medi
 | `internal/db/` | SQLite connection, repository queries, WAL and optional Go-only leases |
 | `web/` | Svelte 5 + Vite + Tailwind dashboard |
 | `web/embed.go` | Embeds `web/dist` and serves the SPA with index fallback |
+| `internal/daemon/` | Background mode: detached spawn, `DATA_DIR/run/gateway.pid`, health wait, stop/restart/status |
+| `internal/proc/` | Portable process primitives (liveness, terminate, detach) shared by the daemon and headroom |
 
 ## Fx lifecycle
 
 `cmd/9router-go/main.go` builds an `urfave/cli` application. The default server action loads CLI parameters and starts `app.AppModule` with `fx.Replace(cliParams)`. Set `FX_LOGGING=true` to enable the console Fx logger; otherwise Fx logging is disabled.
+
+`--background` (alias `-d`, also the `start` sub-command) makes the CLI spawn
+this same binary detached — new session on POSIX, `CREATE_NO_WINDOW` on
+Windows — with stdout/stderr appended to `DATA_DIR/run/gateway.log`, then wait
+for `/health` before returning. The child records its PID in
+`DATA_DIR/run/gateway.pid`, which is what `stop`, `status` and `restart` read.
+`Start` refuses when the port already answers, so a second daemon never races
+the first for the bind; `Restart` stops first and waits for the socket to be
+released, because `TerminateProcess` returns before the listener is gone.
 
 ```mermaid
 flowchart TD
     Main[main] --> CLI[urfave/cli]
     CLI -->|server action| Params[CLIParams from flags]
     CLI -->|version/update/mitm| Command[Run command directly]
+    CLI -->|start/stop/restart/status/logs| Daemon[internal/daemon + internal/proc]
     Params --> Fx[fx.New AppModule]
     Fx --> Config[ConfigModule: Viper + Config + CLIParams]
     Fx --> Database[DatabaseModule: SQL DB + Repo]
     Fx --> Handlers[HandlersModule: TokenSaverConfig + Chi handler]
     Fx --> Server[ServerModule: http.Server]
     Server --> OnStart[Start updater and catalog sync; listen]
-    OnStart --> Signal[Wait for SIGINT or SIGTERM]
+    OnStart --> Signal[Wait for SIGINT, SIGTERM, or a stop request]
     Signal --> OnStop[Cancel background work; stop SSE; shutdown HTTP]
     OnStop --> DBClose[Close SQLite]
 ```
 
 Dependency order is config → database/repository → handler/server. `OnStart` has a 15-second budget and begins background updater/catalog-sync loops and `ListenAndServe`. Shutdown has a 20-second outer Fx budget. The HTTP hook disables keep-alives, cancels the shutdown context used by streams, allows 5 seconds for `http.Server.Shutdown`, then the database hook closes SQLite. A second signal exits immediately.
+
+The wait is on three sources, not one: `SIGINT`/`SIGTERM`, and
+`shutdown.StopRequested()`. The stop request is how the dashboard's Shutdown
+button and the updater's restart hook ask this process to exit; Windows cannot
+raise `SIGTERM` on itself (`os.Process.Signal` returns "not supported by
+windows"), so a signal-only route could never drain the listener there. The
+updater spawns its replacement from `shutdown.RunAfterStop()`, which main calls
+after `fxApp.Stop` returns, so the new process always finds the port free.
 
 `app.Run` contains equivalent reusable signal handling, but the CLI entrypoint currently implements the same sequence directly in `runServer`.
 

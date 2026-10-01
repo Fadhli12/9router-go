@@ -170,4 +170,69 @@ describe('dashboard API authentication and errors', () => {
 
     expect(urls[0]).toBe('/api/usage/id%20with%2Fslash/reset-credits')
   })
+
+  it('normalizes object lastError to string message when listing connections', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = async () => {
+      return Response.json([
+        {
+          id: 'conn-1',
+          provider: 'openai-compatible-chat-123',
+          authType: 'apikey',
+          isActive: 1,
+          data: JSON.stringify({
+            lastError: {
+              status: 429,
+              message: 'Rate limit exceeded: resets in 10s',
+              timestamp: '2026-09-30T12:00:00Z',
+            },
+          }),
+        },
+        {
+          id: 'conn-2',
+          provider: 'openai-compatible-chat-456',
+          authType: 'apikey',
+          isActive: 1,
+          lastError: {
+            status: 500,
+            error: 'Internal upstream error',
+          },
+        },
+      ])
+    }
+    try {
+      const conns = await api.getConnections()
+      expect(conns.length).toBe(2)
+      expect(conns[0].lastError).toBe('Rate limit exceeded: resets in 10s')
+      expect(conns[1].lastError).toBe('Internal upstream error')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('normalizes object lastError in getProvidersClient and getProvidersClientPage', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = async () => {
+      return Response.json({
+        connections: [
+          {
+            id: 'conn-1',
+            provider: 'openai-compatible-chat-123',
+            authType: 'apikey',
+            isActive: 1,
+            lastError: { message: 'Quota exhausted' },
+          },
+        ],
+      })
+    }
+    try {
+      const clientRes = await api.getProvidersClient()
+      expect(clientRes.connections[0].lastError).toBe('Quota exhausted')
+
+      const pageRes = await api.getProvidersClientPage('page=1')
+      expect(pageRes.connections[0].lastError).toBe('Quota exhausted')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })

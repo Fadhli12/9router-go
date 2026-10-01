@@ -366,6 +366,20 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	} else if err != nil {
 		log.Warn("fallback", "sanitize failed", "provider", provider, "model", model, "error", err)
 	}
+	// Fit tool names exceeding MaxToolNameLength (64 chars) to prevent upstream HTTP 400.
+	fittedBody, fittedToolMap := translator.FitToolNames(pipedBody)
+	if len(fittedToolMap) > 0 {
+		log.Debug("fallback", "fitted long tool names", "provider", provider, "model", model, "count", len(fittedToolMap))
+		pipedBody = fittedBody
+		w = executor.NewToolNameRestoringWriter(w, fittedToolMap)
+		ctx = translator.WithToolNameMap(ctx, fittedToolMap)
+		if claudeToolMap == nil {
+			claudeToolMap = make(map[string]string, len(fittedToolMap))
+		}
+		for k, v := range fittedToolMap {
+			claudeToolMap[k] = v
+		}
+	}
 	start := startTime
 	metrics := &streamMetrics{}
 	var fwdErr error

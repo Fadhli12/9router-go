@@ -1,15 +1,17 @@
 package dashboard
 
 import (
+	"archive/zip"
+	"bytes"
 	"crypto/subtle"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
-
 	json "encoding/json/v2"
 
 	"golang.org/x/crypto/bcrypt"
@@ -126,6 +128,35 @@ func (h *DashboardHandler) HandleExportDatabase(w http.ResponseWriter, r *http.R
 		writePlainError(w, http.StatusInternalServerError, "Failed to export database")
 		return
 	}
+	if r.URL.Query().Get("format") == "zip" || strings.Contains(r.Header.Get("Accept"), "application/zip") {
+		jsonBytes, err := json.Marshal(payload)
+		if err != nil {
+			writePlainError(w, http.StatusInternalServerError, "Failed to encode database backup")
+			return
+		}
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		f, err := zw.Create("9router-backup.json")
+		if err != nil {
+			writePlainError(w, http.StatusInternalServerError, "Failed to create zip archive")
+			return
+		}
+		if _, err := f.Write(jsonBytes); err != nil {
+			writePlainError(w, http.StatusInternalServerError, "Failed to write backup to zip")
+			return
+		}
+		if err := zw.Close(); err != nil {
+			writePlainError(w, http.StatusInternalServerError, "Failed to finalize zip")
+			return
+		}
+		nowStr := time.Now().Format("2006-01-02")
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="9router-backup-%s.zip"`, nowStr))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(buf.Bytes())
+		return
+	}
+
 	handlerutil.WriteJSON(w, http.StatusOK, payload)
 }
 
@@ -139,9 +170,39 @@ func (h *DashboardHandler) HandleImportDatabase(w http.ResponseWriter, r *http.R
 	defer r.Body.Close()
 
 	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
-		writePlainError(w, http.StatusBadRequest, "Invalid database payload")
-		return
+
+	// Support zip archives (PK\x03\x04 header)
+	if len(body) >= 4 && body[0] == 'P' && body[1] == 'K' && body[2] == 3 && body[3] == 4 {
+		zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+		if err != nil {
+			writePlainError(w, http.StatusBadRequest, "Invalid zip archive")
+			return
+		}
+		var jsonBytes []byte
+		for _, f := range zr.File {
+			if strings.HasSuffix(strings.ToLower(f.Name), ".json") {
+				rc, err := f.Open()
+				if err != nil {
+					continue
+				}
+				jsonBytes, _ = io.ReadAll(io.LimitReader(rc, 64<<20))
+				rc.Close()
+				break
+			}
+		}
+		if len(jsonBytes) == 0 {
+			writePlainError(w, http.StatusBadRequest, "No json file found inside zip archive")
+			return
+		}
+		if err := json.Unmarshal(jsonBytes, &payload); err != nil || payload == nil {
+			writePlainError(w, http.StatusBadRequest, "Invalid database payload inside zip")
+			return
+		}
+	} else {
+		if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
+			writePlainError(w, http.StatusBadRequest, "Invalid database payload")
+			return
+		}
 	}
 
 	password, _ := payload["password"].(string)
@@ -255,10 +316,14 @@ func (h *DashboardHandler) changeDashboardPassword(currentPassword, newPassword 
 		if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(currentPassword)); err != nil {
 			return errors.New("Invalid current password")
 		}
-	} else if currentPassword != "" && currentPassword != defaultInitialPassword {
-		// No password set yet — only an empty value (or the well-known
-		// default) confirms the first-time set.
-		return errors.New("Invalid current password")
+	} else {
+		initial := config.LoadConfig().InitialPassword
+		if initial == "" {
+			initial = defaultInitialPassword
+		}
+		if currentPassword != "" && currentPassword != initial && currentPassword != defaultInitialPassword {
+			return errors.New("Invalid current password")
+		}
 	}
 
 	hashed, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)

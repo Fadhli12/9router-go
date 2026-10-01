@@ -2,9 +2,9 @@
   import { Layers } from 'lucide-svelte'
   import { api, type Combo, type ProviderConnection, type ProviderNode } from '../../api/client'
   import {
+    COMBO_STRATEGIES,
     clearJudgeModel,
     getComboModels,
-    isAutoFreeCombo,
     parseCapacityAdapterSettings,
     updateComboStrategy,
     updateJudgeModel,
@@ -64,28 +64,30 @@
   let showModelPicker = $state(false)
   let modelPickerTarget = $state<'combo' | 'vision' | 'audio' | 'judge'>('combo')
 
-  // Confirm Delete Modal state (upstream confirmState parity). Carries the
-  // ids to remove; the locked auto free-tier combo can never be in here.
+  // Confirm Delete Modal state (upstream confirmState parity). Carries the ids
+  // to remove.
   let confirmState = $state<{ name: string; ids: string[] } | null>(null)
 
-  // Bulk-delete selection. Set re-created on every toggle so Svelte 5 sees the
-  // change (mutating a Set in place is not tracked).
+  // Selection drives the bulk bar below the list, matching upstream: a checkbox
+  // per card plus a "Select all" that names the count, and bulk strategy /
+  // delete / clear actions that only exist while something is selected. The
+  // Set is re-created on every change so Svelte 5 sees it (mutating in place is
+  // not tracked).
   let selectedIds = $state<Set<string>>(new Set())
 
   function toggleSelect(combo: Combo) {
-    if (isAutoFreeCombo(combo)) return
     const next = new Set(selectedIds)
     if (next.has(combo.id)) next.delete(combo.id)
     else next.add(combo.id)
     selectedIds = next
   }
 
-  // Delete All still skips locked combos: the button count and the actual
-  // deletes must agree on what is removable.
-  let deletableCombos = $derived(llmCombos.filter((c) => !isAutoFreeCombo(c)))
-  let selectedDeletable = $derived(
-    deletableCombos.filter((c) => selectedIds.has(c.id))
-  )
+  let selectedCombos = $derived(llmCombos.filter((c) => selectedIds.has(c.id)))
+  let allSelected = $derived(llmCombos.length > 0 && selectedCombos.length === llmCombos.length)
+
+  function toggleSelectAll() {
+    selectedIds = allSelected ? new Set() : new Set(llmCombos.map((c) => c.id))
+  }
 
   function clearSelection() {
     selectedIds = new Set()
@@ -277,103 +279,107 @@
     clearSelection()
     onRefresh()
     if (deleted < ids.length) {
-      alert(`Deleted ${deleted} of ${ids.length} combo(s). Locked or failed combos were kept.`)
+      alert(`Deleted ${deleted} of ${ids.length} combo(s). The rest could not be removed.`)
     }
   }
 
   function handleDeleteSelected() {
-    if (selectedDeletable.length === 0) return
+    if (selectedCombos.length === 0) return
     confirmState = {
-      name: selectedDeletable.map((c) => c.name).join(', '),
-      ids: selectedDeletable.map((c) => c.id),
+      name: selectedCombos.map((c) => c.name).join(', '),
+      ids: selectedCombos.map((c) => c.id),
     }
   }
 
-  function handleDeleteAll() {
-    if (deletableCombos.length === 0) return
-    confirmState = {
-      name: deletableCombos.map((c) => c.name).join(', '),
-      ids: deletableCombos.map((c) => c.id),
+  let bulkStrategy = $state('')
+
+  // Upstream writes the strategy through the same settings patch a single card
+  // uses, then one updateCombo per row: comboStrategies is keyed by combo NAME,
+  // so it has to be rewritten as a whole or the last write wins.
+  async function handleApplyBulkStrategy() {
+    if (!bulkStrategy || selectedCombos.length === 0) return
+    const targets = selectedCombos
+    let next = comboStrategies
+    for (const combo of targets) {
+      next = updateComboStrategy(next, combo.name, bulkStrategy)
     }
-  }
-
-  let isBuildingAutoFree = $state(false)
-
-  async function handleBuildAutoFree() {
-    isBuildingAutoFree = true
+    comboStrategies = next
     try {
-      const res = await api.buildAutoFreeCombo()
-      if (res.models.length === 0) {
-        alert('No free-tier models found among providers you have connections for.')
+      await api.patchSettings({ comboStrategies: next })
+      for (const combo of targets) {
+        await api.updateCombo(combo.id, { strategy: bulkStrategy })
       }
+      bulkStrategy = ''
       onRefresh()
     } catch (e) {
       alert(
-        'Failed to build auto free-tier combo: ' +
-          (e instanceof Error ? e.message : String(e))
+        'Failed to set strategy: ' + (e instanceof Error ? e.message : String(e))
       )
-    } finally {
-      isBuildingAutoFree = false
-    }
-  }
-
-  let isBuildingAutoFamily = $state(false)
-
-  async function handleBuildAutoFamily() {
-    isBuildingAutoFamily = true
-    try {
-      const res = await api.buildAutoFamilyCombos()
-      if (res.count === 0) {
-        alert(
-          'No usable model families found. Add connections for providers with chat models, or enable disabled models.'
-        )
-      } else {
-        // A wide catalog yields dozens of families; show the head of the list
-        // rather than a wall of names.
-        const shown = res.created.slice(0, 8)
-        const extra = res.created.length - shown.length
-        alert(
-          `Grouped into ${res.count} combo(s): ${shown.join(', ')}` +
-            (extra > 0 ? ` (+${extra} more)` : '')
-        )
-      }
-      onRefresh()
-    } catch (e) {
-      alert(
-        'Failed to auto-group combos: ' + (e instanceof Error ? e.message : String(e))
-      )
-    } finally {
-      isBuildingAutoFamily = false
-    }
-  }
-
-  async function handleReorderCombo(combo: Combo, models: string[]) {
-    try {
-      await api.updateCombo(combo.id, {
-        name: combo.name,
-        kind: combo.kind ?? undefined,
-        models,
-      })
-      onRefresh()
-    } catch (e) {
-      console.error('Failed to reorder combo:', e)
     }
   }
 
 </script>
 
 <div class="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
-  <CombosHeader
-    onCreateClick={openCreateModal}
-    onAutoFamilyClick={handleBuildAutoFamily}
-    {isBuildingAutoFamily}
-    onAutoFreeClick={handleBuildAutoFree}
-    {isBuildingAutoFree}
-    selectedCount={selectedDeletable.length}
-    deletableCount={deletableCombos.length}
-    onDeleteSelected={handleDeleteSelected}
-    onDeleteAll={handleDeleteAll}
-  />
+  <CombosHeader onCreateClick={openCreateModal} />
+
+  <!-- Upstream selection bar: the count is on the checkbox, and the bulk
+       actions only exist while something is selected, so the destructive
+       Delete is never sitting next to Create. -->
+  {#if llmCombos.length > 0}
+    <div
+      class="flex min-w-0 flex-col gap-2 rounded-lg border border-black/5 bg-black/[0.015] px-3 py-2 dark:border-white/5 dark:bg-white/[0.02] sm:flex-row sm:items-center sm:justify-between"
+    >
+      <label class="flex cursor-pointer items-center gap-2 text-xs text-text-muted hover:text-primary select-none">
+        <input
+          type="checkbox"
+          checked={allSelected}
+          onchange={toggleSelectAll}
+          class="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary"
+        />
+        <span>
+          {selectedCombos.length > 0 ? `${selectedCombos.length} selected` : `Select all (${llmCombos.length})`}
+        </span>
+      </label>
+
+      {#if selectedCombos.length > 0}
+        <div class="flex min-w-0 flex-wrap items-center gap-2">
+          <div class="w-full min-w-[160px] sm:w-[200px]">
+            <select
+              bind:value={bulkStrategy}
+              class="w-full bg-surface-2 border border-border rounded-lg px-2.5 py-1.5 text-xs text-text-main focus:outline-none focus:ring-brand-500 focus:border-brand-500 cursor-pointer"
+            >
+              <option value="" disabled>Set strategy…</option>
+              {#each COMBO_STRATEGIES as strategy (strategy.value)}
+                <option value={strategy.value}>{strategy.label}</option>
+              {/each}
+            </select>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onclick={handleApplyBulkStrategy}
+            disabled={!bulkStrategy}
+            class="whitespace-nowrap"
+          >
+            Apply Strategy
+          </Button>
+          <Button
+            icon="delete"
+            size="sm"
+            variant="danger"
+            onclick={handleDeleteSelected}
+            class="whitespace-nowrap"
+          >
+            Delete ({selectedCombos.length})
+          </Button>
+          <Button size="sm" variant="ghost" onclick={clearSelection} class="whitespace-nowrap">
+            Clear
+          </Button>
+        </div>
+      {/if}
+    </div>
+  {/if}
 
   <!-- Combos List -->
   {#if llmCombos.length === 0}
@@ -402,7 +408,6 @@
           onCopy={copyName}
           onEdit={openEditModal}
           onDelete={(c) => (confirmState = { name: c.name, ids: [c.id] })}
-          onReorder={handleReorderCombo}
           isSelected={selectedIds.has(combo.id)}
           onToggleSelect={toggleSelect}
         />

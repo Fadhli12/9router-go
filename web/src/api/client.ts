@@ -480,47 +480,64 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json()
 }
 
+export function normalizeLastError(err: unknown): string | null {
+  if (err == null) return null
+  if (typeof err === 'string') return err
+  if (typeof err === 'object') {
+    const obj = err as Record<string, unknown>
+    if (typeof obj.message === 'string' && obj.message) return obj.message
+    if (typeof obj.error === 'string' && obj.error) return obj.error
+    if (typeof obj.msg === 'string' && obj.msg) return obj.msg
+    if (typeof obj.details === 'string' && obj.details) return obj.details
+    try {
+      return JSON.stringify(err)
+    } catch {
+      return String(err)
+    }
+  }
+  return String(err)
+}
+
+function numberField(source: Record<string, unknown>, key: string): number | null {
+  const value = source[key]
+  return typeof value === 'number' ? value : null
+}
+
+function stringField(source: Record<string, unknown>, key: string): string | null {
+  const value = source[key]
+  return typeof value === 'string' ? value : null
+}
+
+export function normalizeConnection(c: ProviderConnection): ProviderConnection {
+  let parsed: Record<string, unknown> = {}
+  if (typeof c.data === 'string' && c.data) {
+    try {
+      parsed = JSON.parse(c.data)
+    } catch {}
+  }
+  const wire = c as unknown as Record<string, unknown>
+  const specific =
+    parsed.providerSpecificData && typeof parsed.providerSpecificData === 'object'
+      ? (parsed.providerSpecificData as Record<string, unknown>)
+      : parsed
+  return {
+    ...parsed,
+    ...c,
+    providerSpecificData: specific,
+    lastError: normalizeLastError(c.lastError) || normalizeLastError(parsed.lastError) || null,
+    errorCode: numberField(parsed, 'errorCode') ?? numberField(wire, 'errorCode'),
+    rateLimitedUntil: stringField(parsed, 'rateLimitedUntil') ?? stringField(wire, 'rateLimitedUntil'),
+    testStatus: stringField(wire, 'testStatus') || stringField(parsed, 'testStatus'),
+    expiresAt: stringField(parsed, 'expiresAt'),
+  } as ProviderConnection
+}
+
 // Connections API
 export const api = {
   // Connections
   getConnections: async () => {
     const conns = await request<ProviderConnection[]>('/api/connections')
-    return conns.map((c) => {
-      let parsed: Record<string, unknown> = {}
-      if (typeof c.data === 'string' && c.data) {
-        try {
-          parsed = JSON.parse(c.data)
-        } catch {}
-      }
-      const specific = (parsed.providerSpecificData && typeof parsed.providerSpecificData === 'object')
-        ? (parsed.providerSpecificData as Record<string, unknown>)
-        : parsed
-      return {
-        ...parsed,
-        ...c,
-        providerSpecificData: specific,
-        lastError: (() => {
-          const val = c.lastError ?? parsed.lastError
-          if (!val) return null
-          if (typeof val === 'string') return val
-          if (typeof val === 'object') {
-            const obj = val as Record<string, unknown>
-            if (typeof obj.message === 'string') return obj.message
-            if (typeof obj.error === 'string') return obj.error
-            try {
-              return JSON.stringify(val)
-            } catch {
-              return String(val)
-            }
-          }
-          return String(val)
-        })(),
-        errorCode: (typeof parsed.errorCode === 'number' ? parsed.errorCode : null),
-        rateLimitedUntil: (typeof parsed.rateLimitedUntil === 'string' ? parsed.rateLimitedUntil : null),
-        testStatus: c.testStatus || (typeof parsed.testStatus === 'string' ? parsed.testStatus : null),
-        expiresAt: (typeof parsed.expiresAt === 'string' ? parsed.expiresAt : null),
-      } as ProviderConnection
-    })
+return conns.map(normalizeConnection)
   },
   createConnection: (payload: CreateConnectionPayload) =>
     request<{ success: boolean; id: string }>('/api/connections', {
@@ -653,16 +670,6 @@ export const api = {
   deleteCombo: (id: string) =>
     request<{ success: boolean }>(`/api/combos/${encodeURIComponent(id)}`, {
       method: 'DELETE',
-    }),
-  /** (Re)build the locked auto free-tier combo from the registry's free models. */
-  buildAutoFreeCombo: () =>
-    request<{ status: string; id: string; models: string[] }>('/api/combos/auto-free', {
-      method: 'POST',
-    }),
-  /** Group every usable chat model by family (any version, any provider) into one combo each. */
-  buildAutoFamilyCombos: () =>
-    request<{ status: string; created: string[]; count: number }>('/api/combos/auto-family', {
-      method: 'POST',
     }),
 
   // API Keys
@@ -943,7 +950,9 @@ export const api = {
   getProvidersClient: async (): Promise<{ connections: ProviderConnection[] }> => {
     try {
       const res = await request<{ connections: ProviderConnection[] }>('/api/providers/client')
-      if (res && res.connections) return res
+      if (res && res.connections) {
+        return { ...res, connections: res.connections.map(normalizeConnection) }
+      }
     } catch {}
     const conns = await api.getConnections().catch(() => [])
     return { connections: conns }
@@ -965,7 +974,9 @@ export const api = {
         pagination?: { page: number; pageSize: number; total: number; totalPages: number }
         totals?: { eligibleConnections: number; providerFilteredConnections: number }
       }>(`/api/providers/client${query ? `?${query}` : ''}`)
-      if (res && res.connections) return res
+      if (res && res.connections) {
+        return { ...res, connections: res.connections.map(normalizeConnection) }
+      }
     } catch {}
     const fallback = await api.getProvidersClient()
     return { connections: fallback.connections }
@@ -1117,11 +1128,11 @@ export const api = {
     } catch {}
     return { requireLogin: false }
   },
-  login: async (password: string): Promise<LoginResponse> => {
+  login: async (password: string, newPassword?: string): Promise<LoginResponse> => {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ password, ...(newPassword ? { newPassword } : {}) }),
     })
     if (res.ok) {
       const data = await res.json()

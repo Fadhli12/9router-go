@@ -1,4 +1,5 @@
-BINARY_NAME := 9router-go
+BINARY_SUFFIX := $(if $(findstring Windows_NT,$(OS)),.exe,)
+BINARY_NAME := 9router-go$(BINARY_SUFFIX)
 # Central version — single source: VERSION file, fallback to version.json, then git.
 #
 # Read through $(file <VERSION) rather than $(shell cat VERSION 2>/dev/null):
@@ -15,12 +16,13 @@ endif
 ifeq ($(VERSION),)
 VERSION := 1.0.0
 endif
-# BINARY is invoked by bare name, never as ./$(BINARY_NAME): sh finds it because
-# "." is on PATH, but cmd.exe does not put "." on PATH and answers
-# "'.' is not recognized as an internal or external command". The bare name is
-# resolved through PATHEXT (.EXE is listed) by both shells, and macOS/Linux keep
-# working because the current directory is implicitly searched there.
+# On Windows (cmd.exe), invoking `./$(BINARY_NAME)` fails with "'.' is not recognized".
+# On macOS/Linux, `.` is not on PATH, so a bare command fails with "command not found".
+ifeq ($(findstring Windows_NT,$(OS)),Windows_NT)
 BINARY := $(BINARY_NAME)
+else
+BINARY := ./$(BINARY_NAME)
+endif
 
 # DATA_DIR stays empty unless the caller overrides it, so the binary applies its
 # own per-platform default (%APPDATA%\9router on Windows, ~/.9router elsewhere).
@@ -47,7 +49,7 @@ LDFLAGS := -s -w -X "9router/proxy/internal/updater.CurrentVersion=$(VERSION)"
 # so the whole existence+FORCE check is delegated to Bun, which is already a
 # prerequisite of every path through this target.
 web-build:
-	@bun -e "import {existsSync} from 'fs'; import {spawnSync} from 'child_process'; if (!existsSync('web/dist/index.html')) { console.log('Building web SPA assets...'); spawnSync('bun', ['install','--frozen-lockfile'], {cwd:'web', stdio:'inherit'}); process.exit(spawnSync('bun', ['run','build'], {cwd:'web', stdio:'inherit'}).status ?? 1); }"
+	@bun -e "import {existsSync} from 'fs'; import {spawnSync} from 'child_process'; const force = process.env.FORCE === '1'; if (force || !existsSync('web/dist/index.html')) { console.log('Building web SPA assets...'); spawnSync('bun', ['install','--frozen-lockfile'], {cwd:'web', stdio:'inherit'}); process.exit(spawnSync('bun', ['run','build'], {cwd:'web', stdio:'inherit'}).status ?? 1); }"
 
 ## build — compile binary with version embedding
 build: web-build
