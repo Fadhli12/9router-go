@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import {
     api,
+    normalizeLastError,
     type ConnectionUsageResponse,
     type CreateConnectionPayload,
     type FreebuffSessionStatusResponse,
@@ -11,7 +12,7 @@
     type ProxyPool,
     type Settings
   } from '../../api/client'
-  import { PROVIDER_CATALOG, type ProviderCatalogItem } from '../../lib/providers'
+  import { PROVIDER_CATALOG, PROVIDER_CATALOG_MAP, type ProviderCatalogItem } from '../../lib/providers'
   import {
     clearCallback,
     CODEX_REDIRECT_URI,
@@ -679,9 +680,10 @@
         api.getSettings().catch(() => ({})),
         api.getProxyPools().catch(() => []),
         api.getModelAliases().catch(() => ({ aliases: {} })),
-        // Providers without a static catalog answer 404; the page then shows no
-        // capability icons and hides the thinking picker, same as upstream.
-        api.getModelCaps(providerId).catch(() => ({ caps: {} as Record<string, ModelCaps> })),
+        // Providers without a static catalog or compatible nodes do not have static caps.
+        !isCompatibleNode && (PROVIDER_CATALOG_MAP.has(providerId) || PROVIDER_CATALOG_MAP.has(storageAlias))
+          ? api.getModelCaps(providerId).catch(() => ({ caps: {} as Record<string, ModelCaps> }))
+          : Promise.resolve({ caps: {} as Record<string, ModelCaps> }),
       ])
       customModels = modelsData.customModels
       disabledModelIds = modelsData.disabledModelIds
@@ -845,7 +847,7 @@
     }
     // 4. Check errorCode 429 or lastError indicating rate limit / quota
     const errCode = (conn as unknown as { errorCode?: number }).errorCode
-    const lastErr = conn.lastError || ''
+    const lastErr = normalizeLastError(conn.lastError) || ''
     if (
       errCode === 429 ||
       lastErr.includes('429') ||
@@ -2967,7 +2969,7 @@
           {@const specificData = conn.providerSpecificData as Record<string, unknown> | undefined}
           {@const assignedPoolId = (typeof specificData?.proxyPoolId === 'string' ? specificData.proxyPoolId : null)}
           {@const proxyBadge = proxyBadgeFor(conn)}
-          {@const lastErr = conn.lastError || status?.error}
+          {@const lastErr = normalizeLastError(conn.lastError || status?.error) || ''}
           {@const priorityNum = conn.priority ?? idx + 1}
           {@const isConnActive = conn.isActive === 1}
           {@const cooldownInfo = getCooldownInfo(conn)}
@@ -3042,7 +3044,7 @@
                           <span class="material-symbols-outlined text-[10px] animate-spin">progress_activity</span>
                           testing
                         </span>
-                      {:else if (status?.state === 'failed' && status.error !== 'Provider test not supported') || ((conn.testStatus === 'failed' || conn.testStatus === 'error') && conn.lastError !== 'Provider test not supported')}
+                      {:else if (status?.state === 'failed' && status.error !== 'Provider test not supported') || ((conn.testStatus === 'failed' || conn.testStatus === 'error') && lastErr !== 'Provider test not supported')}
                         <span
                           class="inline-flex items-center gap-1.5 rounded-full font-semibold bg-red-500/10 text-red-600 dark:text-red-400 px-2 py-0.5 text-[10px]"
                           title={status?.state === 'failed' && status.error ? `failed: ${status.error}` : undefined}

@@ -3,6 +3,7 @@
 /9router-go-*
 /SHA256SUMS.txt
 *.exe
+*.exe~
 web/dist/
 
 # Test binaries
