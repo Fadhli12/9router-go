@@ -2527,6 +2527,163 @@ function formatErrorText(err: unknown): string {
       isSyncingOmniRoute = false
     }
   }
+
+  // --- Feature: check latest models / accessibility / prune unusable ----------
+
+  let latestModels = $state<Array<{ id: string; name?: string }>>([])
+  let isCheckingLatest = $state(false)
+  let latestError = $state<string | null>(null)
+  let isCheckingAll = $state(false)
+  let checkAllProgress = $state({ done: 0, total: 0 })
+
+  // ConnectionsView renders this panel without a {#key providerId}, so the
+  // instance survives a provider switch. Everything computed for the old
+  // provider is dropped before the new provider's DOM commits — otherwise the
+  // stale "new models" list stays clickable and Add would save a model from
+  // provider A into provider B's store.
+  $effect.pre(() => {
+    if (!providerId) return
+    latestModels = []
+    latestError = null
+    isCheckingLatest = false
+    isCheckingAll = false
+    checkAllProgress = { done: 0, total: 0 }
+    modelTestStatuses = {}
+    modelTestErrors = {}
+    activeModelTestError = null
+  })
+
+  // Providers whose /models the backend can enumerate
+  // (internal/providers.modelsListURL + compatible nodes + live-catalog
+  // providers). Kept in sync so the button only renders where it can work.
+  const ModelsListURLs = new Set([
+    'tokenharbor',
+    'dahl',
+    'atria',
+    'agnes',
+    'bai',
+  ])
+
+  // canListLiveModels mirrors the backend's list of providers with a live
+  // catalogue (HandleGetConnectionModels): a button that cannot work should
+  // not render.
+  let canListLiveModels = $derived(
+    providerId.startsWith('openai-compatible-') ||
+      isCompatibleNode ||
+      ['antigravity', 'gemini-cli', 'cline', 'clinepass', 'qoder', 'qoder-cn'].includes(providerId) ||
+      ModelsListURLs.has(providerId)
+  )
+
+  async function handleCheckLatestModels() {
+    if (isCheckingLatest) return
+    // Captured up front: a provider switch mid-fetch invalidates the response.
+    const pid = providerId
+    const active = providerConnections.find((c) => c.isActive !== 0)
+    if (!active) {
+      alert('Add an active connection first to fetch models.')
+      return
+    }
+    isCheckingLatest = true
+    latestError = null
+    latestModels = []
+    try {
+      const res = await api.getConnectionModels(active.id)
+      if (pid !== providerId) return
+      const known = new Set<string>([
+        ...builtInModels.map((m) => m.id),
+        ...providerCustomModels.map((m) => m.id),
+      ])
+      for (const m of res.models || []) {
+        const item = typeof m === 'string'
+          ? { id: m }
+          : { id: (m.id || m.model || m.name || '') as string, name: (m.name || '') as string | undefined }
+        if (!item.id || known.has(item.id)) continue
+        latestModels.push(item)
+      }
+      latestModels.sort((a, b) => a.id.localeCompare(b.id))
+      if (latestModels.length === 0) {
+        latestError = 'Catalog is up to date — no new models found.'
+      }
+    } catch (err) {
+      if (pid !== providerId) return
+      latestError = err instanceof Error ? err.message : 'Failed to fetch models'
+    } finally {
+      if (pid === providerId) isCheckingLatest = false
+    }
+  }
+
+  async function handleAddLatestModel(id: string, name?: string) {
+    try {
+      await api.saveCustomModel(`${storageAlias}|${id}|llm`, {
+        id,
+        providerAlias: storageAlias,
+        type: 'llm',
+        ...(name ? { name } : {}),
+      })
+      latestModels = latestModels.filter((m) => m.id !== id)
+      const modelsData = await fetchProviderModelsData(providerId, storageAlias)
+      customModels = modelsData.customModels
+      notifyCustomModelsChanged()
+    } catch (err) {
+      alert(`Failed to add model: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  // Bounded concurrency pool: each probe is a real chat completion that can
+  // take seconds, so running all of them at once would hammer the provider and
+  // the browser (a ~30-model provider fires 30 simultaneous fetches).
+  const TEST_CONCURRENCY = 6
+
+  async function handleCheckAllModels() {
+    if (isCheckingAll) return
+    const pid = providerId
+    isCheckingAll = true
+    const ids = allAvailableModels.map((m) => m.id)
+    checkAllProgress = { done: 0, total: ids.length }
+    // Reset previous verdicts so the run is not confused with stale ones.
+    modelTestStatuses = {}
+    modelTestErrors = {}
+    try {
+      let cursor = 0
+      const workers = Array.from({ length: Math.min(TEST_CONCURRENCY, ids.length) }, async () => {
+        while (cursor < ids.length && pid === providerId) {
+          const i = cursor++
+          await testModel(ids[i], true)
+          if (pid !== providerId) return
+          checkAllProgress = { ...checkAllProgress, done: checkAllProgress.done + 1 }
+        }
+      })
+      await Promise.allSettled(workers)
+      if (pid !== providerId) return
+      const failed = Object.values(modelTestStatuses).filter((s) => s === 'error')
+      if (failed.length > 0) {
+        activeModelTestError = `${failed.length} of ${ids.length} model(s) failed — see per-row status. Delete unusable models individually.`
+      } else {
+        activeModelTestError = null
+      }
+    } finally {
+      if (pid === providerId) isCheckingAll = false
+    }
+  }
+
+  // Delete is only real for custom models; registry models are static, so an
+  // unusable built-in model is disabled instead (the existing disable path).
+  async function handleDeleteModel(modelId: string) {
+    const custom = providerCustomModels.find((m) => m.id === modelId)
+    if (custom) {
+      if (!confirm(`Delete custom model "${modelId}"?`)) return
+      try {
+        await api.deleteCustomModel(`${storageAlias}|${modelId}|llm`)
+        const modelsData = await fetchProviderModelsData(providerId, storageAlias)
+        customModels = modelsData.customModels
+        notifyCustomModelsChanged()
+      } catch (err) {
+        alert(`Failed to delete model: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      return
+    }
+    await handleDisableModel(modelId)
+  }
 </script>
 
 <div class="flex min-w-0 flex-col gap-6 px-1 sm:gap-8 sm:px-0">
