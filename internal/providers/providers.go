@@ -34,6 +34,42 @@ func (p *ProviderConfig) IsGeminiNative() bool { return p.Format == "gemini-nati
 // native one (e.g. the "gemini" provider at /v1beta/openai/chat/completions).
 func (p *ProviderConfig) IsGeminiOpenAICompat() bool { return p.Format == "gemini-openai" }
 
+// WithStaticHeader returns cfg with one static header set, copying the config
+// and the header map so a shared catalog entry is never mutated. A header the
+// config already carries is replaced in the copy.
+func WithStaticHeader(cfg *ProviderConfig, name, value string) *ProviderConfig {
+	if cfg == nil {
+		return nil
+	}
+	cloned := *cfg
+	cloned.StaticHeaders = make(map[string]string, len(cfg.StaticHeaders)+1)
+	for k, v := range cfg.StaticHeaders {
+		cloned.StaticHeaders[k] = v
+	}
+	cloned.StaticHeaders[name] = value
+	return &cloned
+}
+
+// WithoutStaticHeader returns cfg with one static header removed, copying both
+// the config and the map. It answers cfg unchanged when the header is absent,
+// so the common path allocates nothing.
+func WithoutStaticHeader(cfg *ProviderConfig, name string) *ProviderConfig {
+	if cfg == nil {
+		return nil
+	}
+	if _, present := cfg.StaticHeaders[name]; !present {
+		return cfg
+	}
+	cloned := *cfg
+	cloned.StaticHeaders = make(map[string]string, len(cfg.StaticHeaders)-1)
+	for k, v := range cfg.StaticHeaders {
+		if k != name {
+			cloned.StaticHeaders[k] = v
+		}
+	}
+	return &cloned
+}
+
 // modelsListURL is the OpenAI-compatible /v1/models endpoint of providers whose
 // catalogue is fetched live for the dashboard's "Suggested free models" import.
 // It is the same set upstream wires into PROVIDER_MODELS_CONFIG
@@ -44,6 +80,26 @@ var modelsListURL = map[string]string{
 	"atria":       "https://api.atria-asi.ai/v1/models",
 	"agnes":       "https://apihub.agnes-ai.com/v1/models",
 	"bai":         "https://api.b.ai/v1/models",
+	// Meta's Model API refuses /v1/models without the protocol version header,
+	// so the live-catalog fetch carries it on top of the bearer token
+	// (upstream PROVIDER_MODELS_CONFIG.muse).
+	"muse": "https://api.meta.ai/v1/models",
+}
+
+// modelsListHeaders carries the extra headers one live-catalogue endpoint
+// needs beyond the connection's bearer token. Upstream keys the same values
+// off PROVIDER_MODELS_CONFIG per provider (src/app/api/providers/[id]/models/
+// route.js), which sets headers per entry — the flat Go map only has room for
+// the ones that actually differ.
+var modelsListHeaders = map[string]map[string]string{
+	"muse": {"x-api-version": "1.0.0", "Content-Type": "application/json"},
+}
+
+// ModelsListHeaders returns the extra headers the live catalogue endpoint of a
+// provider requires, or nil when it needs none. The map is shared by every
+// request, so a caller must not mutate it.
+func ModelsListHeaders(provider string) map[string]string {
+	return modelsListHeaders[strings.ToLower(provider)]
 }
 
 // ModelsListURL returns the live catalogue endpoint for a provider, or "" when
@@ -126,6 +182,30 @@ var KnownProviders = map[string]ProviderConfig{
 		BaseURL:    "https://apihub.agnes-ai.com/v1/chat/completions",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
+	},
+	// Muse — Meta's Model API. Dual auth upstream (Muse Code subscription
+	// device-code key and a dev.meta.ai pay-as-you-go key); both ride the same
+	// bearer transport, and only an account-issued (OAuth) key needs the
+	// protocol version header. Every Muse Spark model declares
+	// targetFormat "openai-responses" (see museModelFormats), so /v1/responses
+	// is the transport the executor dials for this provider.
+	"muse": {
+		BaseURL:    "https://api.meta.ai/v1/chat/completions",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+		Format:     "openai-responses",
+		StaticHeaders: map[string]string{
+			"x-api-version": "1.0.0",
+		},
+	},
+	// v1m System One — a calibrated decision engine, not a chat model. Its
+	// two registry models carry kind "systemone", so the only endpoint it
+	// answers is /v1/systemone. BaseURL is empty because the port has no
+	// chat lane for this provider; an empty base never resolves a connection.
+	"v1m": {
+		AuthHeader:   "Authorization",
+		AuthScheme:   "bearer",
+		SystemoneURL: "https://v1m.ir/v1/systemone",
 	},
 	"anthropic": {
 		BaseURL:    "https://api.anthropic.com/v1/messages",
@@ -526,7 +606,10 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthScheme: "bearer",
 		StaticHeaders: map[string]string{
 			"originator": "codex_cli_rs",
-			"User-Agent": "codex_cli_rs/0.154.0",
+			"User-Agent": CodexCLIUserAgent,
+			// Upstream sends `version` next to the User-Agent; the codex
+			// backend gates newer models on the pair.
+			"version": CodexCLIVersionHeader,
 		},
 	},
 	"grok-cli": {
@@ -663,6 +746,16 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 		TTSURL:     "https://api.play.ht/api/v2/tts/stream",
+	},
+	// TinyFish — one x-api-key credential behind two separate hosts (search
+	// and fetch), which is why BaseURL is a non-endpoint root here: appending
+	// /v1/search to it would hit a host that does not serve search.
+	"tinyfish": {
+		BaseURL:    "https://api.tinyfish.ai",
+		AuthHeader: "x-api-key",
+		AuthScheme: "raw",
+		FetchURL:   "https://api.fetch.tinyfish.ai",
+		FetchMethod: "POST",
 	},
 	"runwayml": {
 		BaseURL:    "https://api.dev.runwayml.com/v1",

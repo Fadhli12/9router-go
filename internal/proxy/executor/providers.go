@@ -55,12 +55,15 @@ func ForwardCodex(w http.ResponseWriter, req *Request) error {
 	// The ChatGPT Codex backend rejects a max_output_tokens it did not ask
 	// for; every chat-completions client sends one, so drop it here (#48).
 	transformedBody = stripCodexUnsupportedTokenParams(transformedBody)
+	// Only now that the "(level)" suffix is gone can the catalog id be mapped
+	// to its wire id, so this has to follow the transform rather than precede it.
+	transformedBody = rewriteCodexUpstreamModel(transformedBody)
 	cfg, transformedBody := applyCodexCompact(req.Config, transformedBody)
 	ctx := req.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	resp, err := proxy.ForwardCodex(ctx, req.Client, cfg, req.APIKey, transformedBody, req.IsStream, req.ConnData)
+	resp, err := proxy.ForwardCodex(ctx, req.Client, cfg, req.APIKey, transformedBody, req.IsStream, req.ConnData, codexResponsesLiteBody(transformedBody))
 	if err != nil {
 		return fmt.Errorf("ForwardCodex: %w", err)
 	}

@@ -68,14 +68,28 @@ func resolveProviderAlias(alias string) string {
 // If the entry has no "/" (i.e. it's a combo name), it resolves the combo
 // and returns its first concrete model with the combined model list.
 func (h *ChatHandler) resolveModelEntry(entry string) *ModelInfo {
+	return h.resolveModelEntryGuarded(entry, nil)
+}
+
+// resolveModelEntryGuarded is resolveModelEntry with the set of combo names
+// already being expanded on this path. A combo that lists itself (directly or
+// through another combo) otherwise re-enters the branch below forever and
+// takes the whole process down with a stack overflow — every single-name hop
+// re-queries the database, so nothing else bounds it.
+func (h *ChatHandler) resolveModelEntryGuarded(entry string, visiting map[string]bool) *ModelInfo {
 	if !strings.Contains(entry, "/") {
-		if h.Repo == nil {
+		if h.Repo == nil || visiting[entry] {
 			return nil
 		}
 		if combo, err := h.Repo.GetComboByName(entry); err == nil && combo != nil && combo.Models != "" {
 			var subModels []string
 			if err := json.Unmarshal([]byte(combo.Models), &subModels); err == nil && len(subModels) > 0 {
-				first := h.resolveModelEntry(subModels[0])
+				if visiting == nil {
+					visiting = make(map[string]bool, 4)
+				}
+				visiting[entry] = true
+				first := h.resolveModelEntryGuarded(subModels[0], visiting)
+				delete(visiting, entry)
 				if first != nil {
 					first.ComboModels = subModels
 					strat, sticky, judge := h.resolveComboRouting(combo.Name, combo.Strategy)
@@ -282,10 +296,16 @@ func (h *ChatHandler) resolveModel(modelStr string) (*ModelInfo, error) {
 		}
 	}
 
-	// Upstream PR #4135: route bare codex-auto-review to the Codex provider
-	// Outside Repo guard so it resolves with nil Repo / empty DB (static catalog).
-	if modelStr == "codex-auto-review" {
-		return &ModelInfo{Provider: "codex", Model: "codex-auto-review"}, nil
+	// Codex-only GPT model slugs (open-sse/services/model.js MODEL_PREFIX_
+	// PROVIDERS): these exist on backend-api/codex/models but not on the OpenAI
+	// API, so a bare id from the Codex CLI's own picker used to fall through to
+	// openai and 404 for anyone holding only a Codex OAuth account (#4405).
+	// The rules sit ahead of the generic gpt-* fallback; plain gpt-4* / gpt-3.5*
+	// / gpt-4o* stay on openai.
+	//
+	// Outside the Repo guard so it resolves with nil Repo / an empty DB.
+	if codexOnlyModelSlug(modelStr) {
+		return &ModelInfo{Provider: "codex", Model: modelStr}, nil
 	}
 
 	// 3. Check if it's a combo name
@@ -347,6 +367,35 @@ func (h *ChatHandler) resolveModel(modelStr string) (*ModelInfo, error) {
 		}
 	}
 	return nil, fmt.Errorf("could not resolve model: %s", modelStr)
+}
+
+// codexOnlyModelSlug reports whether a bare model id is served only by the
+// Codex backend (open-sse/services/model.js MODEL_PREFIX_PROVIDERS). These
+// slugs exist on backend-api/codex/models but not on the OpenAI API, so a bare
+// id from the Codex CLI's picker used to fall through to the generic gpt-*
+// rule and 404 for anyone holding only a Codex OAuth account (#4405).
+//
+// The rules are checked in upstream's order and ahead of the generic fallback;
+// plain gpt-4*, gpt-3.5* and gpt-4o* deliberately do not match.
+func codexOnlyModelSlug(model string) bool {
+	lower := strings.ToLower(strings.TrimSpace(model))
+	if lower == "" {
+		return false
+	}
+	// codex-auto-review is the Codex CLI's virtual model. It carries no gpt
+	// prefix, but it belongs to codex for the same reason (#4135).
+	if lower == providers.CodexAutoReviewModel {
+		return true
+	}
+	// gpt-5.<x> and gpt-6.<x>.
+	if len(lower) > 7 && (strings.HasPrefix(lower, "gpt-5.") || strings.HasPrefix(lower, "gpt-6.")) {
+		return true
+	}
+	// gpt-6-<variant>.
+	if strings.HasPrefix(lower, "gpt-6-") {
+		return true
+	}
+	return strings.HasPrefix(lower, "gpt-daybreak-") || strings.HasPrefix(lower, "gpt-reserve")
 }
 
 // resolvePrefixProvider checks if a provider name is a providerNode prefix.

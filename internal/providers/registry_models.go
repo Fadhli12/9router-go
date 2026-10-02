@@ -7,6 +7,7 @@ import "strings"
 // keyed by uiAlias/alias and by provider id so both lookups resolve).
 var ProviderModels = map[string][]string{
 	"aai":                  {"universal-3-pro", "universal-2", "best", "nano"},
+	"agnes":              {"agnes-2.5-flash", "agnes-2.5-pro", "agnes-2.5-pro-beta", "agnes-3.0-flash"},
 	"af":                   {"gpt-oss-120b", "gpt-oss-20b", "kimi-k2.7-code"},
 	"ag":                   {"gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low", "gemini-3.8-flash", "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low", "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low", "gemini-3.5-flash-high", "gemini-3-flash-agent", "gemini-3.5-flash-low", "gemini-3.5-flash-extra-low", "gemini-pro-agent", "gemini-3.1-pro-low", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium", "gemini-3-flash", "gemini-3.1-flash-image"},
 	"alicode":              {"qwen3.5-plus", "kimi-k2.5", "glm-5", "MiniMax-M2.5", "qwen3-max-2026-01-23", "qwen3-coder-next", "qwen3-coder-plus", "glm-4.7"},
@@ -42,7 +43,12 @@ var ProviderModels = map[string][]string{
 	"cmc":                  {"deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash", "moonshotai/Kimi-K2.7-Code", "moonshotai/Kimi-K2.7-Code-Highspeed", "moonshotai/Kimi-K2.6", "moonshotai/Kimi-K2.5", "zai-org/GLM-5.2", "zai-org/GLM-5.2-Fast", "zai-org/GLM-5.1", "zai-org/GLM-5", "MiniMaxAI/MiniMax-M3", "MiniMaxAI/MiniMax-M2.7", "MiniMaxAI/MiniMax-M2.5", "xiaomi/mimo-v2.5-pro", "xiaomi/mimo-v2.5", "Qwen/Qwen3.6-Max-Preview", "Qwen/Qwen3.6-Plus", "Qwen/Qwen3.7-Max", "Qwen/Qwen3.7-Plus", "stepfun/Step-3.7-Flash", "stepfun/Step-3.5-Flash", "nvidia/nemotron-3-ultra-550b-a55b"},
 	"codebuddy-cn":         {"glm-5.2", "glm-5.1", "glm-5v-turbo", "minimax-m3", "kimi-k2.7", "kimi-k2.6", "hy3", "hy4-preview", "glm-5.3", "glm-5.3-flash", "kimi-k3-1", "deepseek-v4-pro", "deepseek-v4.1-flash"},
 	"codebuddy-intl":       {"glm-5.2", "glm-5.1", "glm-5.0", "glm-5.0-turbo", "glm-5v-turbo", "glm-4.7", "minimax-m3", "minimax-m2.7", "kimi-k2.7", "kimi-k2.6", "kimi-k2.5", "hy3-preview", "deepseek-v4-pro", "deepseek-v4.1-flash", "deepseek-v3-2-volc"},
-	"codex":                {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-sol-review", "gpt-5.6-terra", "gpt-5.6-terra-review", "gpt-5.6-luna", "gpt-5.6-luna-review", "gpt-5.5", "gpt-5.5-review", "gpt-5.4", "gpt-5.4-review", "gpt-5.4-mini", "gpt-5.4-mini-review", "gpt-5.3-codex-spark", "gpt-5.3-codex-spark-review", "codex-auto-review", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2", "gpt-image-1.5", "gpt-5.6-sol-image", "gpt-5.6-terra-image", "gpt-5.6-luna-image", "gpt-5.5-image", "gpt-5.4-image", "gpt-5.3-image"},
+	// gpt-5.4 / gpt-5.4-mini / gpt-5.3-codex-spark and gpt-5.4-image were removed upstream:
+	// absent from backend-api/codex/models for ChatGPT Plus/Pro accounts, so they answer
+	// HTTP 400 "model is not supported" (#4202). gpt-daybreak-blue-latest and gpt-reserve
+	// replaced them, confirmed live on the same endpoint. The [1m] ids are the extended
+	// -context variants; they map to their base id upstream via `upstreamModelId`.
+	"codex":                {"gpt-6.1-sol", "gpt-6-astra", "gpt-6-astra[1m]", "gpt-6-sol", "gpt-6-sol[1m]", "gpt-6-luna", "gpt-6-luna[1m]", "gpt-5.6-sol", "gpt-5.6-sol[1m]", "gpt-5.6-sol-review", "gpt-5.6-terra", "gpt-5.6-terra[1m]", "gpt-5.6-terra-review", "gpt-5.6-luna", "gpt-5.6-luna[1m]", "gpt-5.6-luna-review", "gpt-5.5", "gpt-5.5-review", "gpt-daybreak-blue-latest", "gpt-reserve", "codex-auto-review", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2", "gpt-image-1.5", "gpt-5.6-sol-image", "gpt-5.6-terra-image", "gpt-5.6-luna-image", "gpt-5.5-image", "gpt-5.3-image"},
 	"cohere":               {"command-r-plus-08-2024", "command-r-08-2024", "command-a-03-2025"},
 	"comfyui":              {"flux-dev", "sdxl"},
 	"tokenharbor":          {"claude-opus-5.5", "claude-sonnet-5", "gpt-6-astra", "gpt-6-sol", "deepseek-v4.1-flash:free", "grok-4.7"},
@@ -51,7 +57,7 @@ var ProviderModels = map[string][]string{
 	"commandcode":          {"deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash", "moonshotai/Kimi-K2.7-Code", "moonshotai/Kimi-K2.7-Code-Highspeed", "moonshotai/Kimi-K2.6", "moonshotai/Kimi-K2.5", "zai-org/GLM-5.2", "zai-org/GLM-5.2-Fast", "zai-org/GLM-5.1", "zai-org/GLM-5", "MiniMaxAI/MiniMax-M3", "MiniMaxAI/MiniMax-M2.7", "MiniMaxAI/MiniMax-M2.5", "xiaomi/mimo-v2.5-pro", "xiaomi/mimo-v2.5", "Qwen/Qwen3.6-Max-Preview", "Qwen/Qwen3.6-Plus", "Qwen/Qwen3.7-Max", "Qwen/Qwen3.7-Plus", "stepfun/Step-3.7-Flash", "stepfun/Step-3.5-Flash", "nvidia/nemotron-3-ultra-550b-a55b"},
 	"cu":                   {"default", "claude-4.5-opus-high-thinking", "claude-4.5-opus-high", "claude-4.5-sonnet-thinking", "claude-4.5-sonnet", "claude-4.5-haiku", "claude-4.5-opus", "gpt-5.2-codex", "claude-4.6-opus-max", "claude-4.6-sonnet-medium-thinking", "kimi-k2.5", "gemini-3-flash-preview", "gpt-5.2", "gpt-5.3-codex"},
 	"cursor":               {"default", "claude-4.5-opus-high-thinking", "claude-4.5-opus-high", "claude-4.5-sonnet-thinking", "claude-4.5-sonnet", "claude-4.5-haiku", "claude-4.5-opus", "gpt-5.2-codex", "claude-4.6-opus-max", "claude-4.6-sonnet-medium-thinking", "kimi-k2.5", "gemini-3-flash-preview", "gpt-5.2", "gpt-5.3-codex"},
-	"cx":                   {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-sol-review", "gpt-5.6-terra", "gpt-5.6-terra-review", "gpt-5.6-luna", "gpt-5.6-luna-review", "gpt-5.5", "gpt-5.5-review", "gpt-5.4", "gpt-5.4-review", "gpt-5.4-mini", "gpt-5.4-mini-review", "gpt-5.3-codex-spark", "gpt-5.3-codex-spark-review", "codex-auto-review", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2", "gpt-image-1.5", "gpt-5.6-sol-image", "gpt-5.6-terra-image", "gpt-5.6-luna-image", "gpt-5.5-image", "gpt-5.4-image", "gpt-5.3-image"},
+	"cx":                   {"gpt-6.1-sol", "gpt-6-astra", "gpt-6-astra[1m]", "gpt-6-sol", "gpt-6-sol[1m]", "gpt-6-luna", "gpt-6-luna[1m]", "gpt-5.6-sol", "gpt-5.6-sol[1m]", "gpt-5.6-sol-review", "gpt-5.6-terra", "gpt-5.6-terra[1m]", "gpt-5.6-terra-review", "gpt-5.6-luna", "gpt-5.6-luna[1m]", "gpt-5.6-luna-review", "gpt-5.5", "gpt-5.5-review", "gpt-daybreak-blue-latest", "gpt-reserve", "codex-auto-review", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2", "gpt-image-1.5", "gpt-5.6-sol-image", "gpt-5.6-terra-image", "gpt-5.6-luna-image", "gpt-5.5-image", "gpt-5.3-image"},
 	"deepgram":             {"nova-3", "nova-2", "whisper-large", "nova"},
 	"deepseek":             {"deepseek-v4-pro", "deepseek-v4-pro-max", "deepseek-v4-pro-none", "deepseek-v4.1-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-chat", "deepseek-reasoner"},
 	"dg":                   {"nova-3", "nova-2", "whisper-large", "nova"},
@@ -94,6 +100,7 @@ var ProviderModels = map[string][]string{
 	"minimax":              {"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1", "minimax-image-01", "speech-2.8-hd", "speech-2.8-turbo", "speech-2.6-hd", "speech-2.6-turbo", "speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo"},
 	"minimax-cn":           {"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1", "speech-2.8-hd", "speech-2.8-turbo", "speech-2.6-hd", "speech-2.6-turbo", "speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo"},
 	"mistral":              {"mistral-large-latest", "codestral-latest", "mistral-medium-latest", "mistral-embed"},
+	"muse":                 {"muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-spark-1.3-contributor", "muse-spark-1.2-contributor"},
 	"mmf":                  {"mimo-auto"},
 	"morph":                {"morph-v3-large", "morph-v3-fast", "morph-qwen35-397b", "morph-minimax27-230b", "morph-qwen36-27b", "morph-dsv4flash"},
 	"nanobanana":           {"nanobanana-flash", "nanobanana-pro"},
@@ -141,6 +148,7 @@ var ProviderModels = map[string][]string{
 	"vertex":               {"gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview", "gemini-3-flash-preview", "gemini-2.5-flash", "veo-3.1-generate-preview", "veo-3.1-fast-generate-preview", "veo-3.0-generate-001", "veo-2.0-generate-001"},
 	"vertex-partner":       {"deepseek-ai/deepseek-v3.2-maas", "qwen/qwen3-next-80b-a3b-thinking-maas", "qwen/qwen3-next-80b-a3b-instruct-maas", "zai-org/glm-5-maas"},
 	"volcengine-ark":       {"Doubao-Seed-2.0-Code", "Doubao-Seed-2.0-pro", "Doubao-Seed-2.0-lite", "Doubao-Seed-Code", "DeepSeek-V4-Flash", "DeepSeek-V4-Pro", "GLM-5.1", "MiniMax-M2.7", "Kimi-K2.6"},
+	"v1m":                 {"rev-latest", "v1m-decision-engine"},
 	"voyage":               {"voyage-3-large", "voyage-3.5", "voyage-3.5-lite", "voyage-code-3", "voyage-finance-2", "voyage-law-2", "voyage-multilingual-2"},
 	"voyage-ai":            {"voyage-3-large", "voyage-3.5", "voyage-3.5-lite", "voyage-code-3", "voyage-finance-2", "voyage-law-2", "voyage-multilingual-2"},
 	"vx":                   {"gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview", "gemini-3-flash-preview", "gemini-2.5-flash", "veo-3.1-generate-preview", "veo-3.1-fast-generate-preview", "veo-3.0-generate-001", "veo-2.0-generate-001"},
@@ -514,6 +522,10 @@ var ProviderModelKinds = map[string]map[string]string{
 		"text-embedding-bge-m3":   "embedding",
 		"text-embedding-qwen3-8b": "embedding",
 		"venice-sd35":             "image",
+	},
+	"v1m": {
+		"rev-latest":          "systemone",
+		"v1m-decision-engine": "systemone",
 	},
 	"vertex": {
 		"veo-2.0-generate-001":          "video",

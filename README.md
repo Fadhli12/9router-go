@@ -150,6 +150,14 @@ docker run -d --name 9router-go --restart unless-stopped \
 
 ---
 
+## 📸 Screenshots
+
+![9router-go dashboard — Providers view](docs/screenshots/providers.png)
+
+![9router-go dashboard — Endpoint & API key setup](docs/screenshots/endpoint.png)
+
+---
+
 ## ⚙️ Setup Guide
 
 ### Release binary
@@ -273,8 +281,12 @@ Go reads/writes the upstream 9router table/JSON shapes and bootstraps the core s
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — routing, providers, runtime layout
 - [`DATABASE.md`](DATABASE.md) — SQLite schema & operator contract
 - [`ROADMAP.md`](ROADMAP.md) — proposals only, not current behavior
-- [`CHANGELOG.md`](CHANGELOG.md) — release history (Go **v1.9.6**, upstream baseline `decolua/9router` v0.5.85)
+- [`CHANGELOG.md`](CHANGELOG.md) — release history (Go **v1.9.7**, upstream baseline `decolua/9router` v0.5.85)
 
 ## Credits
 
 - [9Router](https://github.com/decolua/9router) — original Next.js gateway & dashboard this Go port preserves compatibility with
+
+## 📄 License
+
+MIT — see [`LICENSE`](LICENSE). Portions derive from [9Router](https://github.com/decolua/9router) (MIT, © 2024-2026 decolua and contributors); its notice is retained there.

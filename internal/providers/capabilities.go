@@ -137,6 +137,11 @@ var modelCapabilities = map[string]Capabilities{
 	"claude-opus-5-thinking":           {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
 	"claude-opus-5-agentic":            {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
 	"claude-opus-5-thinking-agentic":   {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
+	// Opus 5.5 — experimental preview on Kiro (1M context, 2x credits).
+	"claude-opus-5.5":                  {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
+	"claude-opus-5.5-thinking":         {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
+	"claude-opus-5.5-agentic":          {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
+	"claude-opus-5.5-thinking-agentic": {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
 	"claude-opus-4.6":                  {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
 	"claude-opus-4.7":                  {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
 	"claude-opus-4-7":                  {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
@@ -147,6 +152,7 @@ var modelCapabilities = map[string]Capabilities{
 	"claude-opus-4-8-thinking":         {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
 	"claude-sonnet-4.6":                {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
 	"claude-sonnet-4-6":                {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
+	"claude-sonnet-5-5":                {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
 	"claude-sonnet-5":                  {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
 	"claude-sonnet-5-thinking":         {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
 	"claude-sonnet-5-agentic":          {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
@@ -160,6 +166,10 @@ var modelCapabilities = map[string]Capabilities{
 	"deepseek-v4-flash-vision-exp":     {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "deepseek"},
 	"deepseek-v4-vision":               {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "deepseek", ThinkingEffortSupported: true},
 	"deepseek-v4.1-flash":              {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "deepseek"},
+	// Some gateways publish this model under the hyphenated id (dash instead
+	// of dot); without the row it fell through to the text-only `*deepseek-v4*`
+	// pattern and lost its vision and 1M window.
+	"deepseek-v4-1-flash":              {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "deepseek"},
 	"deepseek-flash":                   {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "deepseek"},
 	"muse-spark-1.2-contributor-free":  {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai"},
 	"muse-spark-1.3-contributor-free":  {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai"},
@@ -173,6 +183,28 @@ var modelCapabilities = map[string]Capabilities{
 	"kimi-k2.7-code-highspeed":         {Vision: true, VideoInput: true, Reasoning: true, Tools: true, ThinkingFormat: "kimi", ThinkingCanDisable: new(false)},
 }
 
+// codexExtendedContextWindow is the context window the codex registry
+// publishes for the `[1m]` extended-context variants. The suffix is a 9router
+// catalog id, not a wire id — upstream resolves it to the base model through
+// `upstreamModelId` — so these entries carry their own window rather than
+// inheriting the base model's.
+const codexExtendedContextWindow = 872000
+
+// codexGpt56Caps builds the shared Codex capability block at a given context
+// window. Every codex model reports vision, reasoning, search and tools with
+// OpenAI-style reasoning_effort; only the window differs between families.
+func codexGpt56Caps(contextWindow int) Capabilities {
+	return Capabilities{
+		Vision: true, Reasoning: true, Search: true, Tools: true,
+		ThinkingFormat: "openai", ContextWindow: contextWindow, MaxOutput: 128000,
+	}
+}
+// devinCLIGPTCaps is Devin CLI's own GPT declaration (upstream
+// DEVIN_CLI_GPT_CAPS): a 200k window even though the models are GPT-5.4/5.5.
+var devinCLIGPTCaps = Capabilities{
+	Vision: true, Reasoning: true, Search: true, Tools: true,
+	ThinkingFormat: "openai", ContextWindow: 200000, MaxOutput: 128000,
+}
 var providerCapabilities = map[string]map[string]Capabilities{
 	"nvidia": {
 		"minimaxai/minimax-m2.7":        {Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false)},
@@ -182,13 +214,26 @@ var providerCapabilities = map[string]map[string]Capabilities{
 		"deepseek-ai/deepseek-v4-flash": {Reasoning: true, Tools: true, ThinkingFormat: "openai"},
 	},
 	"codex": {
-		"gpt-6-astra":            {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai"},
-		"gpt-5.6-sol":            {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai"},
-		"gpt-5.6-sol-review":     {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai"},
-		"gpt-5.6-terra":          {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai"},
-		"gpt-5.6-terra-review":   {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai"},
-		"gpt-5.6-luna":           {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai"},
-		"gpt-5.6-luna-review":    {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai"},
+		// Codex OAuth reports its own context windows (open-sse/providers/
+		// capabilities.js), which differ from both the OpenAI API's and the
+		// sibling GPT-5.6 models' — Sol is wider than Terra/Luna, and the [1m]
+		// variants are wider again.
+		"gpt-6-astra":            codexGpt56Caps(272000),
+		"gpt-6-sol":              codexGpt56Caps(272000),
+		"gpt-6-luna":             codexGpt56Caps(272000),
+		"gpt-6.1-sol":            codexGpt56Caps(272000),
+		"gpt-6-astra[1m]":        codexGpt56Caps(codexExtendedContextWindow),
+		"gpt-6-sol[1m]":          codexGpt56Caps(codexExtendedContextWindow),
+		"gpt-6-luna[1m]":         codexGpt56Caps(codexExtendedContextWindow),
+		"gpt-5.6-sol":            codexGpt56Caps(372000),
+		"gpt-5.6-sol[1m]":        codexGpt56Caps(codexExtendedContextWindow),
+		"gpt-5.6-sol-review":     codexGpt56Caps(372000),
+		"gpt-5.6-terra":          codexGpt56Caps(272000),
+		"gpt-5.6-terra[1m]":      codexGpt56Caps(codexExtendedContextWindow),
+		"gpt-5.6-terra-review":   codexGpt56Caps(272000),
+		"gpt-5.6-luna":           codexGpt56Caps(272000),
+		"gpt-5.6-luna[1m]":       codexGpt56Caps(codexExtendedContextWindow),
+		"gpt-5.6-luna-review":    codexGpt56Caps(272000),
 		"gpt-5.6-sol-image":      {ImageOutput: true, Tools: true},
 		"gpt-5.6-terra-image":    {ImageOutput: true, Tools: true},
 		"gpt-5.6-luna-image":     {ImageOutput: true, Tools: true},
@@ -225,6 +270,18 @@ var providerCapabilities = map[string]map[string]Capabilities{
 		"laguna-s-2.1":  {Reasoning: true, Tools: true, ThinkingFormat: "openai"},
 		"laguna-xs-2.1": {Reasoning: true, Tools: true, ThinkingFormat: "openai"},
 	},
+	// Devin CLI's registry declares 200k for these GPT variants; the generic
+	// gpt-5.4/5.5 rows now publish the 1.05M API window, so the gateway's own
+	// number has to be recorded here (upstream decolua/9router 89ffac5a).
+	"devin-cli": {
+		"gpt-5.4-high":    devinCLIGPTCaps,
+		"gpt-5.4-medium":  devinCLIGPTCaps,
+		"gpt-5.4-low":     devinCLIGPTCaps,
+		"gpt-5.5-xhigh":   devinCLIGPTCaps,
+		"gpt-5.5-high":    devinCLIGPTCaps,
+		"gpt-5.5-medium":  devinCLIGPTCaps,
+		"gpt-5.5-low":     devinCLIGPTCaps,
+	},
 }
 
 func init() {
@@ -256,6 +313,11 @@ func init() {
 			ThinkingFormat: "openai", ThinkingCanDisable: new(false),
 		},
 	}
+
+	// `cx` is the alias codex publishes under, so it serves the same catalog
+	// upstream does (open-sse/providers/capabilities.js:
+	// PROVIDER_CAPABILITIES.cx = PROVIDER_CAPABILITIES.codex).
+	providerCapabilities["cx"] = providerCapabilities["codex"]
 }
 
 type patternCapability struct {
@@ -264,6 +326,11 @@ type patternCapability struct {
 }
 
 var patternCapabilities = []patternCapability{
+	// Ahead of the generic sonnet row: vendor-prefixed 5.x ids
+	// ("anthropic/claude-sonnet-5", "openrouter/claude-sonnet-5") have no exact
+	// entry, and budget thinking on them sends a token budget Anthropic no
+	// longer accepts.
+	{"*claude*sonnet-5*", Capabilities{Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"}},
 	{"*claude*opus-5*", Capabilities{Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"}},
 	{"*claude*opus-4.6*", Capabilities{Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"}},
 	{"*claude*opus-4.7*", Capabilities{Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"}},
@@ -289,9 +356,24 @@ var patternCapabilities = []patternCapability{
 	{"*gemma*", Capabilities{Vision: true, Tools: true}},
 	{"*nanobanana*", Capabilities{Vision: true, ImageOutput: true, Tools: true}},
 
-	{"*gpt-6*", Capabilities{Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai"}},
-
+	// 1.05M is the API window for the whole gpt-6 family (astra, luna, sol alike).
+	// It used to carry one gateway's 272k truncation, so every other provider's
+	// gpt-6 models were published at 3.9x under their real window. A gateway
+	// that really truncates lower says so in its own row below.
+	{"*gpt-6*", Capabilities{Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 1050000, MaxOutput: 128000}},
 	{"*gpt-5*image*", Capabilities{ImageOutput: true, Tools: true}},
+	// gpt-5.4 is where the 1.05M window starts, but the mini and nano tiers
+	// stayed at 400k — first match wins, so those two have to be listed ahead of
+	// it. The image row has to be ahead of all of them: gpt-5.6-sol-image would
+	// otherwise match *gpt-5.6* and be published as a reasoning model, which is
+	// how seven image entries ended up offering thinking levels that upstream
+	// declares none for.
+	{"*gpt-5.4-mini*", Capabilities{Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 400000, MaxOutput: 128000}},
+	{"*gpt-5.4-nano*", Capabilities{Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 400000, MaxOutput: 128000}},
+	{"*gpt-5.4*", Capabilities{Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 1050000, MaxOutput: 128000}},
+	{"*gpt-5.5*", Capabilities{Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 1050000, MaxOutput: 128000}},
+	{"*gpt-5.6*", Capabilities{Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 1050000, MaxOutput: 128000}},
+
 	{"*gpt-image*", Capabilities{ImageOutput: true, Tools: true}},
 	{"*gpt-5*codex*", Capabilities{Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai"}},
 	{"*gpt-5*", Capabilities{Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai"}},
@@ -404,14 +486,16 @@ func GetModelTokenLimits(model string) (contextWindow int, maxOutput int) {
 	m := strings.ToLower(model)
 
 	switch {
+	case strings.Contains(m, "gpt-5.4-mini") || strings.Contains(m, "gpt-5.4-nano"):
+		return 400000, 128000
+	case strings.Contains(m, "gpt-5.4") || strings.Contains(m, "gpt-5.5") || strings.Contains(m, "gpt-5.6") || strings.Contains(m, "gpt-6"):
+		return 1050000, 128000
 	case strings.Contains(m, "deepseek-v4.1-flash") || strings.Contains(m, "deepseek-v4-flash"):
 		return 1000000, 128000
 	case strings.Contains(m, "gemini-1.5") || strings.Contains(m, "gemini-2.0") || strings.Contains(m, "gemini-2.5") || strings.Contains(m, "gemini-3") || strings.Contains(m, "glm-5.3-flash"):
 		return 1048576, 65536
 	case strings.Contains(m, "grok-4.5") || strings.Contains(m, "grok-4.6"):
 		return 524288, 32768
-	case strings.Contains(m, "gpt-6"):
-		return 272000, 128000
 	case strings.Contains(m, "claude-3") || strings.Contains(m, "claude-sonnet") || strings.Contains(m, "claude-opus") || strings.Contains(m, "claude-haiku"):
 		return 200000, 8192
 	case strings.Contains(m, "gpt-4o") || strings.Contains(m, "gpt-4-turbo") || strings.Contains(m, "gpt-4.1") || strings.Contains(m, "gpt-5"):
@@ -630,12 +714,25 @@ func mergeCapabilities(base, overlay Capabilities) Capabilities {
 		// overlay as soon as it declares a format, mirroring the JS spread
 		// where an absent key keeps the default.
 		ThinkingCanDisable: base.ThinkingCanDisable,
+		// Limits are a declaration, not a flag: an overlay naming no
+		// contextWindow/maxOutput says nothing about them, so the base's
+		// numbers survive. Without this, every provider and exact-model row
+		// blanked the pattern table's limits and the substring table below
+		// republished the family default instead.
+		ContextWindow: base.ContextWindow,
+		MaxOutput:     base.MaxOutput,
 	}
 	if overlay.ThinkingFormat != "" {
 		res.ThinkingFormat = overlay.ThinkingFormat
 		res.ThinkingCanDisable = overlay.ThinkingCanDisable
 		res.ThinkingRange = overlay.ThinkingRange
 		res.ThinkingEffortSupported = overlay.ThinkingEffortSupported
+	}
+	if overlay.ContextWindow != 0 {
+		res.ContextWindow = overlay.ContextWindow
+	}
+	if overlay.MaxOutput != 0 {
+		res.MaxOutput = overlay.MaxOutput
 	}
 	return res
 }

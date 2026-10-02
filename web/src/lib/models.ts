@@ -84,6 +84,8 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "minimax-cn": "minimax-cn",
   "mistral": "mistral",
   "mmf": "mmf",
+  "muse": "muse",
+  "tinyfish": "tinyfish",
   "morph": "morph",
   "nanobanana": "nb",
   "nebius": "nebius",
@@ -121,6 +123,7 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "vertex": "vx",
   "vertex-partner": "vxp",
   "volcengine-ark": "ark",
+  "v1m": "v1m",
   "voyage-ai": "voyage",
   "windsurf": "windsurf",
   "xai": "xai",
@@ -914,44 +917,78 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   ],
   "cx": [
     {
+      "id": "gpt-6.1-sol",
+      "name": "GPT 6.1 Sol",
+      "upstreamModelId": "gpt-6.1-sol"
+    },
+    {
       "id": "gpt-6-astra",
       "name": "GPT 6.0 Astra"
+    },
+    {
+      "id": "gpt-6-astra[1m]",
+      "name": "GPT 6.0 Astra (extended context)",
+      "upstreamModelId": "gpt-6-astra"
     },
     {
       "id": "gpt-6-sol",
-      "name": "GPT-6 Sol"
+      "name": "GPT 6.0 Sol"
+    },
+    {
+      "id": "gpt-6-sol[1m]",
+      "name": "GPT 6.0 Sol (extended context)",
+      "upstreamModelId": "gpt-6-sol"
     },
     {
       "id": "gpt-6-luna",
-      "name": "GPT-6 Luna"
+      "name": "GPT 6.0 Luna"
     },
     {
-      "id": "gpt-6-astra",
-      "name": "GPT 6.0 Astra"
+      "id": "gpt-6-luna[1m]",
+      "name": "GPT 6.0 Luna (extended context)",
+      "upstreamModelId": "gpt-6-luna"
     },
     {
       "id": "gpt-5.6-sol",
       "name": "GPT 5.6 Sol"
     },
     {
+      "id": "gpt-5.6-sol[1m]",
+      "name": "GPT 5.6 Sol (extended context)",
+      "upstreamModelId": "gpt-5.6-sol"
+    },
+    {
       "id": "gpt-5.6-sol-review",
-      "name": "GPT 5.6 Sol Review"
+      "name": "GPT 5.6 Sol Review",
+      "upstreamModelId": "gpt-5.6-sol"
     },
     {
       "id": "gpt-5.6-terra",
       "name": "GPT 5.6 Terra"
     },
     {
+      "id": "gpt-5.6-terra[1m]",
+      "name": "GPT 5.6 Terra (extended context)",
+      "upstreamModelId": "gpt-5.6-terra"
+    },
+    {
       "id": "gpt-5.6-terra-review",
-      "name": "GPT 5.6 Terra Review"
+      "name": "GPT 5.6 Terra Review",
+      "upstreamModelId": "gpt-5.6-terra"
     },
     {
       "id": "gpt-5.6-luna",
       "name": "GPT 5.6 Luna"
     },
     {
+      "id": "gpt-5.6-luna[1m]",
+      "name": "GPT 5.6 Luna (extended context)",
+      "upstreamModelId": "gpt-5.6-luna"
+    },
+    {
       "id": "gpt-5.6-luna-review",
-      "name": "GPT 5.6 Luna Review"
+      "name": "GPT 5.6 Luna Review",
+      "upstreamModelId": "gpt-5.6-luna"
     },
     {
       "id": "gpt-5.5",
@@ -959,31 +996,21 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     },
     {
       "id": "gpt-5.5-review",
-      "name": "GPT 5.5 Review"
+      "name": "GPT 5.5 Review",
+      "upstreamModelId": "gpt-5.5"
     },
     {
-      "id": "gpt-5.4",
-      "name": "GPT 5.4"
+      "id": "gpt-daybreak-blue-latest",
+      "name": "GPT Daybreak Blue"
     },
     {
-      "id": "gpt-5.4-review",
-      "name": "GPT 5.4 Review"
+      "id": "gpt-reserve",
+      "name": "GPT Reserve"
     },
     {
-      "id": "gpt-5.4-mini",
-      "name": "GPT 5.4 Mini"
-    },
-    {
-      "id": "gpt-5.4-mini-review",
-      "name": "GPT 5.4 Mini Review"
-    },
-    {
-      "id": "gpt-5.3-codex-spark",
-      "name": "GPT 5.3 Codex Spark"
-    },
-    {
-      "id": "gpt-5.3-codex-spark-review",
-      "name": "GPT 5.3 Codex Spark Review"
+      "id": "codex-auto-review",
+      "name": "Codex Auto Review",
+      "upstreamModelId": "codex-auto-review"
     },
     {
       "id": "gpt-image-2.5",
@@ -1020,10 +1047,6 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "gpt-5.5-image",
       "name": "GPT 5.5 Image"
-    },
-    {
-      "id": "gpt-5.4-image",
-      "name": "GPT 5.4 Image"
     },
     {
       "id": "gpt-5.3-image",
@@ -1109,6 +1132,24 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "MiniMaxAI/MiniMax-M2.7",
       "name": "MiniMax M2.7"
+    }
+  ],
+  "agnes": [
+    {
+      "id": "agnes-2.5-flash",
+      "name": "Agnes 2.5 Flash"
+    },
+    {
+      "id": "agnes-2.5-pro",
+      "name": "Agnes 2.5 Pro"
+    },
+    {
+      "id": "agnes-2.5-pro-beta",
+      "name": "Agnes 2.5 Pro Beta"
+    },
+    {
+      "id": "agnes-3.0-flash",
+      "name": "Agnes 3.0 Flash"
     }
   ],
   "atria": [
@@ -2686,6 +2727,38 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "mimo-auto",
       "name": "MiMo Auto"
+    }
+  ],
+  "muse": [
+    {
+      "id": "muse-spark-1.3",
+      "name": "Muse Spark 1.3",
+      "targetFormat": "openai-responses",
+      "supportedFormats": ["openai-responses"]
+    },
+    {
+      "id": "muse-spark-1.2",
+      "name": "Muse Spark 1.2",
+      "targetFormat": "openai-responses",
+      "supportedFormats": ["openai-responses"]
+    },
+    {
+      "id": "muse-spark-1.1",
+      "name": "Muse Spark 1.1",
+      "targetFormat": "openai-responses",
+      "supportedFormats": ["openai-responses"]
+    },
+    {
+      "id": "muse-spark-1.3-contributor",
+      "name": "Muse Spark 1.3 Contributor",
+      "targetFormat": "openai-responses",
+      "supportedFormats": ["openai-responses"]
+    },
+    {
+      "id": "muse-spark-1.2-contributor",
+      "name": "Muse Spark 1.2 Contributor",
+      "targetFormat": "openai-responses",
+      "supportedFormats": ["openai-responses"]
     }
   ],
   "minimax-cn": [
@@ -4559,6 +4632,18 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "Kimi-K2.6",
       "name": "Kimi-K2.6"
+    }
+  ],
+  "v1m": [
+    {
+      "id": "rev-latest",
+      "name": "v1m Rev Latest (Calibrated)",
+      "kind": "systemone"
+    },
+    {
+      "id": "v1m-decision-engine",
+      "name": "v1m Decision Engine",
+      "kind": "systemone"
     }
   ],
   "voyage-ai": [

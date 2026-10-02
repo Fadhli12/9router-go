@@ -14,13 +14,14 @@ import (
 
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/proxy"
+	"9router/proxy/internal/providers"
 )
 
 // deviceProviders lists providers supporting the device-code family.
 // kimi-coding aliases to kimi (dual-auth merge, like upstream).
 var deviceProviders = []string{
 	"qoder", "qoder-cn", "kilocode", "grok-cli", "github", "kiro", "kimi", "kimi-coding",
-	"codebuddy-cn", "codebuddy-intl",
+	"codebuddy-cn", "codebuddy-intl", "muse",
 }
 
 func deviceSupported(p string) bool {
@@ -197,6 +198,8 @@ func deviceStart(provider, region, startURL, authMethod string) (map[string]any,
 		return kimiStart()
 	case "codebuddy-cn", "codebuddy-intl":
 		return codebuddyStart(provider)
+	case "muse":
+		return museStart()
 	default:
 		return nil, fmt.Errorf("unsupported provider")
 	}
@@ -262,7 +265,7 @@ func kilocodeStart() (map[string]any, error) {
 
 // --- grok-cli: standard device flow, referrer=grok-build ---
 
-var grokcliUA = "grok-pager/0.2.93 grok-shell/0.2.93 (linux; x86_64)"
+var grokcliUA = providers.GrokCLIPagerUserAgent
 
 func grokcliStart() (map[string]any, error) {
 	form := url.Values{
@@ -463,6 +466,8 @@ func devicePoll(provider, code string, session map[string]any) (deviceTokens, st
 		t, err = kimiPoll(session, code)
 	case "codebuddy-cn", "codebuddy-intl":
 		t, err = codebuddyPoll(provider, code)
+	case "muse":
+		t, err = musePoll(code)
 	default:
 		return t, "error", "unsupported provider"
 	}
@@ -491,7 +496,7 @@ func (h *OAuthHandler) saveDeviceConnection(provider string, t deviceTokens) sav
 	}
 	name := connectionDisplayName(provider, t.name, email, map[string]string{
 		"qoder": "Qoder", "qoder-cn": "Qoder CN", "kilocode": "KiloCode", "grok-cli": "Grok CLI",
-		"github": "GitHub", "kiro": "Kiro", "kimi": "Kimi",
+		"github": "GitHub", "kiro": "Kiro", "kimi": "Kimi", "muse": "Muse",
 		"codebuddy-cn": "CodeBuddy", "codebuddy-intl": "CodeBuddy",
 	}[provider])
 	id := provider + "-" + shortHash(t.access)
