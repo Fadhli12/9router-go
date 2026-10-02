@@ -286,3 +286,7 @@ Go reads/writes the upstream 9router table/JSON shapes and bootstraps the core s
 ## Credits
 
 - [9Router](https://github.com/decolua/9router) — original Next.js gateway & dashboard this Go port preserves compatibility with
+
+## 📄 License
+
+MIT — see [`LICENSE`](LICENSE). Portions derive from [9Router](https://github.com/decolua/9router) (MIT, © 2024-2026 decolua and contributors); its notice is retained there.
