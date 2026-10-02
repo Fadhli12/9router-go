@@ -150,6 +150,14 @@ docker run -d --name 9router-go --restart unless-stopped \
 
 ---
 
+## 📸 Screenshots
+
+![9router-go dashboard — Providers view](docs/screenshots/providers.png)
+
+![9router-go dashboard — Endpoint & API key setup](docs/screenshots/endpoint.png)
+
+---
+
 ## ⚙️ Setup Guide
 
 ### Release binary
