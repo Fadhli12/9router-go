@@ -11,7 +11,7 @@
     type ProxyPool,
     type Settings
   } from '../../api/client'
-  import { PROVIDER_CATALOG, type ProviderCatalogItem } from '../../lib/providers'
+  import { PROVIDER_CATALOG, PROVIDER_CATALOG_MAP, type ProviderCatalogItem } from '../../lib/providers'
   import {
     clearCallback,
     CODEX_REDIRECT_URI,
@@ -289,6 +289,7 @@
 
   // Row UI state
   let activeProxyDropdownId = $state<string | null>(null)
+  let dropdownPos = $state<{ top: number; right: number }>({ top: 0, right: 0 })
   let updatingProxyConnId = $state<string | null>(null)
   let copiedModelId = $state<string | null>(null)
   let modelTestStatuses = $state<Record<string, 'ok' | 'error' | 'testing'>>({})
@@ -685,9 +686,10 @@
         api.getSettings().catch(() => ({})),
         api.getProxyPools().catch(() => []),
         api.getModelAliases().catch(() => ({ aliases: {} })),
-        // Providers without a static catalog answer 404; the page then shows no
-        // capability icons and hides the thinking picker, same as upstream.
-        api.getModelCaps(providerId).catch(() => ({ caps: {} as Record<string, ModelCaps> })),
+        // Providers without a static catalog or compatible nodes do not have static caps.
+        !isCompatibleNode && (PROVIDER_CATALOG_MAP.has(providerId) || PROVIDER_CATALOG_MAP.has(storageAlias))
+          ? api.getModelCaps(providerId).catch(() => ({ caps: {} as Record<string, ModelCaps> }))
+          : Promise.resolve({ caps: {} as Record<string, ModelCaps> }),
       ])
       customModels = modelsData.customModels
       disabledModelIds = modelsData.disabledModelIds
@@ -3326,12 +3328,23 @@ function formatErrorText(err: unknown): string {
                       </span>
                       <span class="text-[10px] leading-tight">Test</span>
                     </button>
-                    <!-- Proxy dropdown (upstream: hidden while no pools exist) -->
-                    {#if proxyPools.length > 0}
+                    <!-- Proxy dropdown -->
                     <div class="relative">
                       <button
                         type="button"
-                        onclick={() => (activeProxyDropdownId = activeProxyDropdownId === conn.id ? null : conn.id)}
+                        onclick={(e) => {
+                          e.stopPropagation()
+                          if (activeProxyDropdownId === conn.id) {
+                            activeProxyDropdownId = null
+                          } else {
+                            activeProxyDropdownId = conn.id
+                            const rect = e.currentTarget.getBoundingClientRect()
+                            dropdownPos = {
+                              top: rect.bottom + 4,
+                              right: Math.max(8, window.innerWidth - rect.right)
+                            }
+                          }
+                        }}
                         disabled={updatingProxyConnId === conn.id}
                         class="flex w-full flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-60 {proxyBadge.hasAnyProxy ? 'text-primary' : 'text-text-muted hover:text-primary'} cursor-pointer"
                       >
@@ -3344,34 +3357,49 @@ function formatErrorText(err: unknown): string {
                       {#if activeProxyDropdownId === conn.id}
                         <!-- Backdrop -->
                         <div
-                          class="fixed inset-0 z-40"
+                          class="fixed inset-0 z-[80]"
                           onclick={() => (activeProxyDropdownId = null)}
                           role="presentation"
                         ></div>
-                        <div class="absolute right-0 top-full z-50 mt-1 max-w-[78vw] min-w-[160px] rounded-lg border border-border bg-bg py-1 shadow-lg">
-                          <button
-                            type="button"
-                            onclick={() => assignProxyPool(conn, null)}
-                            class="flex w-full items-center px-3 py-1.5 text-xs hover:bg-surface-2 transition-colors cursor-pointer {!assignedPoolId ? 'text-primary font-medium' : 'text-text-main'}"
-                          >
-                            None
-                          </button>
-                          {#each proxyPools as pool}
+                        <div
+                          class="fixed z-[85] max-w-[78vw] min-w-[180px] rounded-lg border border-border bg-bg py-1 shadow-lg"
+                          style="top: {dropdownPos.top}px; right: {dropdownPos.right}px;"
+                        >
+                          {#if proxyPools.length === 0}
+                            <div class="px-3 py-2 text-xs text-text-muted">
+                              <p>No proxy pools available.</p>
+                              <a
+                                href="/dashboard/proxypools"
+                                class="mt-1.5 inline-flex items-center gap-1 font-medium text-primary hover:underline"
+                              >
+                                <span class="material-symbols-outlined text-sm">add</span>
+                                Create proxy pool
+                              </a>
+                            </div>
+                          {:else}
                             <button
                               type="button"
-                              onclick={() => assignProxyPool(conn, pool.id)}
-                              class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-surface-2 transition-colors cursor-pointer {assignedPoolId === pool.id ? 'text-primary font-medium' : 'text-text-main'}"
+                              onclick={() => assignProxyPool(conn, null)}
+                              class="flex w-full items-center px-3 py-1.5 text-xs hover:bg-surface-2 transition-colors cursor-pointer {!assignedPoolId ? 'text-primary font-medium' : 'text-text-main'}"
                             >
-                              <span class="truncate">{pool.name}</span>
-                              {#if !pool.isActive}
-                                <span class="text-[10px] text-text-muted shrink-0">(inactive)</span>
-                              {/if}
+                              None
                             </button>
-                          {/each}
+                            {#each proxyPools as pool}
+                              <button
+                                type="button"
+                                onclick={() => assignProxyPool(conn, pool.id)}
+                                class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-surface-2 transition-colors cursor-pointer {assignedPoolId === pool.id ? 'text-primary font-medium' : 'text-text-main'}"
+                              >
+                                <span class="truncate">{pool.name}</span>
+                                {#if !pool.isActive}
+                                  <span class="text-[10px] text-text-muted shrink-0">(inactive)</span>
+                                {/if}
+                              </button>
+                            {/each}
+                          {/if}
                         </div>
                       {/if}
                     </div>
-                    {/if}
                     <!-- Freebuff session manage button -->
                     {#if isFreebuff}
                     <button
