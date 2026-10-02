@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v1.9.7] - 2026-10-02
+
 ### 🐛 Egress di log tercetak UUID, bukan nama pool
 
 Baris `egress=` dari entri sebelumnya membawa **UUID** pool
@@ -289,6 +291,7 @@ mengunci isi himpunan itu — memindahkan 500 ke dalamnya akan menggagalkan test
 dengan pesan yang menyebut status itu adalah bug kita. Rerun suite setelah
 perubahan: upstream sudah pulih dan test tersebut kembali 200; `go vet` bersih,
 `go test -race ./internal/handlers/chat/` hijau.
+
 ### 🐛 Refresh kredensial quota: satu percobaan, skip tanpa refresher, tandai grant mati — regresi #83
 
 PR #83 menambah refresh kredensial ke `/api/usage/{id}` dan langsung memunculkan
