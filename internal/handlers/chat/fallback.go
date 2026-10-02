@@ -50,7 +50,8 @@ func (h *ChatHandler) handleAccountFallback(
 		log.Debug("fallback", "pinned", "pinnedConn", pinnedConnectionID, "connObj", connObj.ID)
 		return h.tryForwardWithConnection(forwardRequestParams{
 			Ctx: ctx, W: w, Provider: provider, Model: model,
-			ConnectionID: connObj.ID, ConnData: connData, Body: body,
+			ConnectionID: connObj.ID, ConnName: connObjName(connObj), ConnEmail: connObjEmail(connObj),
+			ConnData: connData, Body: body,
 			IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
 			PrefixHash: prefixHash,
 		})
@@ -124,7 +125,8 @@ func (h *ChatHandler) handleAccountFallback(
 		log.Debug("fallback", "connection", "conn", c.ID, "connObj", connObj.ID)
 		if err := h.tryForwardWithConnection(forwardRequestParams{
 			Ctx: ctx, W: w, Provider: provider, Model: model,
-			ConnectionID: c.ID, ConnData: connData, Body: body,
+			ConnectionID: c.ID, ConnName: connObjName(connObj), ConnEmail: connObjEmail(connObj),
+			ConnData: connData, Body: body,
 			IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
 			PrefixHash: prefixHash,
 		}); err == nil {
@@ -212,6 +214,8 @@ type forwardRequestParams struct {
 	Provider          string
 	Model             string
 	ConnectionID      string
+	ConnName          string // human-readable account name, for logs
+	ConnEmail         string
 	ConnData          *ConnectionData
 	Body              []byte
 	IsStream          bool
@@ -298,6 +302,16 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	// OpenAI format before the fallback, and passing endpoint "/v1/v1/messages"
 	// alone would wrongly inject a top-level "system" the upstream ignores.
 	claudeNative := isAnthropic && (endpoint == "/v1/v1/messages" || endpoint == "/v1/messages")
+	// A /v1/messages client is only converted away from Claude format when the
+	// upstream cannot answer in it. opencode-zen routes the Claude and Qwen
+	// models to its own /zen/v1/messages endpoint, so those requests keep the
+	// client's own wire format end to end (upstream resolveTransport picks the
+	// sourceFormat-matched transport and skips translation).
+	if endpoint == "/v1/v1/messages" || endpoint == "/v1/messages" {
+		if executor.ServesMessagesEndpoint(provider, model) {
+			claudeNative = true
+		}
+	}
 	pipedBody := h.applyTokenSavers(body, claudeNative)
 	var claudeToolMap map[string]string
 	if isAnthropic {
@@ -390,7 +404,16 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		usagetracker.GetTracker().TrackPending(model, provider, connectionID, false, hasErr)
 	}()
 
-	httpClient := h.getClientForConnection(connData)
+	// A connection bound to a pool that cannot serve traffic must fail before
+	// anything is sent: the first request is the one that would otherwise
+	// escape from the real IP while the error only shows on the next attempt.
+	httpClient, clientErr := h.getClientForConnection(connData)
+	if clientErr != nil {
+		return &upstreamError{
+			StatusCode: http.StatusBadGateway,
+			Body:       []byte(`{"error":{"type":"proxy_error","message":"` + clientErr.Error() + `"}}`),
+		}
+	}
 	sessionID := handlerutil.GetSessionID(ctx)
 
 	// Inject telemetry headers on the response for observability (account & routing info)
@@ -414,6 +437,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			APIKey:         apiKey,
 			Body:           pipedBody,
 			IsStream:       isStream,
+			ClaudeClient:   endpoint == "/v1/v1/messages" || endpoint == "/v1/messages",
 			TranslateResp:  translateResponse,
 			ConnectionID:   connectionID,
 			SessionID:      sessionID,
@@ -435,9 +459,9 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		}
 		fwdErr = exec(w, execReq)
 	} else if providerCfg.IsGeminiNative() {
-		fwdErr = h.forwardGeminiNativeRequest(ctx, w, provider, providerCfg, apiKey, connectionID, pipedBody, isStream, translateResponse, metrics)
+		fwdErr = h.forwardGeminiNativeRequest(ctx, w, provider, providerCfg, apiKey, connectionID, pipedBody, isStream, translateResponse, metrics, httpClient)
 	} else {
-		fwdErr = h.forwardRequest(ctx, w, providerCfg, apiKey, pipedBody, isStream, translateResponse, metrics)
+		fwdErr = h.forwardRequest(ctx, w, providerCfg, apiKey, pipedBody, isStream, translateResponse, metrics, httpClient)
 	}
 
 	var ue *upstreamError
@@ -454,6 +478,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 					APIKey:         apiKey,
 					Body:           pipedBody,
 					IsStream:       isStream,
+					ClaudeClient:   endpoint == "/v1/v1/messages" || endpoint == "/v1/messages",
 					TranslateResp:  translateResponse,
 					ConnectionID:   connectionID,
 					SessionID:      sessionID,
@@ -474,9 +499,9 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 				}
 				fwdErr = exec(w, retryReq)
 			} else if providerCfg.IsGeminiNative() {
-				fwdErr = h.forwardGeminiNativeRequest(ctx, w, provider, providerCfg, apiKey, connectionID, pipedBody, isStream, translateResponse, metrics)
+				fwdErr = h.forwardGeminiNativeRequest(ctx, w, provider, providerCfg, apiKey, connectionID, pipedBody, isStream, translateResponse, metrics, httpClient)
 			} else {
-				fwdErr = h.forwardRequest(ctx, w, providerCfg, apiKey, pipedBody, isStream, translateResponse, metrics)
+				fwdErr = h.forwardRequest(ctx, w, providerCfg, apiKey, pipedBody, isStream, translateResponse, metrics, httpClient)
 			}
 		}
 	}
@@ -553,6 +578,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			APIKey:       apiKey,
 			Endpoint:     endpoint,
 		}
+		logInfo.ConnName, logInfo.ConnEmail = identityNames(h.connIdentityKVOr(f, connectionID))
 		h.logUsage(logInfo, usage, latencyMs, body, metrics)
 		GlobalAdaptiveRouter.RecordSuccess(connectionID, time.Since(startTime))
 		if prefixHash != "" {
@@ -569,11 +595,15 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	if errors.As(fwdErr, &ue) {
 		statusCode = ue.StatusCode
 	}
+	identity := h.connIdentityKVOr(f, connectionID)
+	connName, connEmail := identityNames(identity)
 	h.LogFailure(
 		&UsageLogInfo{
 			Provider:     provider,
 			Model:        model,
 			ConnectionID: connectionID,
+			ConnName:     connName,
+			ConnEmail:    connEmail,
 			Endpoint:     endpoint,
 		},
 		usage,
@@ -584,14 +614,18 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	)
 	GlobalAdaptiveRouter.RecordFailure(connectionID, !providers.RetryableStatusCodes[statusCode])
 	if isClientCanceled(ctx, fwdErr) {
-		log.Info("fallback", "client canceled request", "provider", provider, "model", model, "conn", connectionID)
+		log.Info("fallback", "client canceled request", append([]any{
+			"provider", provider, "model", model,
+		}, identity...)...)
 	} else if projectProbeCached(connectionID) {
-		log.Debug("fallback", "upstream skipped (cached no-project)", "provider", provider, "model", model, "conn", connectionID, "error", fwdErr)
+		log.Debug("fallback", "upstream skipped (cached no-project)", append([]any{
+			"provider", provider, "model", model, "error", fwdErr,
+		}, identity...)...)
 	} else {
 		log.Warn("fallback", "upstream failed", append([]any{
-			"provider", provider, "model", model, "conn", connectionID,
+			"provider", provider, "model", model,
 			"status", statusCode, "error", fwdErr,
-		}, h.connIdentityKVByID(connectionID)...)...)
+		}, identity...)...)
 	}
 	return fwdErr
 }
