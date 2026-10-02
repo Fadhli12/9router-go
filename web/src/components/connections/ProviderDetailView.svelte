@@ -3843,6 +3843,34 @@ function formatErrorText(err: unknown): string {
         <span class="material-symbols-outlined text-sm">add</span>
         Add Model
       </button>
+
+      {#if allAvailableModels.length > 0}
+        <button
+          type="button"
+          onclick={handleCheckAllModels}
+          disabled={isCheckingAll}
+          class="flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-surface-2 hover:bg-surface-3 px-3 py-2 text-xs text-text-main transition-colors sm:w-auto cursor-pointer disabled:opacity-50"
+          title="Send a minimal request to every model and mark the ones that fail"
+        >
+          <span class="material-symbols-outlined text-sm">{isCheckingAll ? 'progress_activity' : 'troubleshoot'}</span>
+          {isCheckingAll
+            ? `Checking ${checkAllProgress.done}/${checkAllProgress.total}...`
+            : `Check All Models (${allAvailableModels.length})`}
+        </button>
+      {/if}
+
+      {#if canListLiveModels && providerConnections.some((c) => c.isActive !== 0)}
+        <button
+          type="button"
+          onclick={handleCheckLatestModels}
+          disabled={isCheckingLatest}
+          class="flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-surface-2 hover:bg-surface-3 px-3 py-2 text-xs text-text-main transition-colors sm:w-auto cursor-pointer disabled:opacity-50"
+          title="Fetch the provider's live catalog and list models you have not added yet"
+        >
+          <span class="material-symbols-outlined text-sm">{isCheckingLatest ? 'progress_activity' : 'cached'}</span>
+          {isCheckingLatest ? 'Checking...' : 'Check Latest Models'}
+        </button>
+      {/if}
     </div>
 
     {#if latestModels.length > 0 || latestError}
