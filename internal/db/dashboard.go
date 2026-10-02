@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"9router/proxy/internal/apikeycache"
 	"9router/proxy/internal/models"
 )
 
@@ -248,6 +249,9 @@ func (r *Repo) CreateApiKey(id, key, name, machineID string) error {
 	if err != nil {
 		return fmt.Errorf("create api key %s: %w", id, err)
 	}
+	// A key can be recreated under the same secret with different status, so
+	// drop the whole cache rather than trying to patch the single entry.
+	apikeycache.Invalidate()
 	return nil
 }
 
@@ -257,6 +261,9 @@ func (r *Repo) DeleteApiKey(id string) error {
 	if err != nil {
 		return fmt.Errorf("delete api key %s: %w", id, err)
 	}
+	// The cache is keyed by secret, not by id, so the deleted row's secret
+	// cannot be evicted individually without re-reading the row first.
+	apikeycache.Invalidate()
 	return nil
 }
 
@@ -270,6 +277,9 @@ func (r *Repo) SetApiKeyStatus(id string, isActive bool) error {
 	if err != nil {
 		return fmt.Errorf("set api key status %s: %w", id, err)
 	}
+	// A warm cache holds the pre-toggle snapshot and would keep accepting a
+	// revoked key (or rejecting a reactivated one) for up to the TTL.
+	apikeycache.Invalidate()
 	return nil
 }
 
