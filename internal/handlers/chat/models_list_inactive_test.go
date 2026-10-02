@@ -39,6 +39,7 @@ func TestHandleModels_DefaultModeIgnoresOnlyInactiveConnections(t *testing.T) {
 	if _, err := database.Exec(`UPDATE providerConnections SET isActive = 0 WHERE id = 'conn-kiro-1'`); err != nil {
 		t.Fatalf("disable kiro: %v", err)
 	}
+	h.InvalidateModelsCache()
 
 	disabled := fetchModels(t, h, "")
 	catalog := fetchModels(t, h, "?all=1")

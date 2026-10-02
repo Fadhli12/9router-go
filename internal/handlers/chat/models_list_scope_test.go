@@ -366,6 +366,7 @@ func TestHandleModels_DisabledModelsStillWin(t *testing.T) {
 		`["jev-1.13-free"]`); err != nil {
 		t.Fatalf("seed disabled: %v", err)
 	}
+	h.InvalidateModelsCache()
 
 	for _, query := range queries {
 		if fetchModels(t, h, query).idSet()["oc/jev-1.13-free"] {
