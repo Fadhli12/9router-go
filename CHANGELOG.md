@@ -2,6 +2,200 @@
 
 ## [Unreleased]
 
+### 🐛 Egress di log tercetak UUID, bukan nama pool
+
+Baris `egress=` dari entri sebelumnya membawa **UUID** pool
+(`06a2c494-ef06-4d3f-a034-dad29ff3aebf`). Itu benar, tapi tidak menjawab
+pertanyaan yang muncul saat grep log: *pool yang mana?* — dashboard menampilkan
+pool berdasarkan nama, jadi operator harus membuka daftar proxy pool untuk
+mencocokkan UUID sebelum tahu request-nya keluar lewat mana.
+
+Kini nama pool yang dicetak, di-resolve **tanpa query tambahan**:
+`getClientForConnection` sudah membaca baris pool untuk membangun transport,
+jadi nama diambil dari objek yang sama dan ditaruh di
+`ConnectionData.ResolvedProxyPool` (`json:"-"`, per request, tidak dipersist —
+sehingga rename di dashboard langsung terlihat di log berikutnya).
+
+Nama yang difilter newline: nilainya diisi operator dan masuk ke setiap baris
+usage, jadi newline akan memalsukan baris log — dan log itulah jejak audit
+"egress mana yang melayani request ini".
+
+**Verifikasi:** `TestResolveEgress_ReportsThePathARequestLeftBy` mengunci delapan
+bentuk, termasuk "pool tanpa nama → jatuh ke UUID" dan "proxy legacy → URL".
+`TestResolveEgress_KeepsTheLabelSingleLine` menutup kasus pemalsuan baris log.
+
+**Live (`:20151`, DB sama dengan `main`):**
+
+```
+INF [usage] logged provider=opencode model=space-bunny-free … egress=vercel-relay
+INF [usage] logged provider=opencode-zen model=space-bunny-free …
+  conn=80d9c65d-… egress=direct
+INF [usage] logged provider=opencode-zen model=space-bunny-free …
+  conn=80d9c65d-… egress=vercel-relay
+```
+
+Tiga baris itu sekaligus menunjukkan dropdown proxy di dashboard berfungsi:
+baris `direct` tepat setelah `PUT /api/connections/…` yang melepas binding, dan
+baris berikutnya kembali `vercel-relay` setelah pool di-bind ulang.
+
+### 🐛 Log tidak bisa menjawab "request ini lewat proxy atau bukan"
+
+Setelah kebocoran egress diperbaiki (entri sebelumnya), pertanyaan paling
+natural berikutnya — *apakah request ini benar-benar lewat proxy?* — tetap tidak
+bisa dijawab dari log. Satu-satunya baris proxy (`logProxyOnce`) memakai
+`sync.Map.LoadOrStore`: **sekali per pool per proses**, dan hanya di level
+`debug`. Request kedua dan seterusnya lewat pool yang sama tidak mencetak apa
+pun, dan `LOG_LEVEL` default `info` emballage menyembunyikannya. Baris
+`[usage] logged` juga tidak punya kolom proxy sama sekali.
+
+Dampaknya persis pada kelas masalah yang diperbaiki: dua gateway berbagi satu
+database (branch `main` di `:20130` dan build uji di `:20151`) menghasilkan log
+yang identik meski salah satunya diam-diam keluar direct — dan `429`/blokir
+berbasis IP mustahil dianalisis tanpa tahu egress-nya.
+
+Kini setiap baris `[usage] logged` dan setiap baris kegagalan
+`[fallback] upstream failed` membawa `egress=`. Nilainya adalah pool yang
+ditugaskan (bukan URL relay), karena itulah yang dicari operator di dashboard;
+request tanpa proxy dan tanpa pool lama tercetak `direct`.
+
+Resolver-nya membaca bentuk yang sudah ada di `providerCfg`, jadi tidak ada
+query pool tambahan di hot path: relay terdeteksi dari `x-relay-target`, proxy
+HTTP dari field proxy koneksi (yang tidak terlihat di config).
+
+**Verifikasi:** `TestResolveEgress_ReportsThePathARequestLeftBy` mengunci tujuh
+bentuk (direct, relay, proxy legacy, proxy aktif-tanpa-URL, koneksi nil,
+relay tanpa baris koneksi, `providerSpecificData`). Diuji mutation: mengembalikan
+`Target` ke `x-relay-target` membuat test gagal tepat di assertion "Target must
+be the relay host".
+
+**Live (build di `:20151`, DB sama dengan `main`):**
+
+```
+WRN [fallback] upstream failed provider=opencode-zen model=muse-spark-1.3 status=401
+  … forward to https://vercel-relay-myw8iebf7-legowo.vercel.app/responses …
+  conn=80d9c65d-… connName=yatimrachmawati@paragadis.com 1
+  egress=06a2c494-ef06-4d3f-a034-dad29ff3aebf
+
+INF [usage] logged provider=opencode model=muse-spark-1.3-contributor-free …
+  conn=default egress=direct
+```
+
+Dua baris itu sekaligus membuktikan arahnya: `ocz/muse-spark-1.3` melalui koneksi
+ber-pool dan keluar lewat pool Vercel, sedangkan
+`oc/muse-spark-1.3-contributor-free` memakai fast path no-auth dan memang
+`direct` — jadi log menunjukkan tidak ada kebocoran yang tersisa di jalur free-tier.
+
+### 🔴 Request yang harus lewat proxy pool dijawab dari IP asli — semua tipe proxy
+
+Audit jalur proxy setelah 503 `service_overloaded` (entri sebelumnya)
+memunculkan bug yang berlaku untuk **semua** proxy, bukan cuma Vercel: ada dua
+kebocoran egress, satu di jalur HTTP dan satu di jalur relay.
+
+**1. Pool proxy mati tetap dijawab dari IP sendiri.** `doRequestOnce` me-dial
+ulang secara direct setiap kali proxy menolak tunnel (`isProxyFailure`). Itu
+benar untuk proxy ambient (`HTTP_PROXY`, sandbox lokal) yang tidak pernah dipilih
+operator, dan salah untuk pool yang ditugaskan: request dijawab dari IP asli,
+padahal dashboard masih menampilkan koneksi sebagai "proxied". Dibuktikan
+sebelum diperbaiki:
+
+```
+err=<nil>  directHits=1     ← request lewat pool mati, dijawab dari IP asli
+```
+
+Sekarang `proxiesViaAssignment` membedakan keduanya berdasarkan identitas
+transport: proxy yang nilainya `http.ProxyFromEnvironment` (satu-satunya yang
+dipasang environment) diperlakukan ambient dan boleh jatuh ke direct; pool yang
+ditugaskan **gagal** — pesan errornya menyebut alasannya, bukan diam-diam
+mengambil jalur lain.
+
+**2. "Test Connection" tidak pernah lewat relay.** `probeHTTPClient` mengembalikan
+client `nil` untuk pool `vercel`/`cloudflare`/`deno`, jadi probe berjalan
+langsung ke provider dari IP host. Itu salah dua arah: bisa hijau sementara
+traffic produksi lewat relay gagal, dan bisa merah sementara jalur relay sehat —
+plus membocorkan IP di request yang justru dijalankan untuk memastikan proxy
+pasang. Pool relay kini dapat `probeRelayRoundTripper` yang mengarahkan request
+ke host relay sambil membawa `x-relay-target`/`x-relay-path`, kontrak yang sama
+dengan pipeline chat.
+
+**3. Satu daftar tipe relay, bukan tiga.** `vercel`/`cloudflare`/`deno` tertulis
+ulang di `connections.go`, `proxypools.go`, dan `connection_probe.go`. Runtime
+edge keempat akan diarahkan satu arah di satu tempat dan arah lain di tempat
+lain — persis kelas bug yang menyebabkan #2. Sekarang `ProxyPool.IsEdgeRelay()`
+(`internal/db`) adalah satu-satunya definisi, dan `proxy_egress_test.go` +
+`probe_relay_test.go` mengunci kedua jalur agar tidak bisa berbeda lagi.
+
+**Verifikasi:** `proxy_egress_test.go` membuktikan pool yang ditugaskan tidak
+lagi jatuh ke direct (`directHits=0`) dan proxy ambient tetap boleh fallback
+direct, jadi perbaikan ini tidak mematikan instalasi yang berada di belakang
+proxy sistem. Diuji mutation: menghapus cek `proxiesViaAssignment` mengembalikan
+`directHits=1` dan test gagal tepat di assertion itu. `probe_relay_test.go`
+membuktikan probe benar-benar mendarat di host relay dengan header yang benar
+dan `Host` bukan provider.
+
+**Known limit:** kebocoran #1 menutup jalur yang **sudah terkonfigurasi**. Pool
+yang menyimpan `vercelRelayUrl` di `providerSpecificData` lama tanpa `proxyPoolId`
+tetap relay lewat `getProviderConfig` seperti sebelumnya — jalur itu tidak
+disentuh perubahan ini karena tidak punya flag `strictProxy` untuk dihormati.
+
+### 🐛 503 `service_overloaded` gagalkan satu turn penuh padahal attempt berikutnya dilayani
+
+Laporan: `opencode-zen`/`muse-spark-1.3-contributor-free` lewat proxy pool Vercel
+sering `503 service_overloaded`, sedangkan tanpa proxy "aman".
+
+**Proxy bukan penyebabnya.** Diuji dengan body dan header fingerprint yang sama
+persis, bergantian langsung ke `opencode.ai` vs lewat relay:
+
+```
+direct: {503: 16, 200: 12, ERR: 2}   ok 12/30
+relay:  {504: 3,  503: 14, 200: 13}   ok 13/30
+```
+
+Both `503` muncul di kedua jalur dengan rate serupa — itu kapasitas
+`opencode.ai` sendiri, bukan kerusakan relay. Relay yang terpasang juga terbukti
+lossless: seluruh header (`User-Agent`, `x-opencode-session/request/project`,
+`Authorization`) melewati hop, hanya `x-relay-*` yang di-strip seperti
+template-nya, dan response header upstream ikut diteruskan.
+
+**Satu temuan relay yang nyata (bukan penyebab 503):** relay menjawab
+`504` pada **25.09s persis** dengan header
+`X-Vercel-Error: FUNCTION_INVOCATION_TIMEOUT`, yang tidak pernah terjadi di jalur
+direct. Vercel Edge mensyaratkan respons awal di bawah 25 detik; TTFT direct
+yang terukur 28–55s membuat relay melewati batas itu. Jadi relay tidak
+membuat turn cepat jadi gagal — relay justru mengorbankan turn lambat: setiap
+turn yang token pertamanya tiba setelah ~25s akan berakhir 504 di relay.
+
+**Akar masalah yang tersisa:** gateway mengirim **satu** attempt, lalu
+menyurfacekan 503 ke klien dan lock koneksi — padahal attempt berikutnya
+dilayani. Upstream sudah mengulang 502x3/503x3/504x2 di `BaseExecutor.execute`
+(`open-sse/executors/base.js:107-125` + `config/runtimeConfig.js:78-83`); port
+Go tidak punya padanannya sama sekali. Diukur langsung dengan kebijakan
+upstream (3x @2s):
+
+```
+1 attempt (sekarang)     served  9/15 (60%)
+3 attempts @2s (upstream) served 15/15 (100%)
+```
+
+Kini `proxy.DoRequest` — titik choke yang diwarisi semua provider, sama seperti
+`BaseExecutor` upstream — mengulang transient 502/503/504 sesuai kebijakan itu
+sebelum melaporkan kegagalan. 429 **tidak** di-retry di sini: itu jendela kuota
+per akun yang harus diserahkan ke account fallback, sesuai kontrak upstream.
+Backoff terikat `ctx`, jadi klien yang sudah pergi tidak ditahan Rugi penuh.
+
+**Verifikasi:** `internal/proxy/retry_test.go` mengunci tabel kebijakan,
+hitung attempt, status asli yang diteruskan ke failover, penghentian saat
+status berubah, dan klien yang pergi. Diuji mutation: mengembalikan 429 ke
+tabel retry menggagalkan `TestTransientRetryPolicy_MatchesUpstreamDefaults`.
+`internal/integration/transient_retry_test.go` menutupnya melalui router
+produksi dengan upstream palsu: 503 lalu dilayani → klien dapat `200` berisi
+teks upstream; 400/429 → tepat satu request upstream.
+
+**Known limit (jujur):** ini menutup gap parity, bukan membuat upstream yang
+penuh menjadi tidak penuh. Saat `opencode.ai` benar-benar jenuh, ketiga attempt
+tetap 503 dan klien tetap menerima 503 — sekarang setelah menunggu sesuai
+kebijakan upstream, bukan langsung. Batas 25s edge relay juga tidak hilang:
+turn dengan TTFT di atas 25s masih perlu direct atau pool non-edge.
+
 ### 🐛 Manifest tanpa checksum membuat auto-update mati total — issue #72
 
 #72 membuat digest SHA256 **wajib**: `PerformSelfUpdate` menolak sebelum request
