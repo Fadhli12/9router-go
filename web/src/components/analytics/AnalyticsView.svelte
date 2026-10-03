@@ -425,7 +425,6 @@
                 <input
                   id="custom-period"
                   type="text"
-                  inputmode="numeric"
                   placeholder="14d"
                   bind:value={customPeriodInput}
                   onkeydown={(e) => e.key === 'Enter' && applyCustomPeriod()}

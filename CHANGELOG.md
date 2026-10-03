@@ -135,6 +135,16 @@ menutup delapan kombinasi posisi jam dan format stempel tersimpan.
 > asumsi `time.Sleep` di environment ini, dan sudah gagal dengan identik di
 > `origin/main` (dibuktikan dengan `git stash`), jadi di luar cakupan issue ini.
 
+### 🐛 Input custom window usage menolak huruf `d`/`h` di ponsel — issue #115
+
+Field "Custom window" di halaman Usage sudah `type="text"`, tapi tetap membawa
+`inputmode="numeric"`. Di Android/iOS keyboard itu menampilkan keypad angka
+tanpa tombol huruf, jadi pengguna ponsel tidak bisa mengetik `14d` atau `12h`
+sama sekali — sufiks wajib justru tidak bisa diketik, dan input yang kembali
+kosong membuat halaman jatuh ke preset 7 hari. `inputmode="numeric"` dihapus;
+`normalizeCustomPeriod` sudah menolak angka telanjang dengan pesan galat, jadi
+validasi tidak berubah.
+
 ### 🐛 "Strict Proxy" tidak menahan — upstream decolua/9router#4333 parity
 
 `strictProxy` di pool dan di connection berarti "tidak pernah keluar lewat IP
