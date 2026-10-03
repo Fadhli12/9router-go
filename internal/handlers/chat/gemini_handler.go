@@ -152,10 +152,13 @@ func (h *ChatHandler) StoreAntigravityProjectID(connectionID, pid string) {
 }
 
 func (h *ChatHandler) storeAntigravityProjectID(connectionID, pid string) {
-	if connectionID == "" || pid == "" {
+	if connectionID == "" || pid == "" || h.Repo == nil || h.Repo.RawDB() == nil {
 		return
 	}
 	go func() {
+		if h.Repo == nil || h.Repo.RawDB() == nil {
+			return
+		}
 		if _, err := h.Repo.RawDB().Exec("UPDATE providerConnections SET data = json_set(data, '$.projectId', ?) WHERE id = ?", pid, connectionID); err != nil {
 			log.Warn("gemini", "update projectId failed", "conn", connectionID, "error", err)
 		}

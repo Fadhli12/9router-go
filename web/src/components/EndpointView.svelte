@@ -20,6 +20,7 @@
   } from 'lucide-svelte'
   import Card from '../lib/ui/Card.svelte'
   import Toggle from '../lib/ui/Toggle.svelte'
+  import { copyToClipboard } from '../lib/clipboard'
   import { api, type APIKey, type Settings, type TunnelStatusResponse } from '../api/client'
 
   interface Props {
@@ -224,7 +225,7 @@
   })
 
   function copy(text: string, id: string) {
-    navigator.clipboard.writeText(text)
+    copyToClipboard(text)
     copiedId = id
     setTimeout(() => {
       if (copiedId === id) copiedId = null

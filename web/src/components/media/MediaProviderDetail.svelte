@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { api, getStoredAPIKey, type APIKey, type ProviderConnection, type Settings } from '../../api/client'
+  import { copyToClipboard } from '../../lib/clipboard'
   import { getModelKind, getModelsByProviderId, PROVIDER_ID_TO_ALIAS } from '../../lib/models'
   import { parseCustomModelsResponse, subscribeCustomModelsChanged } from '../../lib/customModels'
   import type { ProviderCatalogItem } from '../../lib/providers'
@@ -257,7 +258,7 @@
 
   function handleCopyModel(id: string) {
     const full = resolveQualifiedModel(id)
-    navigator.clipboard.writeText(full)
+    copyToClipboard(full)
     copiedModelId = id
     setTimeout(() => { copiedModelId = null }, 2000)
   }
@@ -466,7 +467,7 @@
   })
 
   function copyCurl() {
-    navigator.clipboard.writeText(exampleCurl)
+    copyToClipboard(exampleCurl)
     copiedCurl = true
     setTimeout(() => { copiedCurl = false }, 2000)
   }

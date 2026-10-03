@@ -20,6 +20,7 @@
     Zap
   } from 'lucide-svelte'
   import Card from '../lib/ui/Card.svelte'
+  import { copyToClipboard } from '../lib/clipboard'
   import { api, type APIKey } from '../api/client'
 
   interface Props {
@@ -409,7 +410,7 @@
   let effectiveApiKey = $derived(apiKeys[0]?.key || 'sk-8b71f86e0a1f2fb5-nhz496-cfa1c800')
 
   function copyText(text: string, id: string) {
-    navigator.clipboard.writeText(text)
+    copyToClipboard(text)
     copiedSnippetId = id
     setTimeout(() => {
       if (copiedSnippetId === id) copiedSnippetId = null

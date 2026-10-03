@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { api, getStoredAPIKey, type APIKey, type ProviderConnection } from '../../api/client'
+  import { copyToClipboard } from '../../lib/clipboard'
   import { getModelKind, getModelsByProviderId, PROVIDER_ID_TO_ALIAS } from '../../lib/models'
   import { parseCustomModelsResponse, subscribeCustomModelsChanged } from '../../lib/customModels'
   import Card from '../../lib/ui/Card.svelte'
@@ -98,14 +99,14 @@
   })
 
   async function handleCopyCurl() {
-    await navigator.clipboard.writeText(curlSnippet)
+    await copyToClipboard(curlSnippet)
     copiedCurl = true
     setTimeout(() => { copiedCurl = false }, 2000)
   }
 
   async function handleCopyRes() {
     if (!resultStr) return
-    await navigator.clipboard.writeText(resultStr)
+    await copyToClipboard(resultStr)
     copiedRes = true
     setTimeout(() => { copiedRes = false }, 2000)
   }

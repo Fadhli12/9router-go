@@ -19,6 +19,7 @@
     newResetCreditIdempotencyKey,
   } from '../lib/codexResetCredit'
   import { PROVIDER_CATALOG } from '../lib/providers'
+  import { copyToClipboard } from '../lib/clipboard'
   import Toggle from '../lib/ui/Toggle.svelte'
   import { getIconPath } from './connections/types'
   import QuotaTable from './quota/QuotaTable.svelte'
@@ -413,7 +414,7 @@
 
   function copyArn(text?: string, id?: string) {
     if (!text || !id) return
-    navigator.clipboard?.writeText(text)
+    copyToClipboard(text)
     copiedArnId = id
     setTimeout(() => {
       if (copiedArnId === id) copiedArnId = null

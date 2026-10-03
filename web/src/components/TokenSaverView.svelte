@@ -5,6 +5,7 @@
   import Modal from '../lib/ui/Modal.svelte'
   import Button from '../lib/ui/Button.svelte'
   import Input from '../lib/ui/Input.svelte'
+  import { copyToClipboard } from '../lib/clipboard'
   import { api, type Settings } from '../api/client'
 
   interface Props {
@@ -400,7 +401,7 @@
   }
 
   function copyInstallCommand() {
-    navigator.clipboard.writeText('pip install "headroom-ai[proxy]"')
+    copyToClipboard('pip install "headroom-ai[proxy]"')
     copiedInstallCmd = true
     setTimeout(() => (copiedInstallCmd = false), 2000)
   }

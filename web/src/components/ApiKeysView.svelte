@@ -11,6 +11,7 @@
     Trash2
   } from 'lucide-svelte'
   import { api, type APIKey } from '../api/client'
+  import { copyToClipboard } from '../lib/clipboard'
 
   let {
     apiKeys = [],
@@ -26,7 +27,7 @@
   let isCreating = $state(false)
 
   function handleCopy(text: string, id: string) {
-    navigator.clipboard.writeText(text)
+    copyToClipboard(text)
     copiedKey = id
     setTimeout(() => (copiedKey = null), 2000)
   }

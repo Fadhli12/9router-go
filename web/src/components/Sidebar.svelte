@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api, type SystemVersionInfo } from '../api/client'
+  import { copyToClipboard } from '../lib/clipboard'
   import { TAB_ROUTES, type ActiveTab } from '../lib/router'
 
   export type { ActiveTab }
@@ -61,9 +62,7 @@
   })
 
   async function copyInstallCmd() {
-    try {
-      await navigator.clipboard.writeText(INSTALL_CMD)
-    } catch {}
+    await copyToClipboard(INSTALL_CMD)
     copied = true
     setTimeout(() => {
       copied = false
