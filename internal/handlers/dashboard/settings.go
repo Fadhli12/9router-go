@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"9router/proxy/internal/apikeycache"
 	"9router/proxy/internal/auth"
 	"9router/proxy/internal/config"
 	"9router/proxy/internal/handlerutil"
@@ -683,7 +684,14 @@ func (h *DashboardHandler) importDatabase(payload map[string]any) error {
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// The restore wipes and re-inserts apiKeys through raw SQL, bypassing the
+	// repo mutators that own invalidation. Without this, every key from before
+	// the restore would keep authenticating for up to the cache TTL.
+	apikeycache.Invalidate()
+	return nil
 }
 
 // writeKVPayload restores kv rows for one scope. keyed scopes store a map of

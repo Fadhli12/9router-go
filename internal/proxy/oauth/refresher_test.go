@@ -93,6 +93,50 @@ func TestRefresh_SingleflightDeduplication(t *testing.T) {
 	}
 }
 
+func TestRefresh_SameConnectionIDDeduplicates(t *testing.T) {
+	testProvider := "test-conn-id-dedup"
+	var callCount atomic.Int32
+
+	Register(testProvider, func(ctx context.Context, p *Params) (*TokenResult, error) {
+		callCount.Add(1)
+		time.Sleep(50 * time.Millisecond)
+		return &TokenResult{AccessToken: "new-access-token", ExpiresIn: 3600}, nil
+	})
+	defer Unregister(testProvider)
+
+	const concurrentCalls = 10
+	var wg sync.WaitGroup
+	errs := make([]error, concurrentCalls)
+	results := make([]*TokenResult, concurrentCalls)
+
+	for i := 0; i < concurrentCalls; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			res, err := Refresh(context.Background(), &Params{
+				Provider:     testProvider,
+				RefreshToken: "rt-" + string(rune('a'+idx)),
+				ConnectionID: "conn-123",
+			})
+			results[idx] = res
+			errs[idx] = err
+		}(i)
+	}
+	wg.Wait()
+
+	if got := callCount.Load(); got != 1 {
+		t.Fatalf("expected 1 upstream call for same ConnectionID, got %d", got)
+	}
+	for i := range errs {
+		if errs[i] != nil {
+			t.Errorf("call %d error: %v", i, errs[i])
+		}
+		if results[i] == nil || results[i].AccessToken != "new-access-token" {
+			t.Errorf("call %d invalid result: %+v", i, results[i])
+		}
+	}
+}
+
 func TestRefresh_DifferentTokensIndependent(t *testing.T) {
 	testProvider := "test-singleflight-different-tokens"
 	var callCount atomic.Int32

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"9router/proxy/internal/apikeycache"
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/models"
@@ -17,9 +18,35 @@ type ContextKey string
 // ApiKeyContextKey is the context key for the authenticated API key object.
 const ApiKeyContextKey ContextKey = "apiKey"
 
+// InvalidateApiKeyCache clears the in-memory API key cache. It must be called
+// after any mutation of the apiKeys table so a revoked or reactivated key stops
+// authenticating immediately instead of lingering for the cache TTL.
+func InvalidateApiKeyCache() {
+	apikeycache.Invalidate()
+}
+
+// resolveApiKey returns the API key object for key, preferring the in-memory
+// cache and falling back to a database lookup on a miss. Only successful lookups
+// are cached, so an unknown key does not have to re-hit SQLite on every attempt.
+func resolveApiKey(repo *db.Repo, key string) (*models.APIKey, error) {
+	if cached, ok := apikeycache.Lookup(key); ok {
+		return cached, nil
+	}
+
+	apiKeyObj, err := repo.GetApiKeyByKey(key)
+	if err != nil {
+		return nil, err
+	}
+	if apiKeyObj != nil {
+		apikeycache.Store(key, apiKeyObj)
+	}
+	return apiKeyObj, nil
+}
+
 // RequireApiKey creates a middleware handler that authenticates requests using client API keys.
 // It checks the Authorization header (Bearer <key>) and the query parameter `key`.
-// Valid keys are retrieved from the SQLite database; inactive or disabled keys are rejected with 401.
+// Valid keys are resolved from a short-lived in-memory cache backed by the SQLite
+// database; inactive or disabled keys are rejected with 401.
 func RequireApiKey(repo *db.Repo) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,8 +56,8 @@ func RequireApiKey(repo *db.Repo) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Validate via SQLite repository and retrieve details
-			apiKeyObj, err := repo.GetApiKeyByKey(apiKeyString)
+			// Resolve via the in-memory cache, falling back to SQLite on a miss.
+			apiKeyObj, err := resolveApiKey(repo, apiKeyString)
 			if err != nil {
 				log.Error("auth", "DB lookup error", "error", err)
 				handlerutil.WriteJSONError(w, http.StatusInternalServerError, "Internal server error")

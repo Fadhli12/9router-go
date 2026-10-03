@@ -32,6 +32,76 @@ type ModelInfoObject struct {
 	// the smallest window in the combo's seat tree.
 	ContextLength       *int `json:"context_length,omitempty"`
 	MaxCompletionTokens *int `json:"max_completion_tokens,omitempty"`
+	// InputModalities / OutputModalities are the flat modality arrays that
+	// OmniRoute and other clients inspect to decide whether image attachment
+	// is permitted. Without them a client defaults image input to false.
+	InputModalities  []string `json:"input_modalities,omitempty"`
+	OutputModalities []string `json:"output_modalities,omitempty"`
+}
+
+// buildModalities derives the input and output modality slices from a
+// capabilities value. It handles the four concrete types that appear in the
+// Capabilities field of ModelInfoObject:
+//
+//   - *providers.CapabilitiesDetail / providers.CapabilitiesDetail  (per-model)
+//   - *providers.ComboCapabilities  / providers.ComboCapabilities   (combo)
+//
+// Rules (matching OmniRoute @omniroute/opencode-plugin expectations):
+//   - InputModalities: always "text"; add "image" if Vision, "audio" if
+//     AudioInput, "video" if VideoInput, "pdf" if PDF.
+//   - OutputModalities: always "text"; add "image" if ImageOutput, "audio"
+//     if AudioOutput.
+//
+// A nil / unknown value returns nil slices (fields are omitted from JSON).
+func buildModalities(caps any) (input []string, output []string) {
+	var vision, audioIn, videoIn, pdf, imageOut, audioOut bool
+
+	switch c := caps.(type) {
+	case *providers.CapabilitiesDetail:
+		if c == nil {
+			return nil, nil
+		}
+		vision, audioIn, videoIn, pdf = c.Vision, c.AudioInput, c.VideoInput, c.PDF
+		imageOut, audioOut = c.ImageOutput, c.AudioOutput
+	case providers.CapabilitiesDetail:
+		vision, audioIn, videoIn, pdf = c.Vision, c.AudioInput, c.VideoInput, c.PDF
+		imageOut, audioOut = c.ImageOutput, c.AudioOutput
+	case *providers.ComboCapabilities:
+		if c == nil {
+			return nil, nil
+		}
+		vision, audioIn, videoIn, pdf = c.Vision, c.AudioInput, c.VideoInput, c.PDF
+		imageOut, audioOut = c.ImageOutput, c.AudioOutput
+	case providers.ComboCapabilities:
+		vision, audioIn, videoIn, pdf = c.Vision, c.AudioInput, c.VideoInput, c.PDF
+		imageOut, audioOut = c.ImageOutput, c.AudioOutput
+	default:
+		return nil, nil
+	}
+
+	input = []string{"text"}
+	if vision {
+		input = append(input, "image")
+	}
+	if audioIn {
+		input = append(input, "audio")
+	}
+	if videoIn {
+		input = append(input, "video")
+	}
+	if pdf {
+		input = append(input, "pdf")
+	}
+
+	output = []string{"text"}
+	if imageOut {
+		output = append(output, "image")
+	}
+	if audioOut {
+		output = append(output, "audio")
+	}
+
+	return input, output
 }
 
 // ConnectionHasCredential reports whether a provider connection carries auth
@@ -571,6 +641,10 @@ func (h *ChatHandler) appendConnectionModels(
 		// fills the window from the static fallback, so a kiro model reports
 		// context_length from the table default rather than the live payload.
 		if live, ok := liveByID[modelID]; ok && live.Capabilities != nil {
+			inMod, outMod := buildModalities(&caps)
+			if inMod == nil {
+				inMod, outMod = buildModalities(live.Capabilities)
+			}
 			data = append(data, ModelInfoObject{
 				ID:                  fullID,
 				Object:              "model",
@@ -578,6 +652,8 @@ func (h *ChatHandler) appendConnectionModels(
 				Capabilities:        live.Capabilities,
 				ContextLength:       optionalTokenLimit(ctxLen),
 				MaxCompletionTokens: optionalTokenLimit(maxOut),
+				InputModalities:     inMod,
+				OutputModalities:    outMod,
 			})
 			continue
 		}
@@ -591,6 +667,7 @@ func (h *ChatHandler) appendConnectionModels(
 				maxOut = live.MaxOutput
 			}
 		}
+		inMod, outMod := buildModalities(&caps)
 		data = append(data, ModelInfoObject{
 			ID:                  fullID,
 			Object:              "model",
@@ -598,6 +675,8 @@ func (h *ChatHandler) appendConnectionModels(
 			Capabilities:        &caps,
 			ContextLength:       optionalTokenLimit(ctxLen),
 			MaxCompletionTokens: optionalTokenLimit(maxOut),
+			InputModalities:     inMod,
+			OutputModalities:    outMod,
 		})
 	}
 	return data
@@ -663,6 +742,7 @@ func appendStaticModel(data []ModelInfoObject, seen map[string]bool, alias, mode
 	if maxOut == 0 {
 		maxOut = caps.MaxOutput
 	}
+	inMod, outMod := buildModalities(&caps)
 	return append(data, ModelInfoObject{
 		ID:                  fullID,
 		Object:              "model",
@@ -670,6 +750,8 @@ func appendStaticModel(data []ModelInfoObject, seen map[string]bool, alias, mode
 		Capabilities:        &caps,
 		ContextLength:       optionalTokenLimit(ctxLen),
 		MaxCompletionTokens: optionalTokenLimit(maxOut),
+		InputModalities:     inMod,
+		OutputModalities:    outMod,
 	})
 }
 
@@ -718,6 +800,7 @@ func (h *ChatHandler) appendLooseCustomModels(
 			if maxOut == 0 {
 				maxOut = caps.MaxOutput
 			}
+			inMod, outMod := buildModalities(&caps)
 			data = append(data, ModelInfoObject{
 				ID:                  fullID,
 				Object:              "model",
@@ -725,6 +808,8 @@ func (h *ChatHandler) appendLooseCustomModels(
 				Capabilities:        &caps,
 				ContextLength:       optionalTokenLimit(ctxLen),
 				MaxCompletionTokens: optionalTokenLimit(maxOut),
+				InputModalities:     inMod,
+				OutputModalities:    outMod,
 			})
 		}
 	}
@@ -918,6 +1003,7 @@ func (h *ChatHandler) appendCombos(data []ModelInfoObject, seen map[string]bool)
 		}
 		if caps, ok := h.aggregateComboCapabilities(combo.Name); ok {
 			entry.Capabilities = caps
+			entry.InputModalities, entry.OutputModalities = buildModalities(caps)
 		}
 		// Upstream publishes the combo-wide limits at the top level too (any
 		// seat can serve the request, so the window is the smallest one in the

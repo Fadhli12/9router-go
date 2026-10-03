@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
 
 	"go.uber.org/fx"
 
 	"9router/proxy/internal/config"
 	"9router/proxy/internal/db"
+	"9router/proxy/internal/log"
 )
 
 // DatabaseModule handles database initialization and provides *sql.DB and *db.Repo.
@@ -55,8 +57,16 @@ func ProvideDatabase(lc fx.Lifecycle, cfg *config.Config) (*sql.DB, error) {
 		}
 	}
 
+	repo := db.NewRepo(conn)
+	backupDir := filepath.Join(filepath.Dir(cfg.DatabasePath), "backups")
+	backupCtx, backupCancel := context.WithCancel(context.Background())
+	repo.StartBackupWorker(backupCtx, backupDir, 7, func(err error) {
+		log.Warn("db", "scheduled backup failed", "error", err)
+	})
+
 	lc.Append(fx.Hook{
 		OnStop: func(ctx context.Context) error {
+			backupCancel()
 			return conn.Close()
 		},
 	})

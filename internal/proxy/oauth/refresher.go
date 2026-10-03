@@ -28,6 +28,10 @@ type Params struct {
 	Provider     string
 	RefreshToken string
 	AccessToken  string // current (possibly expired) token
+	// ConnectionID identifies the stored connection being refreshed. When set,
+	// it keys singleflight deduplication so concurrent refreshes for the same
+	// connection coalesce into one upstream OAuth call.
+	ConnectionID string
 	// ProviderSpecificData carries per-account OAuth material stored at login
 	// time (e.g. Kiro clientId/clientSecret/region for AWS SSO OIDC refresh).
 	ProviderSpecificData map[string]string
@@ -119,6 +123,9 @@ func Refresh(ctx context.Context, p *Params) (*TokenResult, error) {
 	}
 
 	key := pCopy.Provider + ":" + pCopy.RefreshToken
+	if pCopy.ConnectionID != "" {
+		key = "conn:" + pCopy.ConnectionID
+	}
 	res, err, _ := refreshFlight.Do(key, func() (any, error) {
 		return fn(ctx, &pCopy)
 	})
