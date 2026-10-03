@@ -26,8 +26,8 @@
     oauthLoopbackCallbackURL,
   } from '../../lib/oauth-handoff'
   import { getModelsByProviderId, PROVIDER_ID_TO_ALIAS } from '../../lib/models'
-  import { notifyCustomModelsChanged } from '../../lib/customModels'
   import { copyToClipboard } from '../../lib/clipboard'
+  import { notifyCustomModelsChanged } from '../../lib/customModels'
   import {
     buildAvailableModels,
     fetchProviderModelsData,
@@ -41,6 +41,7 @@
   import { proxyBadgeInfo } from './proxyBadge'
   import AddConnectionModal from './AddConnectionModal.svelte'
   import AddCustomModelModal from './AddCustomModelModal.svelte'
+  import ProviderHeaderOverridesModal from './ProviderHeaderOverridesModal.svelte'
   import AddCompatibleNodeModal from './AddCompatibleNodeModal.svelte'
   import EditCompatibleNodeModal from './EditCompatibleNodeModal.svelte'
   import FreebuffSessionBanner from './FreebuffSessionBanner.svelte'
@@ -531,6 +532,7 @@
   let addConnectionError = $state('')
   let showAddCustomModelModal = $state(false)
   let showEditNodeModal = $state(false)
+  let showHeaderOverrides = $state(false)
   // Freebuff specific state & session tracking
   let isFreebuff = $derived(
     providerId === 'freebuff' || storageAlias === 'fb' || storageAlias === 'freebuff'
@@ -2259,13 +2261,19 @@ function formatErrorText(err: unknown): string {
   }
 
   // Custom Model & Node handlers
-  async function submitAddCustomModel(modelId: string, caps?: { vision?: boolean; reasoning?: boolean }) {
+  async function submitAddCustomModel(
+    modelId: string,
+    caps?: { vision?: boolean; reasoning?: boolean },
+    limits?: { contextWindow?: number; maxOutput?: number },
+  ) {
     try {
       await api.saveCustomModel(`${storageAlias}|${modelId}|llm`, {
         id: modelId,
         providerAlias: storageAlias,
         type: 'llm',
-        ...(caps ? { caps } : {})
+        ...(caps ? { caps } : {}),
+        ...(limits?.contextWindow ? { contextWindow: limits.contextWindow } : {}),
+        ...(limits?.maxOutput ? { maxOutput: limits.maxOutput } : {}),
       })
       showAddCustomModelModal = false
       const modelsData = await fetchProviderModelsData(providerId, storageAlias)
@@ -2497,11 +2505,24 @@ function formatErrorText(err: unknown): string {
           typeof m.capabilities === 'object'
             ? (m.capabilities as { vision?: boolean; reasoning?: boolean })
             : undefined
+        // An endpoint that reports its own limits is the authoritative source;
+        // saving them means /v1/models keeps publishing them after the row
+        // outlives this import.
+        const declaredCtxLen =
+          typeof m === 'object' && m !== null && 'context_length' in m
+            ? Number(m.context_length) || 0
+            : 0
+        const declaredMaxOut =
+          typeof m === 'object' && m !== null && 'max_completion_tokens' in m
+            ? Number(m.max_completion_tokens) || 0
+            : 0
         await api.saveCustomModel(`${storageAlias}|${modelId}|llm`, {
           id: modelId,
           providerAlias: storageAlias,
           type: 'llm',
           ...(caps ? { caps } : {}),
+          ...(declaredCtxLen > 0 ? { contextWindow: declaredCtxLen } : {}),
+          ...(declaredMaxOut > 0 ? { maxOutput: declaredMaxOut } : {}),
         })
         imported++
       }
@@ -2977,6 +2998,15 @@ function formatErrorText(err: unknown): string {
               />
             </div>
           {/if}
+
+          <button
+            type="button"
+            onclick={() => (showHeaderOverrides = true)}
+            class="inline-flex h-7 items-center gap-1.5 rounded-[8px] px-3 text-xs font-medium text-text-muted transition-colors hover:bg-surface-2 hover:text-text-main"
+          >
+            <span class="material-symbols-outlined text-[18px]" aria-hidden="true">tune</span>
+            Custom headers
+          </button>
         </div>
       </div>
     </div>
@@ -4546,6 +4576,13 @@ function formatErrorText(err: unknown): string {
   onSave={submitAddCustomModel}
 />
 {/if}
+
+<!-- 5a. Per-provider header overrides (upstream CustomConfigCard parity) -->
+<ProviderHeaderOverridesModal
+  isOpen={showHeaderOverrides}
+  providerId={providerId}
+  onClose={() => (showHeaderOverrides = false)}
+/>
 
 <!-- 5b. Edit Compatible Node Modal (upstream EditCompatibleNodeModal parity) -->
 <EditCompatibleNodeModal

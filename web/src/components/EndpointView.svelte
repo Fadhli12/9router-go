@@ -20,8 +20,8 @@
   } from 'lucide-svelte'
   import Card from '../lib/ui/Card.svelte'
   import Toggle from '../lib/ui/Toggle.svelte'
-  import { api, type APIKey, type Settings, type TunnelStatusResponse } from '../api/client'
   import { copyToClipboard } from '../lib/clipboard'
+  import { api, type APIKey, type Settings, type TunnelStatusResponse } from '../api/client'
 
   interface Props {
     apiKeys?: APIKey[]

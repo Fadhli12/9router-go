@@ -1,6 +1,265 @@
 # Changelog
 
+### 🧹 `signalSelfShutdown` mati di kedua varian build dihapus — issue #76
+
+`internal/updater/signal_unix.go` dan `signal_windows.go` mendefinisikan
+`signalSelfShutdown` dengan isi identik (`shutdown.RequestStop()`), dan tidak
+punya call site sejak rewrite `RestartSelf` pindah ke
+`shutdown.RestartAfterStop`. Komentar fallback `os.Exit(0)` yang dibawa keduanya
+mendeskripsikan kode yang sudah tidak ada. Keduanya dihapus: pembatas platform
+yang membenarkan pemisahan file itu sudah hilang, karena
+`shutdown.RequestStop()` adalah satu-satunya jalur shutdown di semua platform.
+
+Entri "BELUM dihapus" yang sebelumnya tertinggal di `[Unreleased]` dan di badan
+rilis v1.9.7 dikoreksi menjadi mencatat penghapusannya.
+
+**Verifikasi:** `go vet ./internal/updater/...` bersih, `go test -race
+./internal/updater/...` bersih, dan `go build ./...` untuk linux, windows, dan
+darwin tetap sukses.
+
+### ✨ Custom model bisa mendeklarasikan `contextWindow` dan `maxOutput` — issue #90
+
+`db.CustomModel` hanya punya lima field, jadi model pada provider node
+OpenAI-compatible tidak punya cara menyatakan jendela konteksnya. Angka yang
+dipublikasikan ke `/v1/models` dan `/v1/models/info` murni hasil tebakan
+substring: `my-custom-model` dan `llama-3.3-70b` selalu jatuh ke `128000 /
+4096` hanya karena id-nya tidak kena pola apa pun. Rantai resolusinya
+(`GetModelTokenLimits` selalu mengembalikan non-nol, jadi lantai 128k praktis
+tidak pernah tercapai) membuat model open-source ber-window besar dilaporkan
+jauh lebih kecil dari kenyataan endpoint.
+
+Dua field opsional ditambahkan:
+
+- `db.CustomModel.ContextWindow` / `MaxOutput`, `omitempty` — nol berarti
+  "tidak dideklarasikan", jadi baris yang tersimpan sebelum field ini ada
+  berperilaku persis seperti sebelumnya.
+- `applyCustomCaps` membaca keduanya sebagai **deklarasi**, bukan penutup
+  celah: angka yang dideklarasikan menggantikan tebakan tabel, sedangkan
+  angka yang nol membiarkan tabel yang bicara. Ini berbeda dari flag
+  modalitas di sekitarnya yang bersifat aditif.
+
+Form "Add Model" punya dua kolom baru (opsional), dan "Import from /models"
+menyimpan `context_length` / `max_completion_tokens` apa yang dilaporkan
+endpoint itu — sumbernya otoritatif, jadi tidak perlu ditebak ulang.
+
+`GET /api/models/caps?provider=<node>` juga diperbaiki: node yang modelnya
+semua custom row tidak punya katalog registry, jadi endpoint itu membalas
+`caps: {}` dan angka yang sama tidak pernah terlihat di dashboard. Sekarang
+custom row ikut di sana, dengan flag dan limit yang dideklarasikan.
+
+Angka ini hanya untuk jalur metadata: `handleSingleModel` meneruskan
+body apa adanya, jadi tidak ada truncasi atau clamp `max_tokens` yang ikut
+berubah.
+
+**Verifikasi:** `TestCustomModelDeclaredLimitsReachEveryDiscoverySurface`
+(integration — router asli, HTTP listener sungguhan, SQLite sementara)
+membuktikan angka 1000000/32000 sampai apa adanya ke `/v1/models`,
+`capabilities`, dan `/v1/models/info`, sementara baris tanpa deklarasi tetap
+memakai nilai tabel; `TestCustomModelDeclaredLimitsPublishedVerbatim` dan
+`TestCustomModelPartialLimitFillsOnlyTheGap` (unit), plus
+`TestHandleGetModelCaps_CustomModelsOnNode` (dashboard, termasuk baris
+bertipe image yang tidak boleh muncul di peta chat). Ketiga test batas gagal
+identik di `origin/main` (dibuktikan dengan `git stash`).
+
+### ✨ Dashboard: deep link filter quota, filter `hidden`, `recurring` codebuddy-intl — issue #101 (bagian 1–3)
+
+Tiga permukaan dashboard yang tertinggal dari upstream v0.5.95.
+
+**`?provider=` tidak melakukan apa pun.** `providerFilter` di
+`QuotaTrackerView` selalu mulai dari `'all'`; `onMount` membaca localStorage
+dan settings, tidak pernah `window.location.search`, dan perubahan filter
+tidak pernah menulis balik ke URL — jadi deep link dan bookmark mati.
+Sekarang filter diinisialisasi dari URL saat mount, dan setiap perubahan
+menulis balik lewat `history.replaceState`, bukan `pushState`: ini filter,
+bukan navigasi, jadi tombol back tidak boleh menelusuri setiap provider yang
+diklik. Kembali ke `all` menghapus parameternya. Nilai yang tidak dikenal
+dilepas setelah daftar opsi benar-benar tiba — bukan diabaikan di awal —
+supaya bookmark lama tidak pernah menyisakan daftar kosong tanpa jalan keluar.
+
+**`codebuddy-intl` kehilangan `recurring`.** Backend sudah mengirim field itu
+(`usage_providers.go:998` `true`, `:1006` `false`); switch frontend hanya
+punya `case 'codebuddy-cn'`. Akibatnya paket bonus codebuddy-intl tampil dengan
+label "Reset in" alih-alih "Expires in". Kedua provider kini ditangani di
+case yang sama, seperti `ProviderLimits/utils.js:621-635` upstream.
+
+**Flag `hidden` ada di tipe tapi tidak dipakai.** `providers.ts`
+mendeklarasikan dan menyetelnya, dan dua pemakainya sudah benar
+(`ProvidersOverviewGrid` untuk tiap kategori, `providers.ts:2282` untuk
+`supportsKind`) — yang belum adalah peta topologi. Dari lima provider yang
+ditandai tersembunyi, empat hanya TTS dan sudah tersaring oleh
+`supportsKind`; satu-satunya yang tersisa adalah `mmf`/mimo-free,
+provider chat tersembunyi yang satu-satunya di registry. `addProvider` →
+`topologyProviders` di `AnalyticsView` sekarang melewatinya, dengan alasan
+yang sama seperti daftar provider: peta itu dibaca sebagai "siapa yang sedang
+di bus", bukan inventaris lengkap. Halaman detail provider untuk yang
+`hidden` tetap bisa dibuka — itu kontrak field-nya sendiri.
+
+**Soal "satu sumber kebenaran" di sisi Go:** tidak ada, dan tidak dibuat.
+Go tidak punya salinan flag `hidden`; memilikinya berarti menggandakan
+registry yang sudah hidup di `web/src/lib/providers.ts` ke tempat ketiga.
+Yang bisa dijamin Go adalah hal yang benar-benar dimilikinya — daftar
+provider yang dilayani quota tracker. Daftar itu sekarang berisi nol dari
+lima provider tersembunyi, jadi `isUsageEligibleConnection` sudah mengeluarkan
+mereka dari `providerOptions` dan daftar koneksi; hasilnya identik dengan
+penyaringan upstream di `UsageStats.js:242` dan `:250` untuk registry saat
+ini. `TestHiddenProvidersStayOutOfTheQuotaList` mengunci itu, sehingga
+provider tersembunyi yang suatu saat ikut dilayani quota tracker akan
+gagal di test dan diperbaiki di commit yang sama.
+
+**Verifikasi:** `bun test` (127 pass), `tsc -b`, `oxlint`, `bun run build`,
+`go test ./internal/handlers/dashboard/...` (termasuk
+`TestHiddenProvidersStayOutOfTheQuotaList`).
+
+### ✨ Override header per provider — issue #101 (bagian 4), upstream b3cf3fde parity
+
+Operator akhirnya bisa menyuntik header ke request outbound sebuah provider
+tanpa menyentuh kode. Hilang total dari sisi kita: tidak ada route, tidak ada
+field settings, tidak ada titik injeksi, tidak ada UI.
+
+**Penyimpanan** mengikuti pola settings yang sudah ada, bukan tabel baru:
+`providerOverrides` di blob `settings`, dibaca lewat `db.GetProviderOverride`
+dan ditulis lewat `db.SetProviderOverride`, dengan kunci **canonical provider
+id** — sama seperti upstream yang mengunci `resolveProviderAlias(id)`. Sisi
+request mengkanonicalkan juga (`chat.ProviderOverrideKey`), jadi satu entri
+melayani dua ejaan: dashboard membuka halaman lewat alias, sementara request
+datang sebagai `provider/model`.
+
+**Titik injeksi** cuma satu: `getProviderConfig` memerge override ke
+`cfg.StaticHeaders` sebelum mengembalikan config
+(`chat.applyProviderOverrides`). Itu sengaja — setiap executor menyusun
+header outbound dari `cfg.StaticHeaders`, jadi merge di sini menjangkau
+semuanya tanpa satu pun file executor belajar fitur ini. Upstream sendiri
+melakukan merge di dalam executor, yang di sini berarti menyalinnya ke
+sekitar belasan file. Merge dilakukan **setelah** rewrite relay, jadi header
+relay pun bisa di-override, sama seperti `Object.assign` upstream.
+
+**Presedensi ditulis eksplisit:** override menang atas static header registry
+(`providers.MergeHeaderOverrides`), persis `Object.assign(headers,
+providerOverrides.headers)` di `open-sse/executors/base.js:132`. Operator
+memperbaiki header yang gateway kirim, bukan menambah pendapat kedua.
+
+**Permukaan yang ditolak** — inilah yang membuat fitur ini tidak menjadi
+auth bypass, berbeda dari kalau "override menang atas semua" diterapkan tanpa
+filter. `authorization`, `cookie`, `host`, `content-length`, `content-type`,
+`connection`, dan `transfer-encoding` tidak bisa di-override. Daftar dan
+aturannya milik upstream, dipindah ke `db.NormalizeProviderOverrides` supaya
+tidak bisa dilewati lewat jalur tulis kedua. `Host` yang boleh di-override
+akan mengarahkan traffic ke host lain; `Authorization` yang boleh di-override
+akan mengarahkan traffic ke akun lain. Keduanya ditolak, dan GET
+mengembalikannya ke UI supaya field-nya ditolak **dengan alasan**, bukan
+supaya operator menemukannya lewat 400.
+
+Nama header dibatasi ke subset token RFC 7230 dan nilai dicek bebas CR/LF —
+tanpa itu, satu nilai dengan `\r\n` menyuntik header kedua ke request yang
+keluar.
+
+**UI** `ProviderHeaderOverridesModal.svelte` (padanan `CustomConfigCard`
+upstream), dipasang di toolbar provider detail. Ia menampilkan
+`builtinHeaders` dari registry sebagai baseline — jadi operator melihat
+persis apa yang dikirim gateway, bukan menebak — dan memvalidasi dengan
+aturan yang sama sebelum mengirim, supaya kesalahan ditemukan di field.
+
+**Verifikasi:** `TestProviderHeaderOverrideReachesUpstream` (integration —
+router asli, upstream palsu) membuktikan `X-Tenant: acme` benar-benar diterima
+upstream sementara `Authorization` milik koneksi tetap utuh;
+`TestProviderHeaderOverrideBeatsRegistryHeader` membuktikan override
+mengalahkan `x-opencode-client: desktop` dari registry;
+`TestProviderHeaderOverrideIsScopedToItsProvider` membuktikan override kimi
+tidak bocor ke request deepseek; `TestProviderHeaderOverrideCannotStealCredentials`
+membuktikan penolakan 400 tidak merusak entri yang tersimpan. Plus
+`TestProviderOverridesRoundTrip`,
+`TestProviderOverridesAliasAndCanonicalAreOneEntry`,
+`TestProviderOverridesRejectAuthAndFramingHeaders` (11 subtest), dan
+`TestProviderOverridesRejectedWriteKeepsPrevious`. Test wire gagal identik di
+`origin/main` (`upstream X-Tenant = ""`, dan `x-opencode-client = "desktop"`).
+Disinke juga lewat UI sungguhan: modal dibuka di browser, header disimpan,
+dan nilainya masih ada setelah reload.
+
 ## [Unreleased]
+
+### 🎨 Console Log: warna mengikuti level yang benar-benar dieminkan
+
+Halaman Console Log menampilkan semua baris hijau. Penyebabnya bukan pilihan
+warna, tapi halaman menebak level dari teks yang sudah dirender
+(`TerminalView.svelte`: cocokkan `[tag]` atau awalan `INF/WRN/ERR`, selain itu
+hijau), sehingga apa pun yang tidak dikenali — termasuk `502` dari upstream yang
+gagal — jatuh ke hijau "sukses".
+
+Perbaikannya memindahkan kebenaran ke sumbernya. `log.ConsoleEntry` kini membawa
+`{time, level, line}` yang diambil dari level yang dilaporkan emitter, bukan dari
+teks hasil render, dan buffer + SSE mengirim objek itu apa adanya. Waktu tiba
+ikut ditambahkan karena format teks tidak mencetak stempel waktu sama sekali —
+tanpa itu baris tidak bisa dibedakan begitu buffer tergulir.
+
+Bentuk `logs` berubah dari `string[]` menjadi objek. Ini perubahan kontrak wire
+yang disengaja: satu-satunya konsumennya adalah dashboard Svelte, dan upstream
+Next tidak pernah mengirim level apa pun, jadi tidak ada yang bisa dilanggar.
+
+Dampaknya ke halaman: baris memakai warna level (ERR merah, WRN amber, INF
+hijau, DBG biru), tiap baris punya stempel `HH:MM:SS.mmm`, chip level
+sekaligus jadi filter dan menampilkan hitungan, pencarian, toggle wrap,
+tombol Jump-to-latest yang muncul saat auto-scroll berhenti, salin/ekspor, serta
+empty state yang menyebut penyebabnya. Panel memakai token tema, bukan
+`bg-black` — panel gelap di tema terang dashboard terbaca seperti tidak sengaja.
+
+Warna level diverifikasi terhadap palet yang benar-benar terkompilasi, bukan
+perkiraan nama kelas: Tailwind 4 mengkompilasi warna ke `oklch`, jadi
+`text-red-700` bukan `#b91c1c`. Diukur pada piksel render sungguhan — light
+ERR 6.10:1 / INF 5.10:1 / DBG 7.14:1, dark ERR 4.90:1 / WRN 8.22:1 / INF
+7.30:1 / DBG 8.50:1 — semua di atas ambang WCAG AA 4.5:1, dan
+`consoleLogContrast.test.ts` menjaga angka itu agar tidak bisa diam-diam
+menurun saat palet Tailwind naik versi.
+
+### 🐛 Capacity adapter tidak mengikuti upstream — parity `open-sse/services/capacityAdapter.js`
+
+Adapter input-modality (vision/pdf/audioInput/videoInput) di port ini menyimpang
+dari upstream `decolua/9router` di enam titik, tiga di antaranya mengubah
+perilaku yang diamati klien:
+
+1. **Toggle `enabled: false` diabaikan.** `combo.go` `continue` melewati entri yang
+   dinonaktifkan, lalu blok "default fallback" tetap berjalan karena `len(pool) == 0`
+   — tidak ada pembeda antara pool *dimatikan* dan pool *tidak dikonfigurasi*.
+   Akibatnya request berisi gambar tetap dialihkan ke
+   `ag/gemini-3.8-flash-high` meski operator mematikan adapter-nya. Upstream
+   `normalizeCapEntry` mengembalikan `{enabled:false, models:[]}` dan
+   `getCapacityAdapterModels` melewatkannya, jadi tidak ada yang di-inject.
+2. **Default model salah.** Entri kosong jatuh ke `ag/gemini-3.8-flash-high`;
+   upstream memakai satu konstanta untuk semua kapabilitas,
+   `DEFAULT_FALLBACK_MODEL = "oc/mimo-v2.6-flash-free"`, hanya di dalam cabang
+   `enabled && models.length === 0`.
+3. **Bentuk entri legacy tidak didukung.** Upstream menerima bentuk array lama
+   `[{model, enabled}]`; parse typed hanya mengenali bentuk objek.
+4. **`reorderByCapabilities` dua tier.** Versi ini hanya "penuhi semua kapabilitas"
+   vs "sisanya". Upstream tiga tier: hard+soft, hard saja, lalu sisanya — sehingga
+   di antara dua model yang sama-sama vision, yang juga punya `search`/`tools`
+   didahulukan.
+5. **Deteksi kapabilitas jauh lebih sempit.** Yang port ini punya hanya memindai
+   satu pesan `role: "user"` terakhir; upstream memindai *trailing run* setelah
+   pesan assistant/model terakhir dan juga membaca `contents`/`request.contents`
+   (Gemini/Antigravity), `images` (Ollama/Hermes), `attachments` /
+   `experimental_attachments`, data-URI di dalam string, serta menebak mime pada
+   blok file dari `file_data`/`source.media_type`.
+6. **History tidak dipangkas untuk model adapter.** Upstream
+   `stripHistoryForContext` memotong tengah percakapan agar muat di context window
+   model adapter yang sering jauh lebih kecil. Tanpa itu, percakapan panjang yang
+   dialihkan ke adapter gagal karena panjang di upstream.
+
+Selain itu `detectRequiredCapabilities` kini memakai `trailingUserItems`, jadi
+gambar di turn lama tidak lagi mengunci combo ke model vision — sesuai catatan
+upstream bahwa media history "gets stripped + placeholdered downstream".
+Jalur fusion juga kini menerima model combo apa adanya, bukan daftar yang sudah
+di-augment, sesuai `src/sse/handlers/chat.js` yang mengirim `comboModels` ke
+`handleFusionChat`.
+
+Ditambah `looksLikeVisionModel` (port `open-sse/providers/visionPatterns.js`) sebagai
+heuristik terakhir: id model yang memuat kata modalnya sendiri (`qwen3-vl-plus`,
+`glm-4.6v`) dianggap vision walau belum ada di tabel kapabilitas. Sepperti
+upstream, ini hanya menyalakan vision, tidak pernah mematikannya.
+
+Perilaku yang dipertahankan: nama combo di pool vision tetap tidak memenuhi hard
+cap, karena `modelSatisfies` upstream memecah pada `/` dengan cara yang sama. Pool
+hanya menerima model vision, bukan combo — jadi combo utama yang tidak mendukung
+vision tidak dialihkan ke "combo vision", dan memang tidak bisa begitu di upstream.
 
 ### 🐛 Rotasi round-robin macet: stempel `lastUsedAt` tidak pernah maju — issue #107
 
@@ -50,6 +309,16 @@ menutup delapan kombinasi posisi jam dan format stempel tersimpan.
 > Catatan: `TestGateAcquire_*` di `internal/fetchgate` sesekali gagal karena
 > asumsi `time.Sleep` di environment ini, dan sudah gagal dengan identik di
 > `origin/main` (dibuktikan dengan `git stash`), jadi di luar cakupan issue ini.
+
+### 🐛 Input custom window usage menolak huruf `d`/`h` di ponsel — issue #115
+
+Field "Custom window" di halaman Usage sudah `type="text"`, tapi tetap membawa
+`inputmode="numeric"`. Di Android/iOS keyboard itu menampilkan keypad angka
+tanpa tombol huruf, jadi pengguna ponsel tidak bisa mengetik `14d` atau `12h`
+sama sekali — sufiks wajib justru tidak bisa diketik, dan input yang kembali
+kosong membuat halaman jatuh ke preset 7 hari. `inputmode="numeric"` dihapus;
+`normalizeCustomPeriod` sudah menolak angka telanjang dengan pesan galat, jadi
+validasi tidak berubah.
 
 ### 🐛 "Strict Proxy" tidak menahan — upstream decolua/9router#4333 parity
 

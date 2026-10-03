@@ -20,8 +20,8 @@
     Zap
   } from 'lucide-svelte'
   import Card from '../lib/ui/Card.svelte'
-  import { api, type APIKey } from '../api/client'
   import { copyToClipboard } from '../lib/clipboard'
+  import { api, type APIKey } from '../api/client'
 
   interface Props {
     apiKeys?: APIKey[]

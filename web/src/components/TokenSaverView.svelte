@@ -5,8 +5,8 @@
   import Modal from '../lib/ui/Modal.svelte'
   import Button from '../lib/ui/Button.svelte'
   import Input from '../lib/ui/Input.svelte'
-  import { api, type Settings } from '../api/client'
   import { copyToClipboard } from '../lib/clipboard'
+  import { api, type Settings } from '../api/client'
 
   interface Props {
     settings?: Settings
