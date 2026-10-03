@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+### 🎨 Console Log: warna mengikuti level yang benar-benar dieminkan
+
+Halaman Console Log menampilkan semua baris hijau. Penyebabnya bukan pilihan
+warna, tapi halaman menebak level dari teks yang sudah dirender
+(`TerminalView.svelte`: cocokkan `[tag]` atau awalan `INF/WRN/ERR`, selain itu
+hijau), sehingga apa pun yang tidak dikenali — termasuk `502` dari upstream yang
+gagal — jatuh ke hijau "sukses".
+
+Perbaikannya memindahkan kebenaran ke sumbernya. `log.ConsoleEntry` kini membawa
+`{time, level, line}` yang diambil dari level yang dilaporkan emitter, bukan dari
+teks hasil render, dan buffer + SSE mengirim objek itu apa adanya. Waktu tiba
+ikut ditambahkan karena format teks tidak mencetak stempel waktu sama sekali —
+tanpa itu baris tidak bisa dibedakan begitu buffer tergulir.
+
+Bentuk `logs` berubah dari `string[]` menjadi objek. Ini perubahan kontrak wire
+yang disengaja: satu-satunya konsumennya adalah dashboard Svelte, dan upstream
+Next tidak pernah mengirim level apa pun, jadi tidak ada yang bisa dilanggar.
+
+Dampaknya ke halaman: baris memakai warna level (ERR merah, WRN amber, INF
+hijau, DBG biru), tiap baris punya stempel `HH:MM:SS.mmm`, chip level
+sekaligus jadi filter dan menampilkan hitungan, pencarian, toggle wrap,
+tombol Jump-to-latest yang muncul saat auto-scroll berhenti, salin/ekspor, serta
+empty state yang menyebut penyebabnya. Panel memakai token tema, bukan
+`bg-black` — panel gelap di tema terang dashboard terbaca seperti tidak sengaja.
+
+Warna level diverifikasi terhadap palet yang benar-benar terkompilasi, bukan
+perkiraan nama kelas: Tailwind 4 mengkompilasi warna ke `oklch`, jadi
+`text-red-700` bukan `#b91c1c`. Diukur pada piksel render sungguhan — light
+ERR 6.10:1 / INF 5.10:1 / DBG 7.14:1, dark ERR 4.90:1 / WRN 8.22:1 / INF
+7.30:1 / DBG 8.50:1 — semua di atas ambang WCAG AA 4.5:1, dan
+`consoleLogContrast.test.ts` menjaga angka itu agar tidak bisa diam-diam
+menurun saat palet Tailwind naik versi.
+
 ### 🐛 Capacity adapter tidak mengikuti upstream — parity `open-sse/services/capacityAdapter.js`
 
 Adapter input-modality (vision/pdf/audioInput/videoInput) di port ini menyimpang

@@ -253,6 +253,14 @@ On startup, the server starts:
 - model catalog synchronization to `model-catalog.json` beside the database; and
 - a live console-log ring used by `/translator/console-logs/stream`.
 
+The console-log ring stores `log.ConsoleEntry` — `{time, level, line}` — rather
+than bare strings, and `/api/translator/console-logs` plus its SSE stream emit
+that shape as-is. `level` is the severity the logger reported at emit time, so
+the dashboard never has to infer one from the rendered message, and `time` is
+the arrival clock because the text log format prints no timestamp of its own.
+The wire shape diverges deliberately from upstream Next, which shipped bare
+strings and no level at all; the Svelte dashboard is the only consumer.
+
 The in-memory usage tracker publishes active requests over SSE and seeds recent history from `usageHistory` once per process. SQLite usage history remains the durable source. Daily usage aggregation is process-local merge plus full-row upsert; concurrent independent writers can still overwrite one another's daily aggregate.
 
 Global middleware limits request bodies to 10 MiB, recovers panics, assigns request IDs, and emits structured request logs. `LOG_FILE` can redirect the standard logger to an append-only file.
