@@ -165,6 +165,7 @@ func refreshBackgroundConnection(ctx context.Context, repo *db.Repo, c Connectio
 		Provider:             c.Provider,
 		RefreshToken:         c.RefreshToken,
 		AccessToken:          c.AccessToken,
+		ConnectionID:         c.ID,
 		ProviderSpecificData: c.ProviderSpecificData,
 	})
 	if err != nil || result == nil || result.AccessToken == "" {
