@@ -43,6 +43,7 @@ func (h *DashboardHandler) HandleGetApiKeys(w http.ResponseWriter, r *http.Reque
 		sanitized = append(sanitized, map[string]any{
 			"id": k.ID, "key": key, "name": k.Name,
 			"machineId": k.MachineID, "isActive": k.IsActive, "createdAt": k.CreatedAt,
+			"maxConcurrent": k.MaxConcurrent,
 		})
 	}
 	handlerutil.WriteJSON(w, http.StatusOK, sanitized)
@@ -68,10 +69,11 @@ func (h *DashboardHandler) HandleCreateApiKey(w http.ResponseWriter, r *http.Req
 	defer r.Body.Close()
 
 	var req struct {
-		ID        string `json:"id"`
-		Key       string `json:"key"`
-		Name      string `json:"name"`
-		MachineID string `json:"machineId"`
+		ID            string `json:"id"`
+		Key           string `json:"key"`
+		Name          string `json:"name"`
+		MachineID     string `json:"machineId"`
+		MaxConcurrent int    `json:"maxConcurrent"`
 	}
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &req); err != nil {
@@ -87,7 +89,7 @@ func (h *DashboardHandler) HandleCreateApiKey(w http.ResponseWriter, r *http.Req
 		req.Key = "sk-" + strings.ReplaceAll(uuid.New().String(), "-", "")
 	}
 
-	if err := h.Repo.CreateApiKey(req.ID, req.Key, req.Name, req.MachineID); err != nil {
+	if err := h.Repo.CreateApiKeyWithLimit(req.ID, req.Key, req.Name, req.MachineID, req.MaxConcurrent); err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -168,5 +170,47 @@ func (h *DashboardHandler) HandleToggleApiKey(w http.ResponseWriter, r *http.Req
 		"status":   "ok",
 		"id":       id,
 		"isActive": newStatus,
+	})
+}
+
+// HandleUpdateApiKeyLimit handles PUT /api/keys/{id}/limit.
+// Updates the maxConcurrent limit for an API key.
+func (h *DashboardHandler) HandleUpdateApiKeyLimit(w http.ResponseWriter, r *http.Request) {
+	id := getURLParam(r, "id")
+	if id == "" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing apiKey id")
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	defer r.Body.Close()
+
+	var req struct {
+		MaxConcurrent int `json:"maxConcurrent"`
+	}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			handlerutil.WriteJSONError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+	}
+
+	if req.MaxConcurrent < 0 {
+		req.MaxConcurrent = 0
+	}
+
+	if err := h.Repo.UpdateApiKeyMaxConcurrent(id, req.MaxConcurrent); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"status":        "ok",
+		"id":            id,
+		"maxConcurrent": req.MaxConcurrent,
 	})
 }

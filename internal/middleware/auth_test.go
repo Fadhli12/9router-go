@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"9router/proxy/internal/db"
 )
@@ -35,7 +36,8 @@ func setupTestDB(t *testing.T) (*sql.DB, func()) {
 			name TEXT,
 			machineId TEXT,
 			isActive INTEGER DEFAULT 1,
-			createdAt TEXT NOT NULL
+			createdAt TEXT NOT NULL,
+			maxConcurrent INTEGER DEFAULT 0
 		);`,
 		`CREATE TABLE settings (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -290,5 +292,69 @@ func TestExtractApiKey(t *testing.T) {
 				t.Errorf("ExtractApiKey() = %q, want %q", got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestRequireApiKeyMiddleware_ConcurrencyLimit(t *testing.T) {
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Seed key with maxConcurrent = 1
+	limit := 1
+	if _, err := database.Exec(
+		`INSERT INTO apiKeys (id, key, name, machineId, isActive, createdAt, maxConcurrent) VALUES (?, ?, ?, ?, 1, ?, ?)`,
+		"conc-key-id", "sk-conc-test-key", "conc-test", "mach", "2026-01-01T00:00:00Z", limit,
+	); err != nil {
+		t.Fatalf("failed to seed test key: %v", err)
+	}
+
+	repo := db.NewRepo(database)
+	handlerStarted := make(chan struct{})
+	blockHandler := make(chan struct{})
+
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(handlerStarted)
+		<-blockHandler
+		w.WriteHeader(http.StatusOK)
+	})
+
+	gate := RequireApiKey(repo)(testHandler)
+
+	// First request acquires the slot and stays in-flight
+	go func() {
+		req := httptest.NewRequest("GET", "/v1/chat/completions", nil)
+		req.Header.Set("Authorization", "Bearer sk-conc-test-key")
+		rec := httptest.NewRecorder()
+		gate.ServeHTTP(rec, req)
+	}()
+
+	<-handlerStarted
+
+	// Second concurrent request should be rejected with HTTP 429
+	req2 := httptest.NewRequest("GET", "/v1/chat/completions", nil)
+	req2.Header.Set("Authorization", "Bearer sk-conc-test-key")
+	rec2 := httptest.NewRecorder()
+	gate.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected HTTP 429 Too Many Requests, got %d (body: %s)", rec2.Code, rec2.Body.String())
+	}
+
+	// Release first request
+	close(blockHandler)
+	time.Sleep(10 * time.Millisecond)
+
+	// Third request should now succeed
+	testHandlerDone := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	gateDone := RequireApiKey(repo)(testHandlerDone)
+	req3 := httptest.NewRequest("GET", "/v1/chat/completions", nil)
+	req3.Header.Set("Authorization", "Bearer sk-conc-test-key")
+	rec3 := httptest.NewRecorder()
+	gateDone.ServeHTTP(rec3, req3)
+
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200 OK after slot released, got %d", rec3.Code)
 	}
 }

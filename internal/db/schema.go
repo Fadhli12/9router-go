@@ -94,6 +94,7 @@ func coreSchema() []tableDef {
 				{"machineId", "TEXT"},
 				{"isActive", "INTEGER DEFAULT 1"},
 				{"createdAt", "TEXT NOT NULL"},
+				{"maxConcurrent", "INTEGER DEFAULT 0"},
 			},
 			indexes: []string{
 				"CREATE INDEX IF NOT EXISTS idx_ak_key ON apiKeys(key)",

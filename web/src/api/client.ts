@@ -46,6 +46,7 @@ export interface APIKey {
   machineId: string | null
   isActive: number
   createdAt: string
+  maxConcurrent?: number | null
 }
 
 export interface ProviderStrategyConfig {
@@ -691,10 +692,15 @@ return conns.map(normalizeConnection)
 
   // API Keys
   getApiKeys: () => request<APIKey[]>('/api/keys'),
-  createApiKey: (payload: { name?: string; machineId?: string; key?: string }) =>
+  createApiKey: (payload: { name?: string; machineId?: string; key?: string; maxConcurrent?: number }) =>
     request<{ success: boolean; id: string; key: string }>('/api/keys', {
       method: 'POST',
       body: JSON.stringify(payload),
+    }),
+  updateApiKeyLimit: (id: string, maxConcurrent: number) =>
+    request<{ status: string; id: string; maxConcurrent: number }>(`/keys/${id}/limit`, {
+      method: 'PUT',
+      body: JSON.stringify({ maxConcurrent })
     }),
   deleteApiKey: (id: string) =>
     request<{ success: boolean }>(`/api/keys/${encodeURIComponent(id)}`, {

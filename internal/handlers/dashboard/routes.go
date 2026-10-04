@@ -82,6 +82,7 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Post("/keys", h.HandleCreateApiKey)
 		r.Delete("/keys/{id}", h.HandleDeleteApiKey)
 		r.Put("/keys/{id}/toggle", h.HandleToggleApiKey)
+		r.Put("/keys/{id}/limit", h.HandleUpdateApiKeyLimit)
 
 		// Models
 		r.Get("/models/custom", h.HandleGetCustomModels)

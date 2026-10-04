@@ -49,9 +49,9 @@ func (r *Repo) ValidateApiKey(key string) (bool, error) {
 func (r *Repo) GetApiKeyByKey(key string) (*models.APIKey, error) {
 	var apiKey models.APIKey
 	err := r.db.QueryRow(
-		"SELECT id, key, name, machineId, isActive, createdAt FROM apiKeys WHERE key = ? LIMIT 1",
+		"SELECT id, key, name, machineId, isActive, createdAt, maxConcurrent FROM apiKeys WHERE key = ? LIMIT 1",
 		key,
-	).Scan(&apiKey.ID, &apiKey.Key, &apiKey.Name, &apiKey.MachineID, &apiKey.IsActive, &apiKey.CreatedAt)
+	).Scan(&apiKey.ID, &apiKey.Key, &apiKey.Name, &apiKey.MachineID, &apiKey.IsActive, &apiKey.CreatedAt, &apiKey.MaxConcurrent)
 
 	if err == sql.ErrNoRows {
 		return nil, nil

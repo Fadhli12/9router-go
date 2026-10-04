@@ -41,7 +41,8 @@ func setupTestDB(t *testing.T) (*db.Repo, func()) {
 			name TEXT,
 			machineId TEXT,
 			isActive INTEGER DEFAULT 1,
-			createdAt TEXT NOT NULL
+			createdAt TEXT NOT NULL,
+			maxConcurrent INTEGER DEFAULT 0
 		);`,
 		`CREATE TABLE providerConnections (
 			id TEXT PRIMARY KEY,

@@ -10,6 +10,8 @@ import (
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/models"
+	"9router/proxy/internal/concurrency"
+	"fmt"
 )
 
 // ContextKey is a custom type for context keys to avoid collisions.
@@ -71,6 +73,16 @@ func RequireApiKey(repo *db.Repo) func(http.Handler) http.Handler {
 			if apiKeyObj.IsActive != 1 {
 				handlerutil.WriteJSONError(w, http.StatusUnauthorized, "Invalid or inactive API key.")
 				return
+			}
+
+			// Concurrency limit enforcement per API key
+			if apiKeyObj.MaxConcurrent != nil && *apiKeyObj.MaxConcurrent > 0 {
+				release, ok := concurrency.GlobalLimiter.Acquire(apiKeyObj.Key, *apiKeyObj.MaxConcurrent)
+				if !ok {
+					handlerutil.WriteJSONError(w, http.StatusTooManyRequests, fmt.Sprintf("Concurrent request limit exceeded for this API key (%d allowed)", *apiKeyObj.MaxConcurrent))
+					return
+				}
+				defer release()
 			}
 
 			// Inject API Key info into the request context for downstream handlers/logging
