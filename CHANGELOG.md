@@ -1,6 +1,48 @@
 # Changelog
 
 ## [Unreleased]
+### 🐛 `make web-build` hanya rebuild saat `dist` hilang — dashboard tetap bundle lama
+
+`web-build` sebelumnya deciding "rebuild kalau `web/dist/index.html` tidak ada".
+Jahatnya, itu benar di checkout segar dan salah di setiap mesin yang sudah punya
+`dist`: menarik atau fast-forward `main` mengubah `web/src` sementara
+`web/dist` tetap di tempat, jadi SPA tidak pernah dibangun ulang dan `go build`
+membenamkan bundle lama. Gejalanya dashboard terlihat seperti rilis sebelumnya
+sementara sisi Go sudah mutakhir, dan satu-satunya obatnya `FORCE=1 make
+web-build` yang tidak diingat siapa pun. Terjadi nyata pada 2026-10-04: fast-
+forward ke `bfa0e954` menyisakan `index-BvXlfcRR.js` di `dist`, sementara
+sumber sudah 7 file lebih baru.
+
+Keputusan: nilai kesegaran pindah ke `web/scripts/web-build.ts`, yang
+mengfinger-print setiap input build — `web/src`, `web/public`, `package.json`,
+`bun.lock`, ketiga tsconfig, `vite.config.ts`, `web/index.html` — lalu
+membangun ulang saat fingerprint berubah. Isi file ikut hashed, bukan hanya
+mtime: `bun install` dan `git checkout` dapat menyetel ulang timestamp tanpa
+memindahkan satu byte pun. `bun.lock` dan `package.json` dihitung karena
+bump dependency mengubah bundle tanpa menyentuh `web/src` — kelas yang akan
+terlewat oleh watcher src-saja.
+
+Stamp disimpan di `web/.dist-stamp`, sengaja di luar `web/dist`: berkas
+bernama `.*` yang ada langsung di dalam `dist` ikut tertangkap
+`//go:embed dist/*` dan akan membocorkan fingerprint build sebagai route yang
+bisa diunduh. Stamp baru ditulis setelah build sukses, jadi build yang gagal
+meninggalkan stamp lama dan run berikutnya mencoba lagi, bukan melompat.
+
+Kebijakan `FORCE=1` dipertahankan sebagai jalan pintas eksplisit.
+
+**Verifikasi:** `bun test` 181/181 (10 test baru `web/scripts/web-build.test.ts`
+menutup: edit di `src`, berkas baru bersarang, bump manifest tanpa bump
+lockfile, rename dengan byte identik, `dist` dan `node_modules` diabaikan);
+`make web-build` dua kali berturut-turut — run pertama membangun dan mencatat
+stamp `1ce65ad06890`, run kedua "web/dist is up to date (inputs unchanged)";
+menyentuh `Sidebar.svelte` memicu build ulang, `git checkout` mengembalikan
+fingerprint ke `1ce65ad06890`. `tsc -b` bersih, `oxlint` tanpa warning baru
+(2 warning yang ada sudah pre-existing di `CreateComboModal.svelte` dan
+`clipboard.test.ts`), `make vet-svelte` 92 error = baseline, `go test ./web/...`
+8/8. Smoke: instance probe menyajikan `index-Ba3m-vxm.js` (JS 200, 899.073
+byte) yang sama dengan yang disajikan proses yang sudah berjalan, jadi proses
+lama sudah benar-benar menjalankan binary hasil rebuild.
+
 ### 🎨 Console Log: tag dan pesan menempel jadi `requestGET`
 
 Baris Console Log dirender dari `{#if parts}<span>{parts.tag}</span> {/if}{parts.message}`.

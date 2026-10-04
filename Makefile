@@ -43,13 +43,19 @@ LDFLAGS := -s -w -X "9router/proxy/internal/updater.CurrentVersion=$(VERSION)"
 
 ## web-build — build frontend static assets (Svelte/Vite) into web/dist
 #
+# The freshness decision lives in web/scripts/web-build.ts, which fingerprints
+# every frontend build input (web/src, web/public, package.json, bun.lock, the
+# tsconfigs, vite.config.ts) and rebuilds when that fingerprint changes. The
+# old guard — rebuild only when web/dist/index.html was missing — skipped every
+# rebuild on a machine that already had a dist, so pulling main embedded a stale
+# SPA in the binary until someone remembered FORCE=1.
+#
 # Shell-agnostic on purpose: this recipe runs under /bin/sh (Git Bash, CI) or
-# cmd.exe (a plain Windows prompt). A POSIX `[ ! -f x ]` guard dies under cmd
-# with "! was unexpected at this time." because ! and [ are cmd metacharacters,
-# so the whole existence+FORCE check is delegated to Bun, which is already a
-# prerequisite of every path through this target.
+# cmd.exe (a plain Windows prompt). A POSIX `[ -nt x ]` comparison dies under
+# cmd and is unreliable across filesystems anyway, so it is delegated to Bun,
+# which is already a prerequisite of every path through this target.
 web-build:
-	@bun -e "import {existsSync} from 'fs'; import {spawnSync} from 'child_process'; const force = process.env.FORCE === '1'; if (force || !existsSync('web/dist/index.html')) { console.log('Building web SPA assets...'); spawnSync('bun', ['install','--frozen-lockfile'], {cwd:'web', stdio:'inherit'}); process.exit(spawnSync('bun', ['run','build'], {cwd:'web', stdio:'inherit'}).status ?? 1); }"
+	@bun web/scripts/web-build.ts
 
 ## build — compile binary with version embedding
 build: web-build

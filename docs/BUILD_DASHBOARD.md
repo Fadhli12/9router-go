@@ -40,22 +40,28 @@ cd ..
 
 `bun run build` runs the TypeScript project build and Vite production build. It must produce at least `web/dist/index.html` and the referenced assets. The current `web/package.json` does not define a `test` script; do not document `bun run test` as an available build prerequisite. Frontend test automation is tracked in `ROADMAP.md` until the manifest and CI provide a test command.
 
-`web/dist` is generated, not source. Remove or rebuild it when diagnosing stale assets:
+`web/dist` is generated, not source. Remove or rebuild it when diagnosing stale assets. A stale dashboard on a running binary has a third cause worth checking first: the process was started before the rebuild and still has the previous bundle embedded, so restart it before suspecting the build.
 
 ```bash
-rm -rf web/dist
-cd web && bun install --frozen-lockfile && bun run build
+rm -f web/.dist-stamp
+FORCE=1 make web-build
 ```
 
 ## Build the Go binary
 
-The normal path is the repository Makefile. It builds `web/dist` when it is missing, then embeds it and compiles the binary with the version from `VERSION` (or the documented fallback):
+The normal path is the repository Makefile. It rebuilds `web/dist` when the frontend inputs have changed since the last build, then embeds it and compiles the binary with the version from `VERSION` (or the documented fallback):
 
 ```bash
 make build
 ```
 
-`make web-build` is a prerequisite-only target. It runs `bun install --frozen-lockfile` and `bun run build` only when `web/dist/index.html` is missing or `FORCE=1` is set. It is not a substitute for an explicit frontend verification.
+`make web-build` is a prerequisite-only target. It runs `bun install --frozen-lockfile` and `bun run build` when the fingerprint of every frontend build input changes — `web/src`, `web/public`, `package.json`, `bun.lock`, the tsconfigs, `vite.config.ts`, and `web/index.html` — and skips the build when that fingerprint still matches the one recorded in `web/.dist-stamp`. The old guard rebuilt only when `web/dist/index.html` was missing, which skipped every rebuild on a machine that already had a `dist` and embedded a stale SPA until `FORCE=1` was passed. Set `FORCE=1` to rebuild regardless:
+
+```bash
+FORCE=1 make web-build
+```
+
+It is not a substitute for an explicit frontend verification.
 
 For a direct build, complete the frontend step first and then run:
 
