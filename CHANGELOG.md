@@ -1,6 +1,16 @@
 # Changelog
 
 ## [Unreleased]
+### 🎨 Console Log: tag dan pesan menempel jadi `requestGET`
+
+Baris Console Log dirender dari `{#if parts}<span>{parts.tag}</span> {/if}{parts.message}`.
+Spasi literal di ujung blok `{#if}` dipangkas Svelte sebagai *text node* batas
+blok, jadi yang tampil `requestGET /models` atau `usageLogged provider=...` —
+method, path, dan status menyatu tanpa jeda sehingga sulit dipindai.
+
+Spasi sekarang dikirim eksplisit lewat ekspresi `{' '}`. Baris tanpa tag
+(mis. stdout yang tertangkap) tidak berubah.
+
 ### 🩹 Test live upstream dipisah dari CI lewat opt-in eksplisit
 
 19 test di `internal/handlers/chat/` memanggil provider sungguhan dengan
