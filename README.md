@@ -281,7 +281,7 @@ Go reads/writes the upstream 9router table/JSON shapes and bootstraps the core s
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — routing, providers, runtime layout
 - [`DATABASE.md`](DATABASE.md) — SQLite schema & operator contract
 - [`ROADMAP.md`](ROADMAP.md) — proposals only, not current behavior
-- [`CHANGELOG.md`](CHANGELOG.md) — release history (Go **v1.9.7**, upstream baseline `decolua/9router` v0.5.85)
+- [`CHANGELOG.md`](CHANGELOG.md) — release history (Go **v1.9.8**, upstream baseline `decolua/9router` v0.5.85)
 
 ## Credits
 
