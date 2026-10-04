@@ -900,7 +900,8 @@ func convertToolChoiceToClaude(tc any) any {
 // tool_result blocks paired. mapping must be shared across the whole request.
 func sanitizeToolUseID(id string, mapping map[string]string) string {
 	if id == "" {
-		return id
+		newID := fmt.Sprintf("toolu_%d", len(mapping)+1)
+		return newID
 	}
 	if mapped, ok := mapping[id]; ok {
 		return mapped

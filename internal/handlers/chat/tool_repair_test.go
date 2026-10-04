@@ -73,4 +73,54 @@ func TestRepairToolCallIDsInMap(t *testing.T) {
 			t.Errorf("expected minted tool_call_id, got %v", toolMsg["tool_call_id"])
 		}
 	})
+
+	t.Run("repairs missing tool_use id in anthropic assistant message", func(t *testing.T) {
+		body := map[string]any{
+			"messages": []any{
+				map[string]any{
+					"role": "user",
+					"content": "run command",
+				},
+				map[string]any{
+					"role": "assistant",
+					"content": []any{
+						map[string]any{
+							"type": "tool_use",
+							"name": "bash",
+							"input": map[string]any{"cmd": "ls"},
+						},
+					},
+				},
+				map[string]any{
+					"role": "user",
+					"content": []any{
+						map[string]any{
+							"type": "tool_result",
+							"content": "output",
+						},
+					},
+				},
+			},
+		}
+
+		repairToolCallIDsInMap(body)
+
+		msgs := body["messages"].([]any)
+		asstMsg := msgs[1].(map[string]any)
+		asstContent := asstMsg["content"].([]any)
+		toolUseBlock := asstContent[0].(map[string]any)
+		tuID, ok := toolUseBlock["id"].(string)
+		if !ok || tuID == "" {
+			t.Fatalf("expected non-empty tool_use.id, got %v", toolUseBlock["id"])
+		}
+
+		userMsg := msgs[2].(map[string]any)
+		userContent := userMsg["content"].([]any)
+		toolResultBlock := userContent[0].(map[string]any)
+		trID, ok := toolResultBlock["tool_use_id"].(string)
+		if !ok || trID != tuID {
+			t.Fatalf("expected tool_result.tool_use_id to match %s, got %v", tuID, toolResultBlock["tool_use_id"])
+		}
+	})
+
 }
