@@ -409,10 +409,46 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	// escape from the real IP while the error only shows on the next attempt.
 	httpClient, clientErr := h.getClientForConnection(connData)
 	if clientErr != nil {
-		return &upstreamError{
-			StatusCode: http.StatusBadGateway,
-			Body:       []byte(`{"error":{"type":"proxy_error","message":"` + clientErr.Error() + `"}}`),
+		// Marshalled, not concatenated: the pool name is user-supplied and a
+		// quote in it produced a body that no longer parsed as JSON, so both
+		// the client and the diagnostics reader saw "request failed" instead
+		// of why the egress refused the request.
+		errBody, mErr := json.Marshal(map[string]any{
+			"error": map[string]string{"type": "proxy_error", "message": clientErr.Error()},
+		})
+		if mErr != nil {
+			errBody = []byte(`{"error":{"type":"proxy_error","message":"proxy pool unavailable"}}`)
 		}
+		fwdErr = &upstreamError{StatusCode: http.StatusBadGateway, Body: errBody}
+		// Failing closed on an unusable pool is a failed upstream attempt, and
+		// upstream records it: the same condition throws out of proxyFetch.js
+		// ("Proxy required but failed"), inside executor.execute, so chatCore.js
+		// catches it and writes both the requestDetails error row and the
+		// isError TrackPending. Assigning fwdErr before returning is also what
+		// makes the deferred TrackPending above report isError=true, which is
+		// how the topology card learns this provider failed.
+		connName, connEmail := identityNames(h.connIdentityKVOr(f, connectionID))
+		h.LogFailure(
+			&UsageLogInfo{
+				Provider:            provider,
+				Model:               model,
+				ConnectionID:        connectionID,
+				ConnName:            connName,
+				ConnEmail:           connEmail,
+				Endpoint:            endpoint,
+				Egress:              resolveEgress(connData, providerCfg).LogValue(),
+				OriginalInputTokens: origTokens,
+				SavedTokens:         savedTokens,
+				SavedPercent:        savedPct,
+			},
+			nil,
+			fwdErr,
+			time.Since(start).Milliseconds(),
+			body,
+			metrics,
+		)
+		log.Warn("fallback", "upstream blocked by proxy egress", "provider", provider, "model", model, "error", clientErr)
+		return fwdErr
 	}
 	// The client carries the strict-proxy marker itself, but the executors'
 	// DoRequest path sees only ctx, so the decision travels on both. A

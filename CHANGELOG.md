@@ -1,6 +1,55 @@
 # Changelog
 
 ## [Unreleased]
+### 🩺 Penolakan proxy egress kini terlihat di Usage & Analytics
+
+Latar: `tryForwardWithConnection` gagal **terlalu awal** saat pool proxy yang
+terikat tidak bisa melayani traffic (`internal/proxy/connections_proxy.go:88-98`
+— pool tidak ada / nonaktif / tanpa url). Jalur itu `return` di
+`fallback.go:410` **sebelum** `LogFailure` dan sebelum `TrackPending` menutup
+dengan `isError`, sehingga penolakan `502 proxy_error` tidak tercatat di mana
+pun: nol baris `usageHistory` (benar), tapi juga nol baris
+`requestDetails`. Di dashboard `/dashboard/usage`, request tersebut sama
+sekali tidak terlihat — user cuma melihat HTTP 502 di client tanpa jejak.
+
+Parity: upstream mencatat kondisi yang sama. Kondisi identik di Next.js
+*throw* dari dalam `executor.execute` (`open-sse/utils/proxyFetch.js`,
+"Proxy required but failed"), sehingga catch di `open-sse/handlers/chatCore.js`
+menulis `saveRequestDetail({status: "error"})` **dan**
+`trackPendingRequest(..., false, true)`. 9router-go sekarang mencatat keduanya.
+
+Perbaikan (`internal/handlers/chat/fallback.go`):
+1. `fwdErr` di-assign sebelum `return`, jadi defer `TrackPending` melaporkan
+   `isError=true` dan kartu topologi menandai provider sebagai error
+   terakhir (`usagetracker.ErrorProvider`, jendela 10 detik).
+2. Satu baris `LogFailure` — tetap hanya `requestDetails` dengan
+   `status="error"`; agregat Overview (`usageHistory`/`usageDaily`) tidak
+   disentuh, sesuai upstream yang `saveRequestUsage()` hanya dipanggil dari
+   `buildOnStreamComplete`.
+3. Body error **di-marshal**, bukan dirangkai string. Sebelumnya
+   `[]byte(`{"error":{...,"message":"` + clientErr.Error() + `"}}`)` — pool id
+   milik user, dan tanda kutip di dalamnya membuat payload tidak lagi JSON
+   valid. Akibatnya `extractErrorText` gagal parse dan baris tersimpan
+   berbunyi `"request failed"`; sekarang alasannya terbaca apa adanya.
+
+Jalur **tidak** diubah: `no API key found` (`fallback.go:260`) juga tidak
+mencatat baris, dan itu memang sesuai upstream — `src/sse/handlers/chat.js:248`
+ mengembalikan `errorResponse(404, "No active credentials for provider")`
+ tanpa `saveRequestDetail`.
+
+**Verifikasi:** `internal/handlers/chat/proxy_egress_failure_test.go`
+(table-driven; pool nonaktif + pool id berisi tanda kutip) membuktikan body ke
+client valid JSON dan menyebut poolnya, tepat 1 baris `requestDetails`
+ `status='error'`, 0 baris `usageHistory`. `go vet ./internal/handlers/chat/`
+ bersih · `go test -race ./internal/handlers/chat/ ./internal/proxy/...` hijau.
+ Smoke live di port 20141 (binary baru, DATA_DIR kosong): request
+ `deepseek/deepseek-chat` ke koneksi terikat pool yang dihapus → client
+ menerima `502 {"error":{"type":"proxy_error","message":"proxy pool
+ \"pool-\\\"gone\\\"\" is assigned but does not exist"}}`,
+ `/api/usage/request-details` melaporkan `total=1` dengan
+ `response.status=502` dan pesan yang menyebut pool,
+ `/api/usage/stats` tetap `byProvider={}` dengan `errorProvider="deepseek"`.
+
 ### 🛡️ Combo mendeteksi error yang di-inject provider ke dalam SSE stream
 
 Latar: combo `["oc/space-bunny-free", "openrouter/stealth/space-bunny-alpha",
