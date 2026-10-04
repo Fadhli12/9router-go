@@ -11,7 +11,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/luqman-v1/9router-go)](https://github.com/luqman-v1/9router-go/releases/latest)
 [![License](https://img.shields.io/github/license/luqman-v1/9router-go)](https://github.com/luqman-v1/9router-go/blob/main/LICENSE)
 
-[🚀 Quick Start](#-quick-start) • [💡 Features](#-key-features) • [⚙️ Setup](#-setup-guide) • [🌐 Upstream](https://github.com/decolua/9router)
+[🚀 Quick Start](#-quick-start) • [💡 Features](#-key-features) • [⚙️ Setup](#-setup-guide) • [🔄 Share DB with 9Router](#-sharing-a-database-with-9router) • [🌐 Upstream](https://github.com/decolua/9router)
 
 </div>
 
@@ -85,7 +85,7 @@ irm https://raw.githubusercontent.com/luqman-v1/9router-go/main/install.ps1 | ie
 9router-go
 # Dashboard: http://localhost:20130 (Default password: 123456)
 ```
-> Already use upstream 9Router? Point Go at the same data dir — it opens the **same `DATA_DIR/db/data.sqlite`**: providers, connections, combos, and usage carry over. Details in [`DATABASE.md`](DATABASE.md).
+> **Already using upstream [9Router](https://github.com/decolua/9router)?** Point 9router-go at the same data dir — it opens the **same `DATA_DIR/db/data.sqlite`**. Your providers, connections, combos, API keys, and usage history carry over as-is. No import step, no migration. See [Sharing a database with 9Router](#-sharing-a-database-with-9router) for the caveats.
 
 **Keep the terminal free (background mode):**
 
@@ -147,6 +147,47 @@ docker run -d --name 9router-go --restart unless-stopped \
 - 👥 Per-provider executors, OAuth refresh, reactive 401 retry
 - 📡 Live usage + console-log SSE streams, stall detection
 - 💾 SQLite WAL persistence, outbound proxy support, self-update, MITM commands, Docker, cross-compilation
+
+---
+
+## 🔄 Sharing a database with 9Router
+
+**Already running [9Router](https://github.com/decolua/9router) (the Next.js version)? 9router-go reads that exact database. There is no import, no export, and no migration step.**
+
+Both projects default to the same file and speak the same schema:
+
+| | Path |
+|---|---|
+| macOS / Linux | `~/.9router/db/data.sqlite` |
+| Windows | `%APPDATA%\9router\db\data.sqlite` |
+| Docker | `/data/db/data.sqlite` inside the container |
+
+Stop 9Router, start 9router-go, and log in with your existing password. Your provider connections, proxy pools, combos, API keys, model aliases, and usage history are all there — 9router-go's own dashboard renders them, because it *is* the same data.
+
+**You don't even have to stop 9Router** if you want to keep the Node.js dashboard around. Run 9router-go on a different port against the same `DATA_DIR`:
+
+```bash
+# 9Router on :20128 (Next.js)  ·  9router-go on :20130 (Go, same DB)
+PORT=20130 DATA_DIR=/home/you/.9router ./9router-go
+```
+
+Both read the same tables, so a connection you add in either dashboard shows up in the other. SQLite serialises the writes; the supported setup is one active writer, so avoid editing the same combo or settings entry in both at the same moment.
+
+**Running it the other way round** (9router-go first, then pointing 9Router at the same directory) works the same way. 9router-go will have added two columns to `providerConnections` (`lastUsedAt`, `consecutiveUseCount`) and one extra table (`upstream_leases`). Upstream ignores both — its schema sync is additive and doesn't drop unknown columns — so nothing breaks.
+
+What 9router-go will **not** do:
+
+- **Import a legacy JSON export.** If your 9Router data still lives in old JSON files, start upstream once to convert them, then switch.
+- **Run destructive migrations or pre-migration backups.** Its bootstrap only ever *adds* — create missing tables, add missing columns, seed missing rows. It never drops or retypes.
+- **Interpret `_meta.schemaVersion`.** It's upstream's migration bookkeeping. A database written by a much newer 9Router release should be checked before you rely on it.
+
+Take a backup first if the database matters:
+
+```bash
+cp -r ~/.9router/db ~/9router-db-backup   # stop the daemon first — see DATABASE.md
+```
+
+Full schema, operator contract, and multi-process limits: [`DATABASE.md`](DATABASE.md). Routing internals: [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ---
 

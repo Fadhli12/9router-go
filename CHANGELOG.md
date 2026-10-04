@@ -1,6 +1,49 @@
 # Changelog
 
 ## [Unreleased]
+### 📖 README: cara memakai database 9Router langsung, tanpa import
+
+Pertanyaan yang paling sering masuk — "bisa nggak import dari 9router?" — sudah
+terjawab di dokumentasi, tapi jawabannya tersebar: satu kalimat di `DATABASE.md`
+dan operator checklist yang justru menyuruh jalankan upstream dulu. Yang kedua
+salah untuk kasus yang paling sering terjadi, karena `EnsureCoreSchema` sudah
+meng-tolerant database yang ada. Hasilnya pembaca menyimpulkan harus migrasi
+manual, padahal tidak ada yang perlu diimpor sama sekali.
+
+Section baru `🔄 Sharing a database with 9Router` di README menyatakan soal ini
+tegas di depan: kedua proyek menunjuk `DATA_DIR/db/data.sqlite` yang sama,
+9router-go membukanya apa adanya, dan providers, connections, proxy pools,
+combos, API keys, model aliases, serta usage history langsung terbaca. Tidak ada
+langkah import, export, atau migrasi. Dua mode operasional dijelaskan: ganti
+sepenuhnya (berhenti 9Router, jalankan 9router-go), atau berdampingan di port
+berbeda dengan `DATA_DIR` yang sama. Arah sebaliknya juga aman — dua kolom
+Go-only dan tabel `upstream_leases` diabaikan upstream karena sinkronisasi
+skemanya additive.
+
+Batasnya ditulis apa adanya, tidak dipoles: tidak ada import JSON legacy, tidak
+ada migrasi destruktif atau backup pra-migrasi, dan `_meta.schemaVersion` tidak
+ditafsirkan — DB dari rilis 9Router yang jauh lebih baru wajib dicek manual.
+Operator checklist di `DATABASE.md` dikoreksi agar tidak menyuruh menjalankan
+upstream lebih dulu; baris "Default path" di tabel compatibility Boundaries
+dipperjelas bahwa tidak ada langkah import.
+
+**Verifikasi:** tidak sekadar diklaim dari dokumentasi. Fixture SQLite dibentuk
+dengan bentuk upstream — 11 tabel inti, `providerConnections` tanpa
+`lastUsedAt`/`consecutiveUseCount`, tanpa `upstream_leases`, berisi satu
+connection, satu API key, satu combo, satu scope KV, dan satu baris
+`usageHistory`. Binary hasil `make build` dijalankan terhadap fixture itu
+(`DATA_DIR` sama, port `:20197`): `/health` 200, login 200, `/api/connections`
+mengembalikan connection upstream apa adanya, `/api/settings` membaca
+`requireLogin`/`rtkEnabled` dari baris settings upstream, `/api/usage/stats`
+200, dan `GET /v1/models` dengan `Bearer sk-upstream-existing-key` (API key yang
+disimpan upstream) mengembalikan katalog model — sehingga bukan hanya baris
+terbaca, tapi juga benar-benar dipakai jalur proxy. Setelah boot, fixture
+memang mendapat tambahan `lastUsedAt`, `consecutiveUseCount`, dan
+`upstream_leases`, dan seluruh baris upstream tetap utuh. Jalur fresh-`DATA_DIR`
+diverifikasi terpisah (port `:20198`): 13 tabel terbentuk,
+`_meta.schemaVersion=1`, `settings` berisi baris kosong, `/health` 200. Kedua
+instance dimatikan dan port-nya dilepas.
+
 ### 🐛 `make web-build` hanya rebuild saat `dist` hilang — dashboard tetap bundle lama
 
 `web-build` sebelumnya deciding "rebuild kalau `web/dist/index.html` tidak ada".
