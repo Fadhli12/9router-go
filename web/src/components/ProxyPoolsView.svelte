@@ -10,11 +10,22 @@
   import { api, getAuthHeaders, type ProxyPool } from '../api/client'
   import { notifications } from '../lib/notifications'
   import { parseProxyLine } from '../lib/proxy-import'
+  import {
+    filterProxyPools,
+    getLatencyBadge,
+    getStatusVariant,
+    hasMeasuredLatency,
+    isFailedStatus,
+    poolStatusCounts,
+    sortProxyPools,
+    type PoolSortOption,
+    type PoolStatusFilter
+  } from './proxypools/helpers'
 
-  function getStatusVariant(status: string | null | undefined): 'success' | 'error' | 'default' {
-    if (status === 'active') return 'success'
-    if (status === 'error') return 'error'
-    return 'default'
+  interface BulkOutcome {
+    ok: number
+    blocked: number
+    failed: number
   }
 
   function formatDateTime(value: string | null | undefined): string {
@@ -118,8 +129,30 @@
     }
   })
 
-  let activeCount = $derived(proxyPools.filter((p) => p.isActive === true).length)
-  let allSelected = $derived(proxyPools.length > 0 && selectedIds.length === proxyPools.length)
+  let statusFilter = $state<PoolStatusFilter>('all')
+  let sortOption = $state<PoolSortOption>('default')
+
+  let counts = $derived(poolStatusCounts(proxyPools))
+  let activeCount = $derived(counts.active)
+  let failedCount = $derived(counts.failed)
+
+  let filteredPools = $derived(filterProxyPools(proxyPools, statusFilter))
+  let displayedPools = $derived(sortProxyPools(filteredPools, sortOption))
+
+  const PILL_BASE = 'px-2.5 py-1 text-xs rounded-lg border transition-colors cursor-pointer'
+  const PILL_ACTIVE = 'border-primary bg-primary/10 text-primary font-medium'
+  const PILL_IDLE = 'border-border text-text-muted hover:border-brand-500/40 hover:text-text-main'
+
+  let statusPills = $derived([
+    { value: 'all', label: 'All', count: proxyPools.length },
+    { value: 'active', label: 'Active', count: counts.active },
+    { value: 'passed', label: 'Passed', count: counts.passed },
+    { value: 'failed', label: 'Failed', count: counts.failed }
+  ] satisfies { value: PoolStatusFilter; label: string; count: number }[])
+
+  let allSelected = $derived(
+    displayedPools.length > 0 && displayedPools.every((p) => selectedIds.includes(p.id))
+  )
 
   function toggleSelect(id: string) {
     selectedIds = selectedIds.includes(id)
@@ -128,7 +161,13 @@
   }
 
   function toggleSelectAll() {
-    selectedIds = allSelected ? [] : proxyPools.map((p) => p.id)
+    if (allSelected) {
+      const displayedIdSet = new Set(displayedPools.map((p) => p.id))
+      selectedIds = selectedIds.filter((id) => !displayedIdSet.has(id))
+    } else {
+      const set = new Set([...selectedIds, ...displayedPools.map((p) => p.id)])
+      selectedIds = Array.from(set)
+    }
   }
 
   function clearSelection() {
@@ -259,6 +298,16 @@
     testingId = poolId
     try {
       const data = await api.testProxyPool(poolId)
+      proxyPools = proxyPools.map((p) =>
+        p.id === poolId
+          ? {
+              ...p,
+              testStatus: data.status || (data.success ? 'passed' : 'failed'),
+              latency: typeof data.latency === 'number' ? data.latency : p.latency,
+              lastTestedAt: new Date().toISOString(),
+            }
+          : p
+      )
       await fetchProxyPools()
       if (data.success) {
         notifications.success('Proxy test passed')
@@ -319,27 +368,10 @@
         confirmState = null
         bulkBusy = true
         try {
-          let ok = 0
-          let blocked = 0
-          let failed = 0
-          for (const id of selectedIds) {
-            try {
-              const res = await fetch(`/api/proxy-pools/${encodeURIComponent(id)}`, {
-                method: 'DELETE',
-                headers: getAuthHeaders(),
-              })
-              if (res.ok) ok += 1
-              else if (res.status === 409) blocked += 1
-              else failed += 1
-            } catch {
-              failed += 1
-            }
-          }
+          const outcome = await deletePools(selectedIds)
           await fetchProxyPools()
           clearSelection()
-          notifications.success(
-            `Deleted ${ok}${blocked ? `, ${blocked} bound` : ''}${failed ? `, ${failed} failed` : ''}`
-          )
+          reportBulk(outcome, 'Deleted')
         } finally {
           bulkBusy = false
         }
@@ -347,9 +379,56 @@
     }
   }
 
-  async function handleHealthCheck() {
+  // The raw fetch is deliberate here: the gateway answers 409 while a pool is
+  // still bound, and the caller has to tell that apart from a real failure
+  // instead of collapsing both into one thrown Error.
+  async function deletePools(ids: string[]): Promise<BulkOutcome> {
+    const outcome: BulkOutcome = { ok: 0, blocked: 0, failed: 0 }
+    for (const id of ids) {
+      try {
+        const res = await fetch(`/api/proxy-pools/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          headers: getAuthHeaders(),
+        })
+        if (res.ok) outcome.ok += 1
+        else if (res.status === 409) outcome.blocked += 1
+        else outcome.failed += 1
+      } catch {
+        outcome.failed += 1
+      }
+    }
+    return outcome
+  }
+
+  async function disablePools(ids: string[]): Promise<BulkOutcome> {
+    const outcome: BulkOutcome = { ok: 0, blocked: 0, failed: 0 }
+    for (const id of ids) {
+      try {
+        await api.updateProxyPool(id, { isActive: false })
+        outcome.ok += 1
+      } catch {
+        outcome.failed += 1
+      }
+    }
+    return outcome
+  }
+
+  // A bulk action must never claim more than the server confirmed: a pool left
+  // active keeps carrying live traffic, and the user needs to see that.
+  function reportBulk(outcome: BulkOutcome, verb: string) {
+    const parts = [`${verb} ${outcome.ok}`]
+    if (outcome.blocked > 0) parts.push(`${outcome.blocked} bound to active connections`)
+    if (outcome.failed > 0) parts.push(`${outcome.failed} failed`)
+    const summary = parts.join(', ')
+    if (outcome.blocked === 0 && outcome.failed === 0) notifications.success(summary)
+    else notifications.warning(summary)
+  }
+
+  async function handleHealthCheck(forceAll = false) {
     const targets =
-      selectedIds.length > 0 ? proxyPools.filter((p) => selectedIds.includes(p.id)) : proxyPools
+      !forceAll && selectedIds.length > 0
+        ? proxyPools.filter((p) => selectedIds.includes(p.id))
+        : proxyPools
     if (targets.length === 0) return
     healthChecking = true
     healthProgress = { current: 0, total: targets.length }
@@ -365,10 +444,33 @@
         if (!pool) break
         try {
           const data = await api.testProxyPool(pool.id)
-          if (data.success) alive += 1
-          else deadIds.push(pool.id)
+          if (data.success) {
+            alive += 1
+          } else {
+            deadIds.push(pool.id)
+          }
+          proxyPools = proxyPools.map((p) =>
+            p.id === pool.id
+              ? {
+                  ...p,
+                  testStatus: data.status || (data.success ? 'passed' : 'failed'),
+                  latency: typeof data.latency === 'number' ? data.latency : p.latency,
+                  lastTestedAt: new Date().toISOString(),
+                }
+              : p
+          )
         } catch {
           deadIds.push(pool.id)
+          proxyPools = proxyPools.map((p) =>
+            p.id === pool.id
+              ? {
+                  ...p,
+                  testStatus: 'failed',
+                  latency: 0,
+                  lastTestedAt: new Date().toISOString(),
+                }
+              : p
+          )
         } finally {
           done += 1
           healthProgress = { current: done, total: targets.length }
@@ -387,18 +489,15 @@
       const dead = deadIds.length
       confirmState = {
         title: 'Disable Dead Proxies',
-        message: `Alive: ${alive}, Dead: ${dead}.\n\nDisable ${dead} dead proxies?`,
+        message: `Alive: ${alive}, Dead: ${dead}.\n\nDisable ${dead} dead ${dead === 1 ? 'proxy' : 'proxies'}?`,
+        confirmText: 'Disable Dead',
         onConfirm: async () => {
           confirmState = null
           bulkBusy = true
           try {
-            for (const id of deadIds) {
-              try {
-                await api.updateProxyPool(id, { isActive: false })
-              } catch {}
-            }
+            const outcome = await disablePools(deadIds)
             await fetchProxyPools()
-            notifications.success(`Disabled ${dead} dead proxies`)
+            reportBulk(outcome, 'Disabled')
           } finally {
             bulkBusy = false
           }
@@ -406,6 +505,46 @@
       }
     } else {
       notifications.success(`Health check done. Alive: ${alive}, Dead: ${deadIds.length}`)
+    }
+  }
+
+  async function handleDisableFailed() {
+    const failed = proxyPools.filter((p) => isFailedStatus(p) && p.isActive !== false)
+    if (failed.length === 0) {
+      notifications.info('No active failed proxies found')
+      return
+    }
+    bulkBusy = true
+    try {
+      const outcome = await disablePools(failed.map((p) => p.id))
+      await fetchProxyPools()
+      reportBulk(outcome, 'Disabled')
+    } finally {
+      bulkBusy = false
+    }
+  }
+
+  function handleDeleteFailed() {
+    const failed = proxyPools.filter(isFailedStatus)
+    if (failed.length === 0) {
+      notifications.info('No failed proxies to delete')
+      return
+    }
+    confirmState = {
+      title: 'Delete Failed Proxies',
+      message: `Are you sure you want to delete ${failed.length} failed proxy pool${failed.length === 1 ? '' : 's'}? This action cannot be undone.`,
+      confirmText: 'Delete Failed',
+      onConfirm: async () => {
+        confirmState = null
+        bulkBusy = true
+        try {
+          const outcome = await deletePools(failed.map((p) => p.id))
+          await fetchProxyPools()
+          reportBulk(outcome, 'Deleted')
+        } finally {
+          bulkBusy = false
+        }
+      },
     }
   }
 
@@ -553,6 +692,23 @@
       </div>
 
       <div class="grid grid-cols-1 gap-2 sm:flex sm:items-center">
+        <Button
+          size="sm"
+          variant="secondary"
+          onclick={() => handleHealthCheck(true)}
+          disabled={healthChecking || proxyPools.length === 0}
+        >
+          <span
+            class="material-symbols-outlined text-[18px]"
+            style={healthChecking ? 'animation: spin 1s linear infinite' : undefined}
+          >
+            {healthChecking ? 'progress_activity' : 'speed'}
+          </span>
+          {healthChecking
+            ? `Testing ${healthProgress.current}/${healthProgress.total}`
+            : 'Test All'}
+        </Button>
+
         <div class="relative" bind:this={relayMenuRef}>
           <Button
             size="sm"
@@ -619,8 +775,62 @@
     </div>
 
     <Card>
-      <div class="mb-4 flex flex-wrap items-center gap-2">
-        {#if proxyPools.length > 0}
+      <!-- Filter & Sort Controls & Quick Cleanup -->
+      <div class="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <!-- Filter pills -->
+        <div class="flex items-center gap-1.5 flex-wrap">
+          {#each statusPills as pill (pill.value)}
+            <button
+              type="button"
+              aria-pressed={statusFilter === pill.value}
+              class="{PILL_BASE} {statusFilter === pill.value ? PILL_ACTIVE : PILL_IDLE}"
+              onclick={() => (statusFilter = pill.value)}
+            >
+              {pill.label} <span class="ml-1 opacity-75">({pill.count})</span>
+            </button>
+          {/each}
+        </div>
+
+        <!-- Sort & Quick Cleanup -->
+        <div class="flex items-center gap-2 flex-wrap">
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs text-text-muted shrink-0">Sort:</span>
+            <select
+              bind:value={sortOption}
+              class="h-8 rounded-lg border border-border-subtle bg-surface-2 px-2 text-xs text-text-main outline-none transition-colors hover:bg-surface-3 cursor-pointer"
+              aria-label="Sort proxy pools"
+            >
+              <option value="default">Default</option>
+              <option value="fastest">Fastest (Latency asc)</option>
+              <option value="recently_tested">Recently Tested</option>
+              <option value="name">Name (A-Z)</option>
+            </select>
+          </div>
+
+          <Button
+            size="sm"
+            variant="secondary"
+            onclick={handleDisableFailed}
+            disabled={failedCount === 0 || bulkBusy || healthChecking}
+          >
+            <span class="material-symbols-outlined text-[16px]">pause_circle</span>
+            Disable Failed
+          </Button>
+
+          <Button
+            size="sm"
+            variant="danger"
+            onclick={handleDeleteFailed}
+            disabled={failedCount === 0 || bulkBusy || healthChecking}
+          >
+            <span class="material-symbols-outlined text-[16px]">delete_sweep</span>
+            Delete Failed
+          </Button>
+        </div>
+      </div>
+
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-black/[0.06] pb-3 dark:border-white/[0.06]">
+        {#if displayedPools.length > 0}
           <label class="flex items-center gap-1.5 text-xs text-text-muted cursor-pointer">
             <input
               type="checkbox"
@@ -630,9 +840,16 @@
             />
             {allSelected ? 'Unselect all' : 'Select all'}
           </label>
+        {:else}
+          <div></div>
         {/if}
-        <Badge>Total: {proxyPools.length}</Badge>
-        <Badge variant="success">Active: {activeCount}</Badge>
+        <div class="flex items-center gap-2">
+          <Badge>Total: {proxyPools.length}</Badge>
+          <Badge variant="success">Active: {activeCount}</Badge>
+          {#if failedCount > 0}
+            <Badge variant="error">Failed: {failedCount}</Badge>
+          {/if}
+        </div>
       </div>
 
       {#if selectedIds.length > 0 || healthChecking}
@@ -646,7 +863,7 @@
           <div class="ml-auto flex flex-wrap items-center gap-2">
             <Button
               size="sm"
-              onclick={handleHealthCheck}
+              onclick={() => handleHealthCheck(false)}
               disabled={healthChecking || bulkBusy || proxyPools.length === 0}
             >
               <span
@@ -680,7 +897,7 @@
               </Button>
               <Button
                 size="sm"
-                variant="secondary"
+                variant="danger"
                 onclick={bulkDelete}
                 disabled={bulkBusy || healthChecking}
               >
@@ -706,9 +923,20 @@
             Add Proxy Pool
           </Button>
         </div>
+      {:else if displayedPools.length === 0}
+        <div class="text-center py-10">
+          <p class="text-text-main font-medium mb-1">No proxy pools match current filter</p>
+          <p class="text-sm text-text-muted mb-4">
+            Try selecting a different filter option or reset filters.
+          </p>
+          <Button variant="secondary" onclick={() => (statusFilter = 'all')}>
+            Reset Filter
+          </Button>
+        </div>
       {:else}
         <div class="flex flex-col divide-y divide-black/[0.04] dark:divide-white/[0.05]">
-          {#each proxyPools as pool (pool.id)}
+          {#each displayedPools as pool (pool.id)}
+            {@const latencyBadge = hasMeasuredLatency(pool) ? getLatencyBadge(pool.latency) : null}
             <div class="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div class="flex items-start gap-3 min-w-0 flex-1">
                 <input
@@ -725,6 +953,11 @@
                     <Badge variant={getStatusVariant(pool.testStatus)} size="sm" dot>
                       {pool.testStatus || 'unknown'}
                     </Badge>
+                    {#if latencyBadge}
+                      <Badge variant={latencyBadge.variant} size="sm">
+                        {latencyBadge.text}
+                      </Badge>
+                    {/if}
                     <Badge variant={pool.isActive ? 'success' : 'default'} size="sm">
                       {pool.isActive ? 'active' : 'inactive'}
                     </Badge>

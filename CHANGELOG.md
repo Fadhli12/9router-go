@@ -137,6 +137,35 @@ method, path, dan status menyatu tanpa jeda sehingga sulit dipindai.
 Spasi sekarang dikirim eksplisit lewat ekspresi `{' '}`. Baris tanpa tag
 (mis. stdout yang tertangkap) tidak berubah.
 
+### ✨ Proxy Pools: tombol Test All, badge latency, dual-probe, dan kontrol filter
+
+Health Check proxy pool lama hanya hidup di toolbar seleksi — kalau tidak ada
+yang terseleksi, tombolnya tidak ada. Sekarang ada **Test All** permanen di
+header, dengan progres `n/N` dan badge latency yang repaint per baris begitu
+tiap probe selesai, jadi status terlihat tanpa menunggu satu job penuh.
+
+Probe backend jadi dua tahap: **Google `generate_204` → Cloudflare
+`cdn-cgi/trace`**. Satu endpoint saja salah baca pada jaringan yang memblokir
+Google — proxy yang sehat dilaporkan mati, lalu user mematikan pool yang
+masih bisa dipakai. Yang menentukan bagi badge: latency yang dilaporkan dan
+disimpan selalu milik probe yang **memutuskan** hasil, bukan total waktu
+tunggu; primary yang lambat lalu gagal tidak mewariskan 200ms-nya ke badge
+fallback yang cepat. Pool gagal disimpan dengan latency `0` supaya angka tak
+terukur tidak pernah terbaca sebagai angka bagus.
+
+Dashboard dapat filter status (All / Active / Passed / Failed — `failed`
+dan `error` upstream digabung satu bucket), pengurutan (Fastest, Recently
+Tested, Name), dan dua aksi pembersihan: **Disable Failed** dan **Delete
+Failed**. Ketiganya sekarang melaporkan **hanya hasil yang benar-benar
+dikonfirmasi server**; sebelumnya `Delete Failed` membuang error non-409
+diam-diam lalu tetap berbunyi sukses, jadi user bisa mengira proxy sudah
+bersih padahal masih aktif dan tetap dipakai routing.
+
+Catatan parity: upstream `decolua/9router` masih probe `https://google.com/`
+dengan HEAD 8s dan menulis `testStatus: "active" | "error"`. Dua kosakata itu
+tetap diterima di UI, sementara gateway sendiri menulis `passed`/`failed`
+seperti sebelumnya.
+
 ### 🩹 Test live upstream dipisah dari CI lewat opt-in eksplisit
 
 19 test di `internal/handlers/chat/` memanggil provider sungguhan dengan

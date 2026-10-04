@@ -8,14 +8,26 @@ import (
 	"9router/proxy/internal/db"
 )
 
+// Default probe URLs for proxy pool health checks.
+const (
+	DefaultPrimaryProbeURL   = "https://www.google.com/generate_204"
+	DefaultSecondaryProbeURL = "https://cloudflare.com/cdn-cgi/trace"
+)
+
 // DashboardHandler handles dashboard REST API endpoints.
 type DashboardHandler struct {
-	Repo *db.Repo
+	Repo              *db.Repo
+	PrimaryProbeURL   string
+	SecondaryProbeURL string
 }
 
 // NewDashboardHandler initializes a DashboardHandler with the provided Repo.
 func NewDashboardHandler(repo *db.Repo) *DashboardHandler {
-	return &DashboardHandler{Repo: repo}
+	return &DashboardHandler{
+		Repo:              repo,
+		PrimaryProbeURL:   DefaultPrimaryProbeURL,
+		SecondaryProbeURL: DefaultSecondaryProbeURL,
+	}
 }
 
 // getURLParam retrieves a route parameter from Chi URLParam or standard PathValue.
