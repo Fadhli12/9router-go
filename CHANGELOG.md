@@ -1,6 +1,51 @@
 # Changelog
 
 ## [Unreleased]
+### 🛡️ Combo mendeteksi error yang di-inject provider ke dalam SSE stream
+
+Latar: combo `["oc/space-bunny-free", "openrouter/stealth/space-bunny-alpha",
+"ocz/space-bunny-free"]` gagal 10x berturut-turut dengan pesan client
+`502 JSON error injected into SSE stream`. Dari `requestDetails` produksi,
+penyebabnya bukan gateway: downstream `Stealth` di belakang OpenRouter mati
+(`provider_unavailable`), lalu OpenRouter me-relay kegagalan itu sebagai event
+`data: {"choices":[],"error":{"code":502,...}}` di atas HTTP 200. Gateway
+me-relay chunk itu mentah-mentah — turn tercatat `success`, koneksi sakit
+tidak pernah di-lock, jadi setiap retry mendarat di lubang yang sama.
+
+Perbaikan (tanpa holdback, TTFT tidak berubah — deteksi inline per baris):
+`internal/proxy/sse_inband.go` baru berisi `DetectInbandSSEError` yang
+agnostik-provider — gagal untuk **setiap** payload `data:` ber-`error`
+non-null (bentuk OpenAI maupun event `error` Claude), tanpa memeriksa nama
+provider, model, atau teks pesan tertentu. `sseCopier` menelan (swallow)
+baris error itu, menutup turn error-only dengan frame error milik gateway
+sendiri, dan melaporkan `UpstreamFailure(502)` sehingga jalur combo yang
+sudah ada me-lock koneksi (`comboLockRetryable`) untuk retry berikutnya.
+Turn yang sudah sempat mengirim completion tetap dianggap sukses (aturan
+yang sama dengan codex stream). Strategi combo tidak berubah: round-robin
+tetap berotasi, hanya melewati koneksi yang sedang di-lock selama cooldown.
+
+Batasan yang disadari: jalur `ScanStream` ber-translate (client Claude,
+decloaker) belum dipasangi detektor ini; cakupan awal adalah `SSECopy`
+(OpenAI-format streaming) tempat kasus produksi terjadi. Perilaku
+post-commit loop combo tidak diubah (failover dalam request yang sama tetap
+mustahil setelah header 200 terkirim — sesuai pesan log yang sudah ada
+`upstream error after headers committed`).
+
+**Verifikasi:** unit table-driven (`sse_inband_test.go`, termasuk chunk
+Stealth asli) + `TestSSECopy_InbandErrorOnlyStreamFails`,
+`TestSSECopy_CompletedTurnIgnoresTrailingInbandError`,
+`TestSSECopy_HealthyStreamUnaffectedByInbandDetection`, dan integration
+`TestComboSkipsInbandErrorOnRetry` (fake upstream sakit + sehat: request
+pertama membawa frame error gateway tanpa chunk mentah provider, retry
+langsung dilayani member sehat tanpa menyentuh upstream sakit). Satu bug
+urutan flag (`hasTerminal` diset sebelum `inbandFailure` dibaca) tertangkap
+oleh test ini saat implementasi.
+
+Catatan paritas: path upstream lokal (`/Users/luqmannul.hakim/htdocs/9router`)
+tidak tersedia di host ini, jadi belum bisa dicocokkan dengan
+`open-sse` — perubahan ini aditif (stream sehat byte-identik, hanya stream
+error-only yang berubah dari silent-success menjadi 502) dan dicatat di sini
+bila upstream berperilaku beda.
 ### 🩹 Rotasi proxy pool opencode: rotasi yang benar-benar lewat proxy
 
 Pada provider opencode, memilih rotasi (round-robin/random) tidak memakai pool
@@ -36,11 +81,11 @@ Perbaikan lanjutan dari review:
   afinitas. UI hanya menawarkan round-robin dan random, jadi tidak ada yang
   kehilangan opsi.
 - **Counter rotasi per-provider**, di-key dengan alias yang sudah di-resolve
-  supaya `oc` dan `opencode` berbagi kursor dan tidak saling melompati.
+supaya `oc` dan `opencode` berbagi kursor dan tidak saling melompati.
 - **`ListProxyPools()` tidak lagi dipanggil di hot path.** Kandidat rotasi dibaca
-  dengan query yang memfilter di SQL, disimpan di cache per-`Repo` (bukan state
-  paket, supaya dua `Repo` atas database berbeda tidak saling membaca pool),
-  dan di-invalidate di setiap mutasi pool — sesuai AGENTS.md §4.A.
+dengan query yang memfilter di SQL, disimpan di cache per-`Repo` (bukan state
+paket, supaya dua `Repo` atas database berbeda tidak saling membaca pool),
+dan di-invalidate di setiap mutasi pool — sesuai AGENTS.md §4.A.
 
 ### 📖 README: cara memakai database 9Router langsung, tanpa import
 
