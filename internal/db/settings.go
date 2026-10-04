@@ -13,12 +13,28 @@ type ComboStrategy struct {
 	JudgeModel  string `json:"judgeModel,omitempty"`
 }
 
-// ProviderStrategy defines routing and proxy pool options for a specific provider.
+// ProviderStrategy defines routing and proxy pool options for a specific
+// provider.
+//
+// The dashboard saves two independent rotations to this provider. The
+// `isNoAuth` block of the provider card writes pool rotation to
+// `rotateStrategy`, and the round-robin toggle writes connection rotation to
+// `fallbackStrategy`. GetSettings used to fold both into RotateStrategy, which
+// made saving one silently arm the other.
+//
+// ProxyRotateStrategy and ConnRotateStrategy now keep them apart.
+// RotateStrategy keeps reading `rotateStrategy` first and falling back to
+// `fallbackStrategy`, so a provider that sets only one still gets a strategy —
+// and that fallback is why pool rotation must stay behind a NoAuth gate: for a
+// keyed provider `rotateStrategy` is an account-rotation value and must never
+// steer egress. See connRotationStrategy in the chat package.
 type ProviderStrategy struct {
 	ProxyPoolID           string `json:"proxyPoolId,omitempty"`
 	RotateStrategy        string `json:"rotateStrategy,omitempty"` // "none", "round-robin", "random", "sticky"
 	StickyLimit           int    `json:"stickyLimit,omitempty"`
 	StrictModelAssignment bool   `json:"strictModelAssignment,omitempty"`
+	ProxyRotateStrategy   string `json:"proxyRotateStrategy,omitempty"`
+	ConnRotateStrategy    string `json:"connRotateStrategy,omitempty"`
 }
 
 // CapacityAdapterEntry defines settings for an input-modality capability adapter pool.
@@ -44,7 +60,7 @@ type SettingsData struct {
 	AutoUpdate                 bool                            `json:"autoUpdate"`
 	FallbackStrategy           string                          `json:"fallbackStrategy,omitempty"`
 	StickyRoundRobinLimit      int                             `json:"stickyRoundRobinLimit,omitempty"`
-	ForceFallback             bool                            `json:"forceFallback,omitempty"`
+	ForceFallback              bool                            `json:"forceFallback,omitempty"`
 	ComboStrategy              string                          `json:"comboStrategy,omitempty"`
 	ComboStickyRoundRobinLimit int                             `json:"comboStickyRoundRobinLimit,omitempty"`
 	ComboStrategies            map[string]ComboStrategy        `json:"comboStrategies,omitempty"`
@@ -171,7 +187,12 @@ func (r *Repo) GetSettings() (*SettingsData, error) {
 		}
 	}
 
-	// Per-provider strategies (Dashboards write `fallbackStrategy` / `rotateStrategy`, `stickyRoundRobinLimit` / `stickyLimit`)
+	// Per-provider strategies. See ProviderStrategy for why the two rotations
+	// are carried separately: the provider card saves pool rotation to
+	// `rotateStrategy` and connection rotation to `fallbackStrategy`, and
+	// folding them into one field made saving either silently arm the other.
+	// `proxyPoolId` pins a single pool and outranks both.
+	// `stickyRoundRobinLimit` / `stickyLimit` belong to connection rotation.
 	if ps, ok := raw["providerStrategies"].(map[string]any); ok {
 		s.ProviderStrategies = make(map[string]ProviderStrategy, len(ps))
 		for k, v := range ps {
@@ -187,9 +208,11 @@ func (r *Repo) GetSettings() (*SettingsData, error) {
 					sticky = int(sl)
 				}
 				strat := ProviderStrategy{
-					ProxyPoolID:    handlerutil.GetString(vm, "proxyPoolId"),
-					RotateStrategy: rotateStrat,
-					StickyLimit:    sticky,
+					ProxyPoolID:         handlerutil.GetString(vm, "proxyPoolId"),
+					RotateStrategy:      rotateStrat,
+					StickyLimit:         sticky,
+					ProxyRotateStrategy: handlerutil.GetString(vm, "rotateStrategy"),
+					ConnRotateStrategy:  handlerutil.GetString(vm, "fallbackStrategy"),
 				}
 				if sma, ok := vm["strictModelAssignment"].(bool); ok {
 					strat.StrictModelAssignment = sma

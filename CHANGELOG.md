@@ -1,6 +1,47 @@
 # Changelog
 
 ## [Unreleased]
+### 🩹 Rotasi proxy pool opencode: rotasi yang benar-benar lewat proxy
+
+Pada provider opencode, memilih rotasi (round-robin/random) tidak memakai pool
+warp yang sudah dipasang — request tetap jalan direct. Kolom egress di usage
+juga selalu menulis "direct" untuk request yang sebenarnya lewat proxy HTTP,
+dan kolom "bound" di halaman proxy-pools selalu 0 untuk pool yang dipasang
+level provider karena hanya koneksi yang dihitung.
+
+Sekarang rotasi memutar request ke seluruh pool aktif, kolom egress menampilkan
+nama pool, dan kolom bound menghitung pemasangan level provider. Rotasi hanya
+berlaku untuk pengaturan rotasi proxy; rotasi round-robin koneksi tidak berubah
+perilakunya.
+
+Perbaikan lanjutan dari review:
+
+- **Rotasi pool tidak lagi menyalakan rotasi koneksi.** Kartu provider menyimpan
+  dua rotasi ke satu entri: blok `isNoAuth` menulis rotasi **pool** ke
+  `rotateStrategy`, tombol round-robin menulis rotasi **koneksi** ke
+  `fallbackStrategy`, dan keduanya dibaca ke field yang sama. Provider NoAuth
+  kini hanya mempercayai `fallbackStrategy` untuk rotasi koneksi, jadi memilih
+  rotasi pool tidak ikut membuat akun berganti.
+- **Rotasi pool hanya berlaku untuk provider NoAuth.** Itu persis di mana UI
+  menawarkannya. Di provider ber-API-key, `rotateStrategy` berisi rotasi akun,
+  dan menjadikannya steer egress akan mengirim trafik lewat pool yang tidak
+  pernah dikonfigurasi operatornya.
+- **Guard hapus pool menutup celah rotasi.** Rotasi memakai seluruh pool aktif,
+  tapi `countProxyPoolBindings` hanya menghitung pool yang di-pin. Pool yang
+  sedang melayani trafik rotasi bisa dihapus (200) di bawah request berikutnya;
+  sekarang ditolak 409. Pool yang di-pin sekaligus dipakai rotasi tetap
+  dihitung satu binding, bukan dua.
+- **`sticky` ditolak sebagai strategi rotasi pool.** Nilai ini diterima lalu
+  dilayani sebagai round-robin, padahal resolver ini tidak mengimplementasikan
+  afinitas. UI hanya menawarkan round-robin dan random, jadi tidak ada yang
+  kehilangan opsi.
+- **Counter rotasi per-provider**, di-key dengan alias yang sudah di-resolve
+  supaya `oc` dan `opencode` berbagi kursor dan tidak saling melompati.
+- **`ListProxyPools()` tidak lagi dipanggil di hot path.** Kandidat rotasi dibaca
+  dengan query yang memfilter di SQL, disimpan di cache per-`Repo` (bukan state
+  paket, supaya dua `Repo` atas database berbeda tidak saling membaca pool),
+  dan di-invalidate di setiap mutasi pool — sesuai AGENTS.md §4.A.
+
 ### 📖 README: cara memakai database 9Router langsung, tanpa import
 
 Pertanyaan yang paling sering masuk — "bisa nggak import dari 9router?" — sudah

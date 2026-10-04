@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	json "encoding/json/v2"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,6 +46,13 @@ func (p *ProxyPool) IsEdgeRelay() bool {
 }
 
 var proxyPoolCache sync.Map // map[string]*ProxyPool
+
+// invalidateActivePoolIDs drops this Repo's rotation candidate cache. It
+// stores a typed nil pointer rather than a nil slice: a nil slice asserts to
+// []string successfully, which would leave the cache permanently empty.
+func (r *Repo) invalidateActivePoolIDs() {
+	r.activePoolIDs.Store((*[]string)(nil))
+}
 
 // GetProxyPool reads a proxy pool from the proxyPools table.
 func (r *Repo) GetProxyPool(poolID string) (*ProxyPool, error) {
@@ -148,6 +156,7 @@ func (r *Repo) InsertProxyPool(d ProxyPoolData) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("insert proxy pool: %w", err)
 	}
+	r.invalidateActivePoolIDs()
 	return map[string]any{
 		"id":           id,
 		"name":         d.Name,
@@ -205,10 +214,89 @@ func (r *Repo) ListProxyPools() ([]map[string]any, error) {
 	return list, nil
 }
 
+// ActivePoolIDs returns the ids of every active pool that carries a URL, in
+// creation order. Proxy rotation picks from this list, so it is cached: the
+// list is read on the forwarding hot path and changes only when a pool is
+// written. Every mutation below drops the cache, so a stale entry cannot
+// outlive a change to the pool table.
+//
+// The cache is per-Repo rather than package state because the answer belongs
+// to one database: two Repos over different handles would otherwise read each
+// other's pools.
+func (r *Repo) ActivePoolIDs() []string {
+	// A cached-but-nil pointer means invalidated: dereferencing it would panic,
+	// so both the empty list and the miss fall through to a fresh read.
+	if cached, ok := r.activePoolIDs.Load().(*[]string); ok && cached != nil {
+		return *cached
+	}
+	ids := r.queryActivePoolIDs()
+	r.activePoolIDs.Store(&ids)
+	return ids
+}
+
+// queryActivePoolIDs reads the candidate list straight from the table. The
+// filter runs in SQL and the payload decodes into a typed struct, so a database
+// holding many pools does not pay for rows rotation can never pick.
+func (r *Repo) queryActivePoolIDs() []string {
+	rows, err := r.db.Query(`SELECT id, data FROM proxyPools WHERE isActive = 1 ORDER BY createdAt`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id, data string
+		if err := rows.Scan(&id, &data); err != nil {
+			continue
+		}
+		var payload struct {
+			ProxyURL string   `json:"proxyUrl"`
+			URLs     []string `json:"urls"`
+		}
+		if err := json.Unmarshal([]byte(data), &payload); err != nil {
+			continue
+		}
+		if poolPayloadHasURL(payload.ProxyURL, payload.URLs) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// poolPayloadHasURL reports whether a pool carries at least one URL. A pool
+// without one cannot serve a request, so rotation must not select it — that
+// would hand a share of the traffic to a pool the resolver then refuses.
+func poolPayloadHasURL(proxyURL string, urls []string) bool {
+	if strings.TrimSpace(proxyURL) != "" {
+		return true
+	}
+	for _, u := range urls {
+		if strings.TrimSpace(u) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// IsProxyPoolRotation reports whether a saved value means "rotate across the
+// active pools". Only the two values the provider card offers are accepted: it
+// writes exactly `round-robin` and `random`. `sticky` is deliberately not
+// accepted — it is a connection-rotation value, and taking it here used to
+// serve round-robin, promising an affinity this rotation does not keep.
+func IsProxyPoolRotation(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "round-robin", "roundrobin", "random":
+		return true
+	}
+	return false
+}
+
 // DeleteProxyPool removes a proxy pool by id.
 func (r *Repo) DeleteProxyPool(id string) error {
 	_, err := r.db.Exec(`DELETE FROM proxyPools WHERE id = ?`, id)
 	proxyPoolCache.Delete(id)
+	r.invalidateActivePoolIDs()
 	return err
 }
 
@@ -248,6 +336,7 @@ func (r *Repo) UpdateProxyPool(id string, updates map[string]any) error {
 	_, err = r.db.Exec(`UPDATE proxyPools SET data = ?, isActive = ?, testStatus = ?, updatedAt = ? WHERE id = ?`,
 		string(updatedBytes), isActive, testStatus, now, id)
 	proxyPoolCache.Delete(id)
+	r.invalidateActivePoolIDs()
 	return err
 }
 
