@@ -270,10 +270,10 @@ Upstream uses it for backup/migration/app metadata. Go neither creates nor reads
 
 | Area | Current behavior | Operator interpretation |
 |------|------------------|-------------------------|
-| Default path | Go and upstream v0.5.85 both use `DATA_DIR/db/data.sqlite` | Compatible in the common configuration |
 | Core columns | Most Go reads/inserts follow the upstream v0.5.85 schema | Compatible only for paths exercised against that exact schema |
 | Go connection metadata | Go backfills `lastUsedAt` / `consecutiveUseCount` additively on startup | Safe on both runtimes; upstream ignores the extra columns |
 | Schema creation/migration | Go creates the 11 core tables + backfills columns + seeds `_meta`/`settings`; no legacy-JSON import, no destructive migrations, no pre-migration backups | Fresh DB is a supported bootstrap; for legacy-JSON import or schema repair, start upstream once |
+| Default path | Go and upstream v0.5.85 both use `DATA_DIR/db/data.sqlite` | Compatible in the common configuration — an existing upstream database is opened as-is, with no import step |
 | Extra table | Upstream ignores `upstream_leases` | Generally harmless; back up separately if lease continuity matters |
 | JSON payloads | `providerConnections.data` and `kv` are shared conventions | Shape compatibility is field-by-field, not guaranteed by a version check |
 | Write coordination | SQLite serializes writes; only lease admission is explicitly cross-process | Use one active 9router-go writer unless the workload is tested |
@@ -329,9 +329,9 @@ The supported operational model is one active 9router-go process writing a datab
 Before production use or an upgrade:
 
 - [ ] Confirm the exact DB path with `DATA_DIR`/`DB_PATH`; do not assume `9router.db`.
-- [ ] Run the upstream v0.5.85 application once (or apply a reviewed upstream migration) to create/migrate the core schema; a Go-only blank DB is insufficient.
+- [ ] Decide which runtime owns the file. An existing upstream 9router database is picked up as-is — 9router-go adds only what is missing and never drops, renames, or retypes. A fresh `DATA_DIR` self-boots, so running upstream first is not required.
+- [ ] If the database came from a much newer upstream release, check `_meta.schemaVersion` yourself; Go neither reads nor writes it and does not interpret what it records.
 - [ ] Verify required tables and columns, especially the two optional connection-metadata columns used by Go success paths.
-- [ ] Check `_meta` separately if the DB came from upstream; Go does not interpret it.
 - [ ] Verify `journal_mode=wal`, a healthy write/read test, and sufficient free space for WAL growth.
 - [ ] Confirm the DB parent is private and the main file/WAL/SHM are not exposed to other OS users or public volumes.
 - [ ] Decide whether prompt/response content retention is acceptable for `requestDetails`.

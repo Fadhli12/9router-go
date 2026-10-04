@@ -88,10 +88,11 @@ func SetupRoutes(r interface {
 	r.Post("/scrape", mediaH.HandleScrape)
 	r.Post("/systemone", mediaH.HandleSystemone)
 
-	// Proxy Pool Deploy Domain
-	r.Post("/proxy-pools/vercel-deploy", mediaH.HandleVercelDeploy)
-	r.Post("/proxy-pools/deno-deploy", mediaH.HandleDenoDeploy)
-	r.Post("/proxy-pools/cloudflare-deploy", mediaH.HandleCloudflareDeploy)
+	// The relay-deploy endpoints live in the dashboard group below, mounted
+	// under /api/proxy-pools/*-deploy behind RequireDashboardAuth (upstream
+	// parity). They were registered here under RequireApiKey, so the dashboard
+	// SPA — which authenticates with the session cookie and sends no engine
+	// key — got 401 "Authentication required" from every Deploy button.
 
 	// CLI Tools Status Domain (dashboard batch status for installed CLI tools)
 	// The /api/cli-tools/all-statuses alias is registered in SetupServerRouter
@@ -194,6 +195,15 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	r.Put("/api/proxy-pools/{id}", dashH.HandleUpdateProxyPool)
 	r.Delete("/api/proxy-pools/{id}", dashH.HandleDeleteProxyPool)
 	r.Post("/api/proxy-pools/{id}/test", dashH.HandleTestProxyPool)
+
+	// Relay deploy endpoints. Dashboard reads/writes, not engine traffic: the
+	// SPA reaches them with its session cookie, exactly like the pool CRUD
+	// above. chi prefers the static segment over {id}, so these three cannot
+	// be shadowed by the parameterised routes registered first.
+	relayH := media.NewMediaHandler(repo, nil, nil)
+	r.Post("/api/proxy-pools/vercel-deploy", relayH.HandleVercelDeploy)
+	r.Post("/api/proxy-pools/deno-deploy", relayH.HandleDenoDeploy)
+	r.Post("/api/proxy-pools/cloudflare-deploy", relayH.HandleCloudflareDeploy)
 
 	r.Get("/api/keys", dashH.HandleGetApiKeys)
 	r.Post("/api/keys", dashH.HandleCreateApiKey)
@@ -388,16 +398,6 @@ func SetupServerRouter(r chi.Router, repo *db.Repo, ts *TokenSaverConfig) {
 	r.Get("/api/settings/require-login", dashH.HandleRequireLogin)
 	r.Get("/api/tunnel/status", dashH.HandleTunnelStatus)
 
-	// Profiling endpoints (pprof) — disabled by default in production for security;
-	// enable explicitly via PPROF_ENABLED=true
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("PPROF_ENABLED")), "true") {
-		r.HandleFunc("/debug/pprof/", pprof.Index)
-		r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-		r.HandleFunc("/debug/pprof/profile", pprof.Profile)
-		r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-		r.HandleFunc("/debug/pprof/trace", pprof.Trace)
-		r.HandleFunc("/debug/pprof/*", pprof.Index)
-	}
 	// Admin-only operations (health reset, shutdown, update) - strictly requires session cookie or CLI token.
 	// Standard client API keys are rejected, matching upstream ALWAYS_PROTECTED.
 	r.Group(func(r chi.Router) {
@@ -419,6 +419,18 @@ func SetupServerRouter(r chi.Router, repo *db.Repo, ts *TokenSaverConfig) {
 		r.Post("/api/version/update", chatH.HandleTriggerUpdate)
 		r.Post("/api/version/auto-update", chatH.HandleToggleAutoUpdate)
 		r.Post("/api/version/shutdown", HandleShutdown)
+
+		// Profiling endpoints (pprof) — disabled by default in production for security;
+		// enable explicitly via PPROF_ENABLED=true. Gated behind RequireAdminAuth
+		// (issue #126) so debug surface is never exposed publicly.
+		if strings.EqualFold(strings.TrimSpace(os.Getenv("PPROF_ENABLED")), "true") {
+			r.HandleFunc("/debug/pprof/", pprof.Index)
+			r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+			r.HandleFunc("/debug/pprof/profile", pprof.Profile)
+			r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+			r.HandleFunc("/debug/pprof/trace", pprof.Trace)
+			r.HandleFunc("/debug/pprof/*", pprof.Index)
+		}
 	})
 
 	// API-key protected domain routes

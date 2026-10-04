@@ -227,7 +227,7 @@
             <time class="shrink-0 tabular-nums text-[11px] text-text-muted">{formatClock(entry.time)}</time>
             <span class="w-8 shrink-0 text-[11px] font-bold {meta.text}">{meta.label}</span>
             <span class="min-w-0 flex-1 {wrap ? 'break-words' : 'whitespace-pre'} {meta.text}">
-              {#if parts}<span class="opacity-70">{parts.tag}</span> {/if}{parts?.message ?? entry.line}
+              {#if parts}<span class="opacity-70">{parts.tag}</span>{' '}{:else}{/if}{parts?.message ?? entry.line}
             </span>
           </div>
         {/each}

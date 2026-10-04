@@ -6,6 +6,8 @@ import (
 	"math/rand/v2"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"9router/proxy/internal/constants"
@@ -25,12 +27,6 @@ var CredentialFallbacks = map[string]string{
 	"clinepass":     "cline",
 }
 
-// ResolveProviderProxyPoolID returns the active proxy pool ID configured for a
-// provider. The dashboard writes a provider-level pool under the provider's
-// short alias (ProviderDetailView's storageAlias) while requests arrive
-// carrying the canonical id, so both keys are checked — in the shape upstream
-// resolves them (src/shared/constants/providers.js), not a hand-written pair
-// list, which is how an assignment could be shown in the UI yet read as none.
 func (h *ChatHandler) ResolveProviderProxyPoolID(provider string) string {
 	if h.Repo == nil {
 		return ""
@@ -39,14 +35,58 @@ func (h *ChatHandler) ResolveProviderProxyPoolID(provider string) string {
 	if err != nil || settings == nil || settings.ProviderStrategies == nil {
 		return ""
 	}
+	var singleID, rotate string
 	for _, p := range providerStrategyKeys(provider) {
 		if strat, ok := settings.ProviderStrategies[p]; ok {
-			if strat.ProxyPoolID != "" && strat.ProxyPoolID != "__none__" {
-				return strat.ProxyPoolID
+			if singleID == "" && strat.ProxyPoolID != "" && strat.ProxyPoolID != "__none__" {
+				singleID = strat.ProxyPoolID
+			}
+			if rotate == "" && db.IsProxyPoolRotation(strat.ProxyRotateStrategy) {
+				rotate = strat.ProxyRotateStrategy
 			}
 		}
 	}
-	return ""
+	// Pool rotation is a NoAuth-provider feature: the provider card offers it
+	// only inside its `isNoAuth` block, and there `rotateStrategy` holds a POOL
+	// rotation. On a keyed provider the same key holds ACCOUNT rotation, so
+	// honouring it here would send that provider's egress through pools its
+	// operator never configured.
+	if rotate != "" && providers.IsNoAuthProvider(provider) {
+		if id := h.rotatedActiveProxyPool(provider, rotate); id != "" {
+			return id
+		}
+	}
+	return singleID
+}
+
+// poolRotationCursors holds one round-robin cursor per provider. A single
+// shared counter let one provider's traffic advance another's, so a provider
+// with a different number of active pools skipped positions.
+var poolRotationCursors sync.Map // map[string]*atomic.Uint64
+
+// rotatedActiveProxyPool picks the next pool for a provider under a rotation
+// strategy. The cursor is that provider's own round-robin position, so two
+// providers rotating at once advance independently.
+//
+// A pool with no URL is excluded upstream: it cannot serve a request, and
+// selecting it would hand a share of the traffic to a pool the resolver then
+// refuses.
+func (h *ChatHandler) rotatedActiveProxyPool(provider, strategy string) string {
+	if h.Repo == nil {
+		return ""
+	}
+	ids := h.Repo.ActivePoolIDs()
+	if len(ids) == 0 {
+		return ""
+	}
+	if strings.ToLower(strings.TrimSpace(strategy)) == "random" {
+		return ids[rand.IntN(len(ids))]
+	}
+	// Keyed on the resolved alias so `oc` and `opencode` share one cursor: they
+	// are the same provider and must advance together.
+	cursor, _ := poolRotationCursors.LoadOrStore(providers.ResolveAlias(provider), new(atomic.Uint64))
+	idx := cursor.(*atomic.Uint64).Add(1) - 1
+	return ids[idx%uint64(len(ids))]
 }
 
 // providerStrategyKeys lists the settings keys a provider's pool may be stored
@@ -75,6 +115,35 @@ func providerStrategyKeys(provider string) []string {
 		add(providers.GetProviderAlias(counterpart))
 	}
 	return keys
+}
+
+// connRotationStrategy resolves which connection-rotation strategy applies to a
+// provider, for the code paths that rotate accounts.
+//
+// A NoAuth provider is the case that needs care: its card writes pool rotation
+// to `rotateStrategy` and account rotation to `fallbackStrategy`, and both land
+// in the same stored entry. Reading RotateStrategy there would let the operator
+// rotate pools and silently start rotating connections too, so for those
+// providers only `fallbackStrategy` is trusted. Keyed providers keep the
+// original read, where `rotateStrategy` genuinely is the connection strategy.
+func connRotationStrategy(settings *db.SettingsData, provider string) db.ProviderStrategy {
+	strat := db.ProviderStrategy{}
+	hasStrat := false
+	if settings != nil && settings.ProviderStrategies != nil {
+		if s, ok := settings.ProviderStrategies[provider]; ok {
+			strat, hasStrat = s, true
+		}
+	}
+	if providers.IsNoAuthProvider(provider) {
+		strat.RotateStrategy = strat.ConnRotateStrategy
+	}
+	if settings != nil && (!hasStrat || strat.RotateStrategy == "") {
+		if settings.FallbackStrategy != "" && settings.FallbackStrategy != "fill-first" {
+			strat.RotateStrategy = settings.FallbackStrategy
+			strat.StickyLimit = settings.StickyRoundRobinLimit
+		}
+	}
+	return strat
 }
 
 // proxyPoolCounterpart returns the provider that shares a pool with this one
@@ -185,25 +254,11 @@ func (h *ChatHandler) getBestConnection(provider string, connectionID string, ex
 
 		// Rotate only connections eligible for the requested model.
 		if len(connections) > 1 && settingsErr == nil && settings != nil {
-			strat := db.ProviderStrategy{}
-			hasStrat := false
-			if settings.ProviderStrategies != nil {
-				if s, ok := settings.ProviderStrategies[provider]; ok {
-					strat = s
-					hasStrat = true
-				}
+			strat := connRotationStrategy(settings, provider)
+			if strat.RotateStrategy != "" && strat.RotateStrategy != "none" {
+				connections = h.applyConnectionStrategy(connections, strat)
 			}
-			if !hasStrat || strat.RotateStrategy == "" {
-				if settings.FallbackStrategy != "" && settings.FallbackStrategy != "fill-first" {
-					strat.RotateStrategy = settings.FallbackStrategy
-					strat.StickyLimit = settings.StickyRoundRobinLimit
-				}
-			}
-		if strat.RotateStrategy != "" && strat.RotateStrategy != "none" {
-			connections = h.applyConnectionStrategy(connections, strat, "")
 		}
-	}
-
 
 		excludeSet := make(map[string]bool, len(excludeIDs))
 		for _, id := range excludeIDs {
@@ -212,6 +267,7 @@ func (h *ChatHandler) getBestConnection(provider string, connectionID string, ex
 
 		conn = nil
 		var cooldownUntil time.Time
+		var inCooldown []*models.ProviderConnection
 		now := time.Now()
 		for _, c := range connections {
 			if excludeSet[c.ID] {
@@ -222,6 +278,12 @@ func (h *ChatHandler) getBestConnection(provider string, connectionID string, ex
 			if !codexAccountServesModel(c, model) {
 				continue
 			}
+			// Per-model lock and quota cache first: an account parked for
+			// this model carries no cooldown to shorten, so it must not enter
+			// the forced pool either (h.connectionModelBlocked).
+			if h.connectionModelBlocked(c, provider, model) {
+				continue
+			}
 			// Account-scoped cooldown. An account whose quota is spent, or
 			// whose OAuth grant the provider already rejected, is skipped
 			// before it is selected — round-robin otherwise kept handing out
@@ -229,28 +291,26 @@ func (h *ChatHandler) getBestConnection(provider string, connectionID string, ex
 			// grant cost a token-endpoint call on every request until the IP
 			// was rate limited. Upstream parity: filterAvailableAccounts.
 			if until, ok := db.ConnectionBlockedUntil(c.Data); ok && until.After(now) {
+				inCooldown = append(inCooldown, c)
 				if cooldownUntil.IsZero() || until.Before(cooldownUntil) {
 					cooldownUntil = until
 				}
 				continue
 			}
-			// Skip connections that have an active per-connection model lock
-			if model != "" {
-				lockKey := canonicalLockModel(provider, model)
-				if locked, _ := h.Repo.IsConnectionModelLocked(c.ID, lockKey); locked {
-					continue
-				}
-				if lockKey != model {
-					if locked, _ := h.Repo.IsConnectionModelLocked(c.ID, model); locked {
-						continue
-					}
-				}
-				if quotaCacheBlocked(provider, c.ID, model) {
-					continue
-				}
-			}
 			conn = c
 			break
+		}
+		if conn == nil && forceFallbackEnabled(settings) {
+			// The operator asked for traffic to keep flowing while every
+			// account is cooling down, so take the account that frees up
+			// first instead of failing the client turn outright
+			// (upstream decolua/9router PR #130).
+			forced, until, ok := h.forceMinCooldownConnection(provider, inCooldown, excludeSet, model, settings)
+			if ok {
+				conn = forced
+				log.Warn("connections", "all accounts in cooldown, forcing the soonest to reset",
+					"provider", provider, "conn", forced.ID, "reset", until.UTC().Format(time.RFC3339))
+			}
 		}
 		if conn == nil {
 			// Every candidate was in cooldown, so say when the first one comes
@@ -286,6 +346,26 @@ func (h *ChatHandler) getBestConnection(provider string, connectionID string, ex
 	h.applyProviderProxyPool(&connData, provider)
 
 	return conn, &connData, nil
+}
+
+// connectionModelBlocked reports whether a connection is parked for this
+// specific model — an active per-model lock or a provider quota cache. An
+// empty model means nothing model-scoped applies (upstream parity: the lock
+// filter only runs for a model-bearing request).
+func (h *ChatHandler) connectionModelBlocked(c *models.ProviderConnection, provider, model string) bool {
+	if model == "" {
+		return false
+	}
+	lockKey := canonicalLockModel(provider, model)
+	if locked, _ := h.Repo.IsConnectionModelLocked(c.ID, lockKey); locked {
+		return true
+	}
+	if lockKey != model {
+		if locked, _ := h.Repo.IsConnectionModelLocked(c.ID, model); locked {
+			return true
+		}
+	}
+	return quotaCacheBlocked(provider, c.ID, model)
 }
 
 // applyProviderProxyPool binds a provider-level pool to a connection that has
@@ -659,29 +739,12 @@ func canonicalLockModel(provider, model string) string {
 
 // ApplyConnectionStrategy rotates candidate connections according to the provider's configured strategy.
 func (h *ChatHandler) ApplyConnectionStrategy(conns []*models.ProviderConnection, strat db.ProviderStrategy) []*models.ProviderConnection {
-	return h.applyConnectionStrategy(conns, strat, "")
+	return h.applyConnectionStrategy(conns, strat)
 }
 
-func (h *ChatHandler) applyConnectionStrategy(conns []*models.ProviderConnection, strat db.ProviderStrategy, prefixHash string) []*models.ProviderConnection {
+func (h *ChatHandler) applyConnectionStrategy(conns []*models.ProviderConnection, strat db.ProviderStrategy) []*models.ProviderConnection {
 	if len(conns) <= 1 {
 		return conns
-	}
-
-	if prefixHash != "" {
-		if targetID, ok := GetPromptCacheAffinity(prefixHash); ok {
-			for i, c := range conns {
-				if c != nil && c.ID == targetID {
-					if i != 0 {
-						reordered := make([]*models.ProviderConnection, 0, len(conns))
-						reordered = append(reordered, conns[i])
-						reordered = append(reordered, conns[:i]...)
-						reordered = append(reordered, conns[i+1:]...)
-						conns = reordered
-					}
-					break
-				}
-			}
-		}
 	}
 
 	switch strings.ToLower(strings.TrimSpace(strat.RotateStrategy)) {
@@ -690,24 +753,7 @@ func (h *ChatHandler) applyConnectionStrategy(conns []*models.ProviderConnection
 		if stickyLimit <= 0 {
 			stickyLimit = 1
 		}
-		// Sort or filter by adaptive health score first if multiple connections are available
 		return h.selectByRecency(conns, stickyLimit)
-
-	case "adaptive", "health":
-		// Multi-factor scoring inspired by OmniRoute
-		scored := make([]*models.ProviderConnection, len(conns))
-		copy(scored, conns)
-		slices.SortStableFunc(scored, func(a, b *models.ProviderConnection) int {
-			scoreA := GlobalAdaptiveRouter.ScoreConnection(a)
-			scoreB := GlobalAdaptiveRouter.ScoreConnection(b)
-			if scoreA > scoreB {
-				return -1
-			} else if scoreA < scoreB {
-				return 1
-			}
-			return 0
-		})
-		return scored
 
 	case "random":
 		offset := rand.IntN(len(conns))

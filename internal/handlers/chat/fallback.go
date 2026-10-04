@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/providers"
@@ -84,22 +83,9 @@ func (h *ChatHandler) handleAccountFallback(
 	// Apply provider connection routing strategy (round-robin, sticky, random) if configured
 	if len(allConns) > 1 && h.Repo != nil {
 		if settings, sErr := h.Repo.GetSettings(); sErr == nil && settings != nil {
-			strat := db.ProviderStrategy{}
-			hasStrat := false
-			if settings.ProviderStrategies != nil {
-				if s, ok := settings.ProviderStrategies[provider]; ok {
-					strat = s
-					hasStrat = true
-				}
-			}
-			if !hasStrat || strat.RotateStrategy == "" {
-				if settings.FallbackStrategy != "" && settings.FallbackStrategy != "fill-first" {
-					strat.RotateStrategy = settings.FallbackStrategy
-					strat.StickyLimit = settings.StickyRoundRobinLimit
-				}
-			}
+			strat := connRotationStrategy(settings, provider)
 			if strat.RotateStrategy != "" && strat.RotateStrategy != "none" {
-				allConns = h.applyConnectionStrategy(allConns, strat, prefixHash)
+				allConns = h.applyConnectionStrategy(allConns, strat)
 			}
 		}
 	}
@@ -123,10 +109,13 @@ func (h *ChatHandler) handleAccountFallback(
 				continue
 			}
 		}
-		log.Debug("fallback", "connection", "conn", c.ID, "connObj", connObj.ID)
+		// connObj, not the loop candidate: a candidate in cooldown can resolve
+		// to a different account (force fallback), and the usage row, the logs
+		// and the exclusion below must all name the account that was dialled.
+		log.Debug("fallback", "connection", "conn", connObj.ID, "candidate", c.ID)
 		if err := h.tryForwardWithConnection(forwardRequestParams{
 			Ctx: ctx, W: w, Provider: provider, Model: model,
-			ConnectionID: c.ID, ConnName: connObjName(connObj), ConnEmail: connObjEmail(connObj),
+			ConnectionID: connObj.ID, ConnName: connObjName(connObj), ConnEmail: connObjEmail(connObj),
 			ConnData: connData, Body: body,
 			IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
 			PrefixHash: prefixHash,
@@ -164,7 +153,7 @@ func (h *ChatHandler) handleAccountFallback(
 				"conn", connObj.ID, "provider", provider, "model", model,
 				"lockKey", lockKey, "status", ue.StatusCode, "cooldown_s", cooldownSec,
 			}, connIdentityKV(connObj)...)...)
-			excludeIDs = append(excludeIDs, c.ID)
+			excludeIDs = append(excludeIDs, connObj.ID)
 			continue
 		}
 		return lastErr
@@ -313,7 +302,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			claudeNative = true
 		}
 	}
-	pipedBody := h.applyTokenSavers(body, claudeNative)
+	pipedBody, origTokens, savedTokens, savedPct := h.applyTokenSavers(body, claudeNative)
 	var claudeToolMap map[string]string
 	if isAnthropic {
 		if !claudeNative {
@@ -598,12 +587,15 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			usage = &translator.OpenAIUsage{}
 		}
 		logInfo := &UsageLogInfo{
-			Provider:     provider,
-			Model:        model,
-			ConnectionID: connectionID,
-			APIKey:       apiKey,
-			Endpoint:     endpoint,
-			Egress:       resolveEgress(connData, providerCfg).LogValue(),
+			Provider:            provider,
+			Model:               model,
+			ConnectionID:        connectionID,
+			APIKey:              apiKey,
+			Endpoint:            endpoint,
+			Egress:              resolveEgress(connData, providerCfg).LogValue(),
+			OriginalInputTokens: origTokens,
+			SavedTokens:         savedTokens,
+			SavedPercent:        savedPct,
 		}
 		logInfo.ConnName, logInfo.ConnEmail = identityNames(h.connIdentityKVOr(f, connectionID))
 		h.logUsage(logInfo, usage, latencyMs, body, metrics)
@@ -630,13 +622,16 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	connName, connEmail := identityNames(identity)
 	h.LogFailure(
 		&UsageLogInfo{
-			Provider:     provider,
-			Model:        model,
-			ConnectionID: connectionID,
-			ConnName:     connName,
-			ConnEmail:    connEmail,
-			Endpoint:     endpoint,
-			Egress:       resolveEgress(connData, providerCfg).LogValue(),
+			Provider:            provider,
+			Model:               model,
+			ConnectionID:        connectionID,
+			ConnName:            connName,
+			ConnEmail:           connEmail,
+			Endpoint:            endpoint,
+			Egress:              resolveEgress(connData, providerCfg).LogValue(),
+			OriginalInputTokens: origTokens,
+			SavedTokens:         savedTokens,
+			SavedPercent:        savedPct,
 		},
 		usage,
 		fwdErr,
@@ -680,7 +675,7 @@ func isClientCanceled(ctx context.Context, err error) bool {
 // /v1/messages): system prompts must go to the top-level "system" field —
 // a role:"system" message is rejected by the Anthropic API.
 // false from compress/inject means nothing changed (or unparseable) — keep original, not a failure.
-func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool) []byte {
+func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool) ([]byte, int, int, int) {
 	// Prompt-injection guard: tag (never block) flagged user content. Early
 	// detection here means operators can see abuse before it reaches upstream.
 	// Toggle via settings.injectionGuardEnabled (off bypasses the scan).
@@ -690,8 +685,22 @@ func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool) []byte {
 		}
 	}
 	out := body
+	var origTokens, savedTokens, savedPct int
 	if h.TokenSaver.RTKEnabled() {
 		if next, did := tokensaver.CompressMessages(out); did {
+			origTokens = len(out) / 4
+			compressedTokens := len(next) / 4
+			savedTokens = origTokens - compressedTokens
+			savedPct = 0
+			if origTokens > 0 {
+				savedPct = (savedTokens * 100) / origTokens
+			}
+			log.Info("token_saver", "RTK compressed tool output",
+				"orig_est", origTokens,
+				"compressed_est", compressedTokens,
+				"saved_est", savedTokens,
+				"saved_pct", fmt.Sprintf("%d%%", savedPct),
+			)
 			out = next
 		}
 	}
@@ -711,7 +720,13 @@ func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool) []byte {
 			out = next
 		}
 	}
-	return out
+	if h.TokenSaver.ADHDEnabled() {
+		prompt := tokensaver.GetADHDPrompt(h.TokenSaver.ADHDLevel())
+		if next, did := inject(out, prompt); did {
+			out = next
+		}
+	}
+	return out, origTokens, savedTokens, savedPct
 }
 
 // extractErrorText attempts to extract a human-readable error message from an upstream error JSON body.
