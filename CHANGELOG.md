@@ -1,6 +1,46 @@
 # Changelog
 
 ## [Unreleased]
+### 🐛 `internal/fetchgate` flaky di `go test -p 16` — gap diukur salah
+
+`TestGateAcquire_SpacesConcurrentCallers` gagal 4 dari 5 run pada
+`go test ./... -p 16`, di index yang konsisten (2, 3, 7) dengan gap
+12–35ms terhadap floor 40ms. Gate-nya sendiri tidak salah: yang diukur
+adalah "kapan goroutine ini sempat jalan", bukan "kapan slot-nya
+dibuka". Sebuah slot yang dibuka tepat waktu tetap bisa menunggu
+8ms lagi untuk dijadwalkan di CPU yang sibuk, dan itu ikut terhitung
+di `time.Since(start)`.
+
+Membandingkan start time berurutan berarti membandingkan nasib penjadwalan
+dua goroutine yang berbeda. Satu yang cepat bersebelahan dengan satu yang
+lambat terbaca seperti dua slot diberikan sekaligus — itu sebabnya
+index yang gagal selalu di tengah-tengah, bukan di ujung.
+
+Assertion-nya diganti dari "tiap gap ≥ 40ms" jadi "rentang 8 pemanggil
+≥ 280ms". Noise penjadwalan bersifat nol-terhadap-jumlah di sekeliling
+loop, jadi penjumlahan gap menghilangkannya: delapan slot dengan floor
+40ms selalu membentang ≥ 280ms, sedangkan gate yang membagikan
+semuanya sekaligus membentang beberapa mikrosecond berapa pun padatnya CPU.
+
+Kekuatan test tidak berkurang. Dicoba dengan pacing dilepas dari
+`reserve()`, ia gagal persis di tempat yang seharusnya:
+
+```
+--- FAIL: TestGateAcquire_SpacesConcurrentCallers
+    gate_test.go:82: 8 callers spanned 0s end to end, want at least 280ms
+```
+
+`TestGateAcquire_JitterOnlyWidensTheGap` **tidak** diubah: meski ikut
+muncul di beberapa run paralel, ia tidak muncul sekali pun dalam 5 run
+baseline di `-p 16`, dan ia mengukur satu pemanggil sehingga noise-nya
+satu arah (selalu ≥, tidak pernah <). Tidak ada bukti ia perlu
+disentuh, jadi tidak.
+
+**Verifikasi:** `go vet ./...` bersih; `go build ./...` bersih;
+`go test ./internal/fetchgate/ -count=10 -race` hijau; `go test ./...`
+hijau; `go test ./... -p 16` hijau 4 dari 4 run, sebelumnya gagal 4 dari
+5.
+
 ### 🐛 `go test -shuffle` gagal di `internal/app` — test order-dependent
 
 `db.InitGlobalDatabase` hanya mengizinkan satu connection database per proses

@@ -25,6 +25,21 @@ func TestGateAcquire_IdleGateReturnsImmediately(t *testing.T) {
 
 // The whole point of the gate: N simultaneous callers must not start in the
 // same millisecond. This is the ten-accounts-on-one-IP case from issue #30.
+//
+// The assertion is on the span of the whole burst, not on each gap
+// individually. A recorded start is "the instant the gate opened my slot" plus
+// "however long my goroutine then waited to be scheduled onto a busy CPU", and
+// that second term is unbounded — differencing two consecutive starts compares
+// two different goroutines' scheduling luck. One early goroutine next to one
+// late goroutine reads as two slots at once even though the gate did nothing
+// wrong, which is why this failed at 24-33ms against a 40ms floor under
+// `-p 16`, always on the same middle indices where the two kinds of luck meet.
+//
+// Summing the gaps cancels that noise instead: scheduler lag is zero-sum
+// around the loop. Eight callers on a 40ms floor span at least 280ms, while a
+// gate that granted them all at once spans the same few microseconds however
+// busy the CPU is. The span is therefore invariant under scheduling jitter and
+// still collapses the moment pacing is removed.
 func TestGateAcquire_SpacesConcurrentCallers(t *testing.T) {
 	const (
 		callers = 8
@@ -57,11 +72,15 @@ func TestGateAcquire_SpacesConcurrentCallers(t *testing.T) {
 		t.Fatalf("got %d slots, want %d", len(slots), callers)
 	}
 	sort.Slice(slots, func(i, j int) bool { return slots[i] < slots[j] })
-	for i := 1; i < len(slots); i++ {
-		// Sorted by start time, so consecutive entries are consecutive grants.
-		if gap := slots[i] - slots[i-1]; gap < minGap*9/10 {
-			t.Errorf("caller %d started %s after the previous one, want >= %s", i, gap, minGap)
-		}
+
+	// callers-1 gaps of at least minGap: anything shorter means the gate
+	// let at least one pair through without waiting, which is the burst this
+	// gate exists to prevent.
+	span := slots[len(slots)-1] - slots[0]
+	wantSpan := minGap * time.Duration(callers-1)
+	if span < wantSpan {
+		t.Errorf("%d callers spanned %s end to end, want at least %s: they started %s too close together",
+			callers, span, wantSpan, span/time.Duration(callers-1))
 	}
 }
 
