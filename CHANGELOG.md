@@ -1,6 +1,35 @@
 # Changelog
 
 ## [Unreleased]
+### 🏷️ Nama provider asli tampil di tab Details pada dashboard Usage
+
+Latar: kolom `Provider` di tab **Details** (`/dashboard/usage`) menampilkan
+`item.provider` mentah. Untuk provider kustom, nilai itu id sintetis
+(`openai-compatible-chat-<uuid>`), jadi tabel terbaca
+`openai-compatible-chat-46b3f72a-5618-4485-8527-0eb4424e85db` alih-alih nama
+yang dikonfigurasi user (`tiarina`).
+
+Parity: upstream memakai `getProviderName(detail.provider, cache)` di
+`RequestDetailsTab.js`, dengan cache gabungan `AI_PROVIDERS` +
+`providerNodes` (`node.id → node.name`). Sumber nama itu persis yang sudah
+dipakai kartu topologi di port ini (`AnalyticsView.topologyName`).
+
+Perbaikan (`web/src/components/analytics/`):
+1. `providerDisplayName()` baru di `types.ts` — node kustom menang lebih dulu,
+   lalu nama katalog, lalu id apa adanya.
+2. `RequestDetailsTab` menerima `providerNodes` dan memakai nama itu di badge
+   tabel **dan** di header modal inspector. Id mentah tetap tersedia sebagai
+   `title` (tooltip) dan di panel Payload, jadi tidak ada informasi yang hilang.
+3. Kolom breakdown di tab Overview **tidak** disentuh — `provider` di sana
+   sudah di-resolve server (`nodeNameMap` di
+   `internal/handlers/usage_stats.go:191`).
+
+**Verifikasi:** `bun test` (210 pass, termasuk 4 kasus baru untuk
+`providerDisplayName`), `bun run ratchet:svelte` (0 unresolved identifier,
+92 error = baseline), dan smoke ke instance dengan 9.862 baris `requestDetails`:
+baris yang sebelumnya terbaca `openai-compatible-chat-46b3f72a-…` kini
+`tiarina` / `OpenCode Zen`, icon `/providers/oai-cc.png` tetap terpakai.
+
 ### 🩺 Penolakan proxy egress kini terlihat di Usage & Analytics
 
 Latar: `tryForwardWithConnection` gagal **terlalu awal** saat pool proxy yang

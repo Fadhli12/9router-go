@@ -4,25 +4,28 @@
   import Button from '../../lib/ui/Button.svelte'
   import Card from '../../lib/ui/Card.svelte'
   import { getIconPath } from '../connections/types'
-  import { cachedTokensFor, fmt, timeAgo, type RequestDetailItem } from './types'
+  import { cachedTokensFor, fmt, providerDisplayName, timeAgo, type RequestDetailItem } from './types'
 
-  interface Props {
-    details?: RequestDetailItem[]
-    detailsTotal?: number
-    detailsPage?: number
-    detailsLoading?: boolean
-    onPageChange: (page: number) => void
-    onRefresh: () => void
-  }
+interface Props {
+  details?: RequestDetailItem[]
+  detailsTotal?: number
+  detailsPage?: number
+  detailsLoading?: boolean
+  onPageChange: (page: number) => void
+  onRefresh: () => void
+  /** Custom provider nodes, so a synthetic id renders as its configured name. */
+  providerNodes?: { id: string; name?: string }[]
+}
 
-  let {
-    details = [],
-    detailsTotal = 0,
-    detailsPage = 1,
-    detailsLoading = false,
-    onPageChange,
-    onRefresh,
-  }: Props = $props()
+let {
+  details = [],
+  detailsTotal = 0,
+  detailsPage = 1,
+  detailsLoading = false,
+  onPageChange,
+  onRefresh,
+  providerNodes = [],
+}: Props = $props()
 
   let selectedDetail = $state<RequestDetailItem | null>(null)
 
@@ -88,7 +91,9 @@
                       loading="lazy"
                     />
                   {/if}
-                  <Badge variant="neutral" size="sm">{item.provider || 'unknown'}</Badge>
+                  <span title={item.provider || undefined}>
+                    <Badge variant="neutral" size="sm">{providerDisplayName(item.provider, providerNodes)}</Badge>
+                  </span>
                 </div>
               </td>
               <td class="py-3 px-4 font-bold text-text-main max-w-[140px] truncate">
@@ -183,7 +188,9 @@
         <div class="flex items-center gap-2">
           <span class="w-2.5 h-2.5 rounded-full {selectedDetail.status === 'success' ? 'bg-success' : 'bg-error'}"></span>
           <h3 class="font-headline text-base font-bold text-text-main">{selectedDetail.model}</h3>
-          <Badge variant="neutral" size="sm">{selectedDetail.provider || 'unknown'}</Badge>
+          <span title={selectedDetail.provider || undefined}>
+            <Badge variant="neutral" size="sm">{providerDisplayName(selectedDetail.provider, providerNodes)}</Badge>
+          </span>
         </div>
         <button
           type="button"
