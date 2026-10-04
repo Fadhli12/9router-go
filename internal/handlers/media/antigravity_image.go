@@ -83,7 +83,10 @@ func imagePinnedConnectionID(r *http.Request) string {
 }
 
 func (h *MediaHandler) tryAntigravityImageConn(w http.ResponseWriter, r *http.Request, body []byte, prompt, cleanModel, aspectRatio string, conn *models.ProviderConnection, connData *chat.ConnectionData) error {
-	apiKey := chat.ExtractAPIKey(connData)
+	apiKey := connData.AccessToken
+	if apiKey == "" {
+		apiKey = chat.ExtractAPIKey(connData)
+	}
 	if apiKey == "" {
 		return fmt.Errorf("no API key found for antigravity connection %s", conn.ID)
 	}

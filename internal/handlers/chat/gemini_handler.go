@@ -136,7 +136,15 @@ func (h *ChatHandler) forwardGeminiNativeRequest(
 	if isStream {
 		contentType := resp.Header.Get("Content-Type")
 		if !strings.HasPrefix(strings.ToLower(contentType), "text/event-stream") {
-			return h.handleGeminiNonStream(ctx, w, resp.Body, translateResponse, metrics)
+			raw, err := io.ReadAll(io.LimitReader(resp.Body, constants.MaxUpstreamBodyBytes))
+			if err != nil {
+				return fmt.Errorf("read gemini response body: %w", err)
+			}
+			unwrapped := raw
+			if projectID != "" {
+				unwrapped = translator.UnwrapAntigravityResponse(raw)
+			}
+			return h.handleGeminiNonStreamAsSSE(ctx, w, bytes.NewReader(unwrapped), translateResponse, metrics)
 		}
 		stallReader := proxy.NewStallReaderWithContext(ctx, resp.Body, 0, provider)
 		bodyCloser = stallReader
@@ -561,5 +569,89 @@ func (h *ChatHandler) handleGeminiNonStream(ctx context.Context, w http.Response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(openaiResp)
+	return nil
+}
+
+func (h *ChatHandler) handleGeminiNonStreamAsSSE(ctx context.Context, w http.ResponseWriter, upstream io.Reader, translateResp bool, metrics *streamMetrics) error {
+	body, err := io.ReadAll(io.LimitReader(upstream, constants.MaxUpstreamBodyBytes))
+	if err != nil {
+		return fmt.Errorf("read gemini response body: %w", err)
+	}
+
+	if metrics != nil {
+		metrics.ResponseBuf.Write(body)
+	}
+
+	openaiResp, usage, err := translator.TranslateGeminiResponseToOpenAI(body)
+	if err == nil && usage != nil {
+		translator.SetUsage(ctx, usage)
+	}
+	if err != nil || len(openaiResp) == 0 {
+		return h.handleGeminiNonStream(ctx, w, bytes.NewReader(body), translateResp, metrics)
+	}
+
+	var c struct {
+		ID      string `json:"id"`
+		Choices []struct {
+			Message struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(openaiResp, &c); err != nil || len(c.Choices) == 0 {
+		return h.handleGeminiNonStream(ctx, w, bytes.NewReader(openaiResp), translateResp, metrics)
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	content := c.Choices[0].Message.Content
+	chunk1 := map[string]any{
+		"id":      c.ID,
+		"object":  "chat.completion.chunk",
+		"created": time.Now().Unix(),
+		"choices": []any{
+			map[string]any{
+				"index": 0,
+				"delta": map[string]any{
+					"role":    "assistant",
+					"content": content,
+				},
+				"finish_reason": nil,
+			},
+		},
+	}
+	chunk1Bytes, _ := json.Marshal(chunk1)
+	fmt.Fprintf(w, "data: %s\n\n", chunk1Bytes)
+
+	finishReason := c.Choices[0].FinishReason
+	if finishReason == "" {
+		finishReason = "stop"
+	}
+	chunk2 := map[string]any{
+		"id":      c.ID,
+		"object":  "chat.completion.chunk",
+		"created": time.Now().Unix(),
+		"choices": []any{
+			map[string]any{
+				"index":         0,
+				"delta":         map[string]any{},
+				"finish_reason": finishReason,
+			},
+		},
+	}
+	chunk2Bytes, _ := json.Marshal(chunk2)
+	fmt.Fprintf(w, "data: %s\n\n", chunk2Bytes)
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
 	return nil
 }
