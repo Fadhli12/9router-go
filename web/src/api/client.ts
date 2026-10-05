@@ -697,6 +697,10 @@ return conns.map(normalizeConnection)
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  rotateApiKey: (id: string) =>
+    request<{ status: string; id: string; key: string }>(`/api/keys/${encodeURIComponent(id)}/rotate`, {
+      method: 'POST',
+    }),
   updateApiKeyLimit: (id: string, maxConcurrent: number) =>
     request<{ status: string; id: string; maxConcurrent: number }>(`/keys/${id}/limit`, {
       method: 'PUT',

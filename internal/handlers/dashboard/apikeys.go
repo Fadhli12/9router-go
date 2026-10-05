@@ -214,3 +214,25 @@ func (h *DashboardHandler) HandleUpdateApiKeyLimit(w http.ResponseWriter, r *htt
 		"maxConcurrent": req.MaxConcurrent,
 	})
 }
+
+// HandleRotateApiKey handles POST /api/keys/{id}/rotate.
+// Generates a new secret key for an existing API key row, keeping its name, id, and limit intact.
+func (h *DashboardHandler) HandleRotateApiKey(w http.ResponseWriter, r *http.Request) {
+	id := getURLParam(r, "id")
+	if id == "" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing apiKey id")
+		return
+	}
+
+	newKey := "sk-" + strings.ReplaceAll(uuid.New().String(), "-", "")
+	if err := h.Repo.RotateApiKey(id, newKey); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"id":     id,
+		"key":    newKey,
+	})
+}

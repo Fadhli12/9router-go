@@ -12,6 +12,7 @@
     Key,
     Loader2,
     Plus,
+    RefreshCw,
     Power,
     Radio,
     Shield,
@@ -935,6 +936,17 @@
             </div>
 
             <div class="flex items-center gap-2 shrink-0">
+              <!-- Rotate Key Button -->
+              <button
+                type="button"
+                onclick={() => handleRotateKey(key)}
+                disabled={rotatingKeyId === key.id}
+                class="p-1.5 rounded-lg border border-border bg-surface-2 text-text-subtle hover:text-brand-500 transition cursor-pointer"
+                title="Rotate key (generate new secret)"
+              >
+                <RefreshCw class="w-3.5 h-3.5 {rotatingKeyId === key.id ? 'animate-spin text-brand-500' : ''}" />
+              </button>
+
               <!-- Concurrency Limit Badge & Quick Edit -->
               <button
                 type="button"

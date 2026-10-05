@@ -268,6 +268,16 @@ func (r *Repo) UpdateApiKeyMaxConcurrent(id string, maxConcurrent int) error {
 	return nil
 }
 
+// RotateApiKey generates a new secret key for an existing API key row and invalidates cache.
+func (r *Repo) RotateApiKey(id string, newKey string) error {
+	_, err := r.db.Exec(`UPDATE apiKeys SET key = ? WHERE id = ?`, newKey, id)
+	if err != nil {
+		return fmt.Errorf("rotate api key %s: %w", id, err)
+	}
+	apikeycache.Invalidate()
+	return nil
+}
+
 // DeleteApiKey deletes a client API key by its ID.
 func (r *Repo) DeleteApiKey(id string) error {
 	_, err := r.db.Exec(`DELETE FROM apiKeys WHERE id = ?`, id)
