@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'bun:test'
-import { cachedTokensFor, fmt, providerDisplayName, type RequestDetailItem } from './types'
+import {
+  cachedTokensFor,
+  fmt,
+  latencyBadgeTone,
+  latencyClass,
+  latencyTextClass,
+  providerDisplayName,
+  ttftRatio,
+  type RequestDetailItem,
+} from './types'
 
 describe('request detail token formatting', () => {
   it('prefers canonical cached_tokens', () => {
@@ -40,6 +49,54 @@ describe('request detail token formatting', () => {
   it('renders missing cache usage as zero', () => {
     expect(fmt(cachedTokensFor({}))).toBe('0')
     expect(fmt(cachedTokensFor({ tokens: { cached_tokens: 0, cache_read_input_tokens: 25 } }))).toBe('0')
+  })
+})
+
+describe('latency classification', () => {
+  it('buckets TTFT into fast/mid/slow bands', () => {
+    expect(latencyClass(250)).toBe('fast')
+    expect(latencyClass(499)).toBe('fast')
+    expect(latencyClass(500)).toBe('mid')
+    expect(latencyClass(1000)).toBe('mid')
+    expect(latencyClass(1499)).toBe('mid')
+    expect(latencyClass(1500)).toBe('slow')
+    expect(latencyClass(5000)).toBe('slow')
+  })
+
+  it('treats a missing or zero TTFT as fast', () => {
+    expect(latencyClass(undefined)).toBe('fast')
+    expect(latencyClass(0)).toBe('fast')
+    expect(latencyClass(-1)).toBe('fast')
+  })
+
+  it('maps bands to tailwind text colors', () => {
+    expect(latencyTextClass(250)).toBe('text-emerald-500')
+    expect(latencyTextClass(750)).toBe('text-amber-500')
+    expect(latencyTextClass(2000)).toBe('text-rose-500')
+  })
+
+  it('maps bands to badge tones', () => {
+    expect(latencyBadgeTone(250)).toBe('success')
+    expect(latencyBadgeTone(750)).toBe('warning')
+    expect(latencyBadgeTone(2000)).toBe('danger')
+  })
+})
+
+describe('ttftRatio', () => {
+  it('computes the TTFT share of total latency', () => {
+    expect(ttftRatio(250, 1000)).toBe(0.25)
+    expect(ttftRatio(1000, 1000)).toBe(1)
+  })
+
+  it('clamps to [0, 1]', () => {
+    expect(ttftRatio(2000, 1000)).toBe(1)
+    expect(ttftRatio(-5, 1000)).toBe(0)
+  })
+
+  it('returns 0 when either value is missing', () => {
+    expect(ttftRatio(undefined, 1000)).toBe(0)
+    expect(ttftRatio(250, undefined)).toBe(0)
+    expect(ttftRatio(0, 0)).toBe(0)
   })
 })
 

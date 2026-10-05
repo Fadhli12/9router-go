@@ -305,7 +305,7 @@ func (h *MediaHandler) tryAntigravitySearchConn(w http.ResponseWriter, r *http.R
 		classification := providers.ClassifyError(resp.StatusCode, errText, backoff)
 		if classification.ShouldFallback && h.Repo != nil {
 			lockModel := translator.NormalizeAntigravityModel(model)
-			cooldownSec := max(classification.CooldownMs/1000, 1)
+			cooldownSec := chat.ApplyAccountCooldownFloor(max(classification.CooldownMs/1000, 1))
 			_ = h.Repo.LockConnectionModel(conn.ID, lockModel, cooldownSec, classification.NewBackoffLevel)
 			if lockModel != model {
 				_ = h.Repo.LockConnectionModel(conn.ID, model, cooldownSec, classification.NewBackoffLevel)

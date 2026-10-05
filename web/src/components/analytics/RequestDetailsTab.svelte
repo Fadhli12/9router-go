@@ -29,6 +29,36 @@ let {
 
   let selectedDetail = $state<RequestDetailItem | null>(null)
 
+  /** Visual severity tier for a latency value, in ms: <500 fast, 500-1500 moderate, >1500 slow. */
+  type LatencyTier = 'fast' | 'moderate' | 'slow'
+
+  /** Classify a latency value (TTFT or total) into a severity tier by threshold. */
+  function latencyTier(ms: number | undefined): LatencyTier | null {
+    if (ms == null) return null
+    if (ms < 500) return 'fast'
+    if (ms <= 1500) return 'moderate'
+    return 'slow'
+  }
+
+  /** Badge `tone` for a tier. `slow` has no dedicated Badge tone, so it borrows `danger`'s shape;
+   *  the orange hue itself comes from the `class` override applied at each call site. */
+  function latencyBadgeTone(tier: LatencyTier): 'success' | 'warning' | 'danger' {
+    if (tier === 'fast') return 'success'
+    if (tier === 'moderate') return 'warning'
+    return 'danger'
+  }
+
+  /** Extra classes to recolor the `slow` tier badge from danger-red to the dedicated orange token. */
+  function latencyBadgeClass(tier: LatencyTier): string {
+    return tier === 'slow' ? 'bg-orange/10 text-orange border-orange/25' : ''
+  }
+
+  /** TTFT as a percentage share of total latency, clamped to [0, 100]. Null when total is unusable. */
+  function ttftRatioPct(ttft: number | undefined, total: number | undefined): number | null {
+    if (ttft == null || total == null || total <= 0) return null
+    return Math.min(100, Math.max(0, (ttft / total) * 100))
+  }
+
 </script>
 
 <Card padding="none" class="overflow-hidden border border-border">
@@ -112,11 +142,42 @@ let {
                   <span class="truncate">{item.model}</span>
                 </div>
               </td>
-              <td class="py-3 px-4 text-right text-text-muted">
-                {item.latency?.ttft ? `${item.latency.ttft}ms` : '—'}
+              <td class="py-3 px-4 text-right">
+                {#if item.latency?.ttft != null}
+                  <Badge
+                    tone={latencyBadgeTone(latencyTier(item.latency.ttft) ?? 'fast')}
+                    size="sm"
+                    class="text-[10px] px-1.5 py-0 font-semibold {latencyBadgeClass(latencyTier(item.latency.ttft) ?? 'fast')}"
+                  >
+                    {item.latency.ttft}ms
+                  </Badge>
+                {:else}
+                  <span class="text-text-muted">—</span>
+                {/if}
               </td>
-              <td class="py-3 px-4 text-right text-text-main font-medium">
-                {item.latency?.total ? `${item.latency.total}ms` : '—'}
+              <td class="py-3 px-4 text-right">
+                {#if item.latency?.total != null}
+                  <Badge
+                    tone={latencyBadgeTone(latencyTier(item.latency.total) ?? 'fast')}
+                    size="sm"
+                    class="text-[10px] px-1.5 py-0 font-semibold {latencyBadgeClass(latencyTier(item.latency.total) ?? 'fast')}"
+                  >
+                    {item.latency.total}ms
+                  </Badge>
+                  {#if ttftRatioPct(item.latency.ttft, item.latency.total) != null}
+                    <div
+                      class="h-1 w-14 rounded-full bg-surface-3 overflow-hidden mt-1 ml-auto"
+                      title={`TTFT ${item.latency.ttft}ms of ${item.latency.total}ms total (${Math.round(ttftRatioPct(item.latency.ttft, item.latency.total) ?? 0)}%)`}
+                    >
+                      <div
+                        class="h-full bg-brand-500 rounded-full"
+                        style={`width: ${ttftRatioPct(item.latency.ttft, item.latency.total)}%`}
+                      ></div>
+                    </div>
+                  {/if}
+                {:else}
+                  <span class="text-text-muted">—</span>
+                {/if}
               </td>
               <td class="py-3 px-4 text-right text-brand-500 whitespace-nowrap">
                 <div class="inline-flex items-center justify-end gap-1.5">

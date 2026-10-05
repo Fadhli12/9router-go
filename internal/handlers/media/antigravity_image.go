@@ -191,7 +191,7 @@ func (h *MediaHandler) tryAntigravityImageConn(w http.ResponseWriter, r *http.Re
 		if h.Repo != nil {
 			backoff := h.Repo.GetConnectionBackoffLevel(conn.ID)
 			if classification := providers.ClassifyError(resp.StatusCode, errText, backoff); classification.ShouldFallback {
-				cooldownSec := max(classification.CooldownMs/1000, 1)
+				cooldownSec := chat.ApplyAccountCooldownFloor(max(classification.CooldownMs/1000, 1))
 				_ = h.Repo.LockConnectionModel(conn.ID, cleanModel, cooldownSec, classification.NewBackoffLevel)
 				var rawModel string
 				var rawBody struct {

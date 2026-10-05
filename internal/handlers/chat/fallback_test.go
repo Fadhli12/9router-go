@@ -262,10 +262,9 @@ func TestHandleMessagesComboFallback_RetriesOnceOnBoundedRetryAfter(t *testing.T
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := hits.Add(1)
 		if n == 1 {
-			// Upstream says "wait ~1s" (RFC3339). A 429 is only worth retrying
-			// inside brief429RetryTolerance — past that the account is out of
-			// quota and re-hitting it deepens the upstream's backoff — so the
-			// bound, not the old 8s cap, is what this covers.
+			// A 429 now parks the account for minRateLimitCooldownSec (30s),
+			// so the brief RFC3339 wait below is lifted to the floor and the
+			// single account is never re-hit within this turn.
 			ra := time.Now().Add(time.Second).Format(time.RFC3339)
 			w.WriteHeader(http.StatusTooManyRequests)
 			w.Write([]byte(`{"error":{"retryAfter":"` + ra + `"}}`))
@@ -300,8 +299,11 @@ func TestHandleMessagesComboFallback_RetriesOnceOnBoundedRetryAfter(t *testing.T
 	rec := httptest.NewRecorder()
 	h.handleMessagesComboFallback(context.Background(), rec, translatedReq, comboModels, "fallback", false, "combo-retry", 0)
 
-	if got := hits.Load(); got != 2 {
-		t.Errorf("expected 2 upstream hits (1 failure + 1 retry), got %d", got)
+	if got := hits.Load(); got != 1 {
+		t.Errorf("expected 1 upstream hit (account parked for 30s, no retry), got %d", got)
+	}
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("expected 429 surfaced to client, got %d", rec.Code)
 	}
 }
 

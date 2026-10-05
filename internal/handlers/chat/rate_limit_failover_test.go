@@ -97,10 +97,10 @@ func TestRetryableCooldownSec(t *testing.T) {
 		body   string
 		want   int
 	}{
-		{"429 without a wait falls back to the classifier", http.StatusTooManyRequests, 2 * time.Second, nil, rateLimitedBody, 2},
+		{"429 without a wait floors at the 30s rate-limit floor", http.StatusTooManyRequests, 2 * time.Second, nil, rateLimitedBody, minRateLimitCooldownSec},
 		{"429 retryinfo window wins", http.StatusTooManyRequests, 2 * time.Second, nil, retryInfoBody("120s"), 120},
 		{"429 header window wins", http.StatusTooManyRequests, 2 * time.Second, http.Header{"Retry-After": {"30"}}, rateLimitedBody, 30},
-		{"429 short window shortens the lock so the brief retry can run", http.StatusTooManyRequests, 2 * time.Second, nil, retryInfoBody("1s"), 1},
+		{"429 short window is lifted to the 30s floor", http.StatusTooManyRequests, 2 * time.Second, nil, retryInfoBody("1s"), minRateLimitCooldownSec},
 		{"429 nonsense window is capped", http.StatusTooManyRequests, 2 * time.Second, nil, retryInfoBody("72h"), int(maxResetCooldown / time.Second)},
 		{"503 keeps its own backoff", http.StatusServiceUnavailable, 30 * time.Second, nil, rateLimitedBody, 30},
 		{"503 still reads the quota reset", http.StatusServiceUnavailable, 30 * time.Second, nil, `{"error":{"message":"Quota exceeded. Resets in 2m."}}`, 120},
@@ -193,14 +193,15 @@ func TestComboRateLimitFailover(t *testing.T) {
 			checkRetryAfter: true, wantRetryAfter: "",
 		},
 		{
-			// One account in the pool, so a second upstream request can only
-			// come from the bounded second pass. Nothing else here changes:
-			// a Retry-After inside the tolerance still buys that pass, and the
-			// lock it takes is short enough for the pass to find the account.
-			name:     "429 with a brief retry-after still gets the bounded second pass",
+			// One account in the pool. A 429 — even a brief 1s one — now parks
+			// the account for minRateLimitCooldownSec (30s), so the bounded
+			// second pass can no longer re-pick it: with no healthy connection
+			// left the 429 is surfaced to the client instead of hammering the
+			// same still-limited account.
+			name:     "429 with a brief retry-after parks the account for 30s and does not re-hit it",
 			accounts: 1, status: http.StatusTooManyRequests,
 			body:          func() string { return isoRetryAfterBody(time.Second) },
-			failFirstHits: 1, wantHits: 2, wantStatus: http.StatusOK,
+			failFirstHits: 1, wantHits: 1, wantStatus: http.StatusTooManyRequests,
 		},
 		{
 			// An RFC3339 Retry-After is truncated to whole seconds, so the wait

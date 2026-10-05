@@ -183,7 +183,7 @@ func (h *MediaHandler) tryXquikSearchConn(w http.ResponseWriter, r *http.Request
 		}
 		classification := providers.ClassifyError(resp.StatusCode, errText, backoff)
 		if classification.ShouldFallback && h.Repo != nil {
-			cooldownSec := max(classification.CooldownMs/1000, 1)
+			cooldownSec := chat.ApplyAccountCooldownFloor(max(classification.CooldownMs/1000, 1))
 			_ = h.Repo.LockConnectionModel(conn.ID, model, cooldownSec, classification.NewBackoffLevel)
 			log.Warn("search", "xquik account locked, trying next", "conn", conn.ID[:min(8, len(conn.ID))], "status", resp.StatusCode, "cooldown_s", cooldownSec)
 		}

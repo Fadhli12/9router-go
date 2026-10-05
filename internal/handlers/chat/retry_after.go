@@ -45,6 +45,18 @@ func comboPassRetryWait(earliest time.Duration, rateLimited bool) time.Duration 
 	return earliest
 }
 
+// minRateLimitCooldownSec is the shortest an account may be parked after a
+// 429, regardless of what Retry-After or the classifier's own backoff named.
+// A short-lived burst limit (sub-second RetryInfo, or no carrier at all under
+// a low classifier backoff level) used to park the account for only that
+// brief window; the very next fallback pass then re-picked the same account
+// before Google's limiter had actually cleared, so one rate-limited request
+// could repeatedly re-trigger the same account instead of giving it a safe
+// parking period. 30s is long enough that a short burst window has reliably
+// cleared upstream by the time the account is eligible again, while staying
+// well under maxResetCooldown for a named long window.
+const minRateLimitCooldownSec = 30
+
 // retryableCooldownSec returns how long a failed account must stay out of
 // rotation, in seconds, given the classifier's own backoff as the baseline.
 //
@@ -56,16 +68,43 @@ func comboPassRetryWait(earliest time.Duration, rateLimited bool) time.Duration 
 // account again instead of waiting out a lock it set itself. Every other
 // status keeps the quota-reset reading it has always had. maxResetCooldown
 // stops a hostile or nonsensical duration from parking an account forever.
+//
+// A 429 is additionally floored at minRateLimitCooldownSec: whatever Retry-After
+// or the classifier named, a rate-limited upstream account (Antigravity /
+// Gemini / Kiro) is never parked for less than 30s, so the next failover pass
+// does not immediately hammer the same still-limited account.
 func retryableCooldownSec(statusCode int, base time.Duration, ue *upstreamError) int {
 	cooldown := base
 	if statusCode == http.StatusTooManyRequests {
 		if wait, ok := retryAfterWait(ue); ok {
 			cooldown = wait
 		}
-	} else if dur, ok := extractResetDuration(ue.Body); ok {
+		return ApplyAccountCooldownFloor(ceilSeconds(min(cooldown, maxResetCooldown)))
+	}
+	if dur, ok := extractResetDuration(ue.Body); ok {
 		cooldown = dur
 	}
 	return ceilSeconds(min(cooldown, maxResetCooldown))
+}
+
+// ApplyAccountCooldownFloor raises a persisted account-lock cooldown (seconds)
+// to minRateLimitCooldownSec when it would otherwise land below it. It never
+// lowers a cooldown that is already at or above the floor, so a classifier- or
+// Retry-After-named window longer than 30s (e.g. the 2-minute 401/403 cooldown
+// in providers.ErrorRules, or an explicit long RetryInfo) passes through
+// unchanged.
+//
+// This is the exported half of the two-tier cooldown design: retryableCooldownSec
+// floors the duration written to LockConnectionModel/LockConnectionRateLimit
+// (what keeps an account OUT of rotation), while comboPassRetryWait keeps
+// deciding the in-turn brief-retry fast path from the un-floored wait returned
+// by retryAfterWait/passRetry.note. Call sites that lock an account outside the
+// chat/combo path (the media handlers, which have no brief-retry pass to
+// preserve) must still floor what they persist, so they call this directly
+// instead of duplicating the ad-hoc `max(cooldownSec, 1)` that let any
+// classifier cooldown under 30s park an account for less than a safe window.
+func ApplyAccountCooldownFloor(cooldownSec int) int {
+	return max(cooldownSec, minRateLimitCooldownSec)
 }
 
 // passRetry is the rate-limit bookkeeping for one combo pass. The OpenAI and

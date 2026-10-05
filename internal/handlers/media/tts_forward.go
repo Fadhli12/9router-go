@@ -212,7 +212,7 @@ func (h *MediaHandler) tryNvidiaTTSConn(w http.ResponseWriter, r *http.Request, 
 		if h.Repo != nil {
 			backoff := h.Repo.GetConnectionBackoffLevel(conn.ID)
 			if classification := providers.ClassifyError(resp.StatusCode, errText, backoff); classification.ShouldFallback {
-				cooldownSec := max(classification.CooldownMs/1000, 1)
+				cooldownSec := chat.ApplyAccountCooldownFloor(max(classification.CooldownMs/1000, 1))
 				_ = h.Repo.LockConnectionModel(conn.ID, modelInfo.Model, cooldownSec, classification.NewBackoffLevel)
 				return resp.StatusCode, errText, true
 			}

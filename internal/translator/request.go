@@ -400,6 +400,7 @@ func TranslateClaudeToOpenAI(claudeBody []byte) ([]byte, error) {
 		oreq.Messages = append(oreq.Messages, converted...)
 	}
 
+	oreq.Messages = SanitizeOrphanAssistantTurns(oreq.Messages)
 	oreq.Messages = fixMissingToolResponsesOpenAI(oreq.Messages)
 
 	if len(creq.Tools) > 0 {

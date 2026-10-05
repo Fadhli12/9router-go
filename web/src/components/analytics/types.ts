@@ -146,6 +146,47 @@ export function cachedTokensFor(detail: RequestDetailItem): number {
   return detail.tokens?.cached_tokens ?? detail.tokens?.cache_read_input_tokens ?? 0
 }
 
+const TTFT_FAST_MS = 500
+const TTFT_SLOW_MS = 1500
+
+export type LatencyClass = 'fast' | 'mid' | 'slow'
+
+export function latencyClass(ttft?: number): LatencyClass {
+  const t = ttft || 0
+  if (t <= 0 || t < TTFT_FAST_MS) return 'fast'
+  if (t < TTFT_SLOW_MS) return 'mid'
+  return 'slow'
+}
+
+export function latencyTextClass(ttft?: number): string {
+  switch (latencyClass(ttft)) {
+    case 'mid':
+      return 'text-amber-500'
+    case 'slow':
+      return 'text-rose-500'
+    default:
+      return 'text-emerald-500'
+  }
+}
+
+export function latencyBadgeTone(ttft?: number): 'success' | 'warning' | 'danger' {
+  switch (latencyClass(ttft)) {
+    case 'mid':
+      return 'warning'
+    case 'slow':
+      return 'danger'
+    default:
+      return 'success'
+  }
+}
+
+export function ttftRatio(ttft?: number, total?: number): number {
+  const t = ttft || 0
+  const tot = total || 0
+  if (t <= 0 || tot <= 0) return 0
+  return Math.min(1, Math.max(0, t / tot))
+}
+
 export function fmtCost(n?: number): string {
   return '$' + (n || 0).toFixed(2)
 }
