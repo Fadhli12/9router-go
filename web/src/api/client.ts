@@ -11,6 +11,8 @@ export interface ProviderConnection {
   data: string // JSON string
   createdAt: string
   updatedAt: string
+  /** Masked hint of the stored credential; the raw secret is never listed. */
+  apiKeyMasked?: string
   testStatus?: string | null
   lastError?: string | null
   displayName?: string | null

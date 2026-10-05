@@ -61,6 +61,50 @@ lalu dijawab upstream (`"content":"routed"`) dan tercatat di `usageHistory`
 dengan provider `openai-compatible-chat-bai-v2`, sementara `/v1/models`
 tetap mengiklankan `bai/glm-5.3` tanpa membocorkan id mentah.
 
+### ✨ `feat(connections): ganti API key langsung dari modal Edit Connection` (issue #154)
+
+Modal Edit Connection di tab **Providers** dan di **Quota Tracker** sekarang
+punya kolom API. Isian kosong berarti "memakai key yang tersimpan", bukan
+"hapus key" — itu yang membuat modal ini bisa dipakai untuk rotasi tanpa
+menyalin key lama ke input teks.
+
+Kolomnya menampilkan key yang tersimpan sebagai mask (`sk-smo…inal`) dari
+`apiKeyMasked`, hasil baru di `GET /api/connections`. Mask, bukan key mentah,
+karena endpoint itu terjangkau dengan API key klien berprivat rendah: key
+mentah di sana berarti satu key bocor bisa mencuri seluruh secret. Bentuk
+mask-nya sama dengan `maskClientKey` yang sudah dipakai untuk daftar
+`/api/keys`.
+
+`PUT /api/connections/{id}` sekarang menerima `apiKey`:
+
+- `apiKey` tidak ada atau kosong setelah `TrimSpace` → key tersimpan utuh.
+- `apiKey` terisi → hanya `data.apiKey` yang ditulis. `authToken`,
+  `providerSpecificData`, dan status probe tidak disentuh.
+
+Handler sengaja **tidak** mengubah `testStatus`/`lastError` saat rotasi.
+Mengganti key bukan bukti koneksi kembali hidup — satu-satunya buktinya
+jawaban provider, jadi modal yang meng-clear-nya setelah probe benar-benar
+menjawab, dengan mengirim `testStatus: "active"` secara eksplisit (parity
+dengan `EditConnectionModal` upstream).
+
+Modal menjalankan probe `/api/providers/validate` sebelum menulis:
+
+- key ditolak provider → **tidak disimpan**, modal tetap terbuka dengan
+  alasannya. Key yang tersimpan adalah satu-satunya yang menjaga akun ini di
+  rotasi, jadi key yang salah akan diam-diam dikeluarkan.
+- provider tanpa probe (`supported: false`) → bukan verdict, key tetap
+  disimpan tanpa `testStatus` yang dikoreksi.
+- field OAuth disembunyikan: yang dirotasi access token, bukan stuff yang
+  diketik user.
+
+Logika bersama ada di `web/src/components/connections/credential.ts`
+(placeholder, pemangkasan whitespace, pemetaan verdict, probe) supaya kedua
+modal tidak mengulang aturan yang sama.
+
+Upstream parity: `decolua/9router` `src/shared/components/EditConnectionModal.js`
+— label "Leave blank to keep the current API key.", tombol Check via
+`/api/providers/validate`, dan `testStatus` hanya di-set saat validasi sukses.
+
 ## [v1.9.9] - 2026-10-05
 
 ### 🐛 `TestGateAcquire_JitterOnlyWidensTheGap` masih flaky — stopwatch diukur dari slot sebelumnya

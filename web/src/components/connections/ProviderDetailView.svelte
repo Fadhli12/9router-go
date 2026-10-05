@@ -41,6 +41,12 @@
     type SuggestedModel
   } from './types'
   import { proxyBadgeInfo } from './proxyBadge'
+  import {
+    credentialPlaceholder,
+    credentialUpdate,
+    probeReplacementKey,
+    type CredentialCheck
+  } from './credential'
   import AddConnectionModal from './AddConnectionModal.svelte'
   import AddCustomModelModal from './AddCustomModelModal.svelte'
   import ProviderHeaderOverridesModal from './ProviderHeaderOverridesModal.svelte'
@@ -527,6 +533,12 @@
   let editTestError = $state<string | null>(null)
   let isTestingEdit = $state(false)
   let isSavingEdit = $state(false)
+  // Issue #154: a typed replacement key plus the verdict of the last
+  // /api/providers/validate against it. Both are per-open, never persisted.
+  let editAPIKey = $state('')
+  let editKeyCheck = $state<CredentialCheck>(null)
+  let editKeyError = $state<string | null>(null)
+  let isCheckingEditKey = $state(false)
 
   let showAddKeyModal = $state(false)
   let addConnectionError = $state('')
@@ -1223,6 +1235,29 @@
     editSeededPriority = editPriority
     editTestStatus = null
     editTestError = null
+    editAPIKey = ''
+    editKeyError = null
+  }
+
+  /** On-demand probe of the typed key, for the Check button beside the field. */
+  async function checkReplacementKey() {
+    if (!editingConnection || !editAPIKey.trim()) return
+    isCheckingEditKey = true
+    editKeyError = null
+    try {
+      const { check, error } = await probeReplacementKey(editingConnection, editAPIKey)
+      editKeyCheck = check
+      editKeyError = error
+    } finally {
+      isCheckingEditKey = false
+    }
+  }
+
+  // Typing again invalidates the previous verdict: the last check answered a
+  // different key than the one on screen now.
+  function resetKeyCheck() {
+    editKeyCheck = null
+    editKeyError = null
   }
 
   async function testEditingConnection() {
@@ -1250,7 +1285,7 @@
     if (!editingConnection) return
     isSavingEdit = true
     try {
-      const payload: { name?: string; priority?: number } = {
+      const payload: { name?: string; priority?: number; apiKey?: string; testStatus?: string } = {
         name: editName.trim() || undefined
       }
       // Omit an untouched priority: a NULL-priority row has no number of its
@@ -1259,6 +1294,22 @@
       // recreating the un-reorderable pair the reorder endpoint repairs.
       if (editPriority !== editSeededPriority) {
         payload.priority = editPriority
+      }
+      const rotation = credentialUpdate(editAPIKey)
+      if (rotation) {
+        // A key the provider rejects is never written: the stored one is the
+        // only thing keeping this account in rotation.
+        const { check, error } = await probeReplacementKey(editingConnection, rotation.apiKey)
+        editKeyCheck = check
+        editKeyError = error
+        if (error) {
+          isSavingEdit = false
+          return
+        }
+        payload.apiKey = rotation.apiKey
+        // Only a provider that actually answered may mark the row active
+        // again; an unsupported probe proves nothing about the new key.
+        if (check === 'valid') payload.testStatus = 'active'
       }
       await api.updateConnection(editingConnection.id, payload)
       editingConnection = null
@@ -4368,6 +4419,43 @@
           <div>
             <span class="block text-xs font-medium text-text-muted mb-1">Email</span>
             <p class="text-xs text-text-main font-medium">{editingConnection.email}</p>
+          </div>
+        {/if}
+
+        {#if editingConnection.authType !== 'oauth'}
+          <div>
+            <label class="block text-xs font-medium text-text-muted mb-1" for="edit-conn-key">
+              API (leave blank to keep the key on file)
+            </label>
+            <div class="flex gap-2">
+              <input
+                id="edit-conn-key"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder={credentialPlaceholder(editingConnection)}
+                bind:value={editAPIKey}
+                oninput={resetKeyCheck}
+                class="min-w-0 flex-1 px-2.5 py-1.5 text-xs border border-border rounded-md bg-background text-text-main focus:outline-none focus:border-primary"
+              />
+              <button
+                type="button"
+                onclick={checkReplacementKey}
+                disabled={!editAPIKey.trim() || isCheckingEditKey || isSavingEdit}
+                class="shrink-0 px-2.5 py-1.5 text-xs font-semibold rounded-[8px] bg-surface-2 hover:bg-surface-3 text-text-main border border-border disabled:opacity-50 cursor-pointer"
+              >
+                {isCheckingEditKey ? 'Checking' : 'Check'}
+              </button>
+            </div>
+            {#if editKeyCheck === 'valid'}
+              <p class="mt-1.5 text-xs text-emerald-600 dark:text-emerald-400">The provider accepted this key.</p>
+            {:else if editKeyCheck === 'unsupported'}
+              <p class="mt-1.5 text-xs text-text-subtle">
+                This provider has no key check, so the new key is saved unverified.
+              </p>
+            {:else if editKeyError}
+              <p class="mt-1.5 text-xs text-red-500">{editKeyError}</p>
+            {/if}
           </div>
         {/if}
 

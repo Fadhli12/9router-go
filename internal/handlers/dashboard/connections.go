@@ -234,9 +234,33 @@ func maskConnectionName(name string) string {
 	return name
 }
 
+// maskConnectionSecret renders a stored credential as a non-reversible hint for
+// the edit-connection form (issue #154): enough to confirm *which* key is on
+// file, never enough to replay it. Same shape as maskClientKey, which the
+// dashboard already uses for client API keys.
+func maskConnectionSecret(secret string) string {
+	if len(secret) <= 12 {
+		return "***"
+	}
+	return secret[:6] + "…" + secret[len(secret)-4:]
+}
+
+// connectionSecretHint returns the credential a connection actually
+// authenticates with, in the precedence the runtime uses: the OAuth access
+// token first (falling back to the mirrored apiKey), then the plain apiKey.
+func connectionSecretHint(data map[string]any) string {
+	for _, field := range []string{"accessToken", "apiKey"} {
+		if v, ok := data[field].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // sanitizeProviderConnection mirrors upstream sanitize(): only safe fields,
 // secrets in data JSON never leave the server.
 func sanitizeProviderConnection(c *models.ProviderConnection) map[string]any {
+
 	safe := map[string]any{
 		"id": c.ID, "provider": c.Provider, "authType": c.AuthType,
 		"isActive": c.IsActive, "createdAt": c.CreatedAt, "updatedAt": c.UpdatedAt,
@@ -256,6 +280,15 @@ func sanitizeProviderConnection(c *models.ProviderConnection) map[string]any {
 	var data map[string]any
 	if err := json.Unmarshal([]byte(c.Data), &data); err != nil || data == nil {
 		return safe
+	}
+
+	// Issue #154: the edit-connection form needs to show which credential is on
+	// file so a blank field can mean "keep the current one". accessToken wins
+	// where present, because that is the credential an OAuth connection
+	// actually sends and usage_credentials.go falls back only the other way.
+	// Only the mask leaves the server — the raw secret stays dropped.
+	if secret := connectionSecretHint(data); secret != "" {
+		safe["apiKeyMasked"] = maskConnectionSecret(secret)
 	}
 	for _, f := range []string{
 		"displayName", "defaultModel", "testStatus", "lastError", "lastErrorAt",
@@ -532,6 +565,14 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 	_, hasPSD := rawBody["providerSpecificData"]
 	_, hasAssignedModel := rawBody["assignedModel"]
 	_, hasProxyPool := rawBody["proxyPoolId"]
+	// Issue #154: rotating the credential from the edit modal. Blank (or
+	// whitespace-only) means "keep the stored key" — the modal shows it as a
+	// mask and sends nothing when the user did not type one.
+	newAPIKey := ""
+	if s, ok := rawBody["apiKey"].(string); ok {
+		newAPIKey = strings.TrimSpace(s)
+	}
+	hasAPIKey := newAPIKey != ""
 	a, hasIsActive := rawBody["isActive"].(bool)
 
 	// Upstream normalizeProxyPoolUpdate: null/""/"__none__" unbinds, anything
@@ -562,7 +603,7 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 	}
 
 	// Fast path: if only updating active status
-	if hasIsActive && !hasName && !hasPriority && !hasData && !hasPSD && !hasAssignedModel && !hasProxyPool {
+	if hasIsActive && !hasName && !hasPriority && !hasData && !hasPSD && !hasAssignedModel && !hasProxyPool && !hasAPIKey {
 		if err := h.Repo.SetConnectionStatus(id, a); err != nil {
 			handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -591,7 +632,7 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 	}
 
 	dataStr := existing.Data
-	if hasData || hasPSD || hasAssignedModel || hasProxyPool {
+	if hasData || hasPSD || hasAssignedModel || hasProxyPool || hasAPIKey {
 		dataMap := make(map[string]any)
 		if existing.Data != "" {
 			_ = json.Unmarshal([]byte(existing.Data), &dataMap)
@@ -625,6 +666,15 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 					dataMap[k] = v
 				}
 			}
+		}
+
+		// Issue #154: credential rotation. Only the key itself is replaced —
+		// testStatus/lastError stay whatever the last probe decided. The modal
+		// clears them explicitly once it has validated the new key against the
+		// provider, which is the only evidence that justifies marking the row
+		// active again (upstream EditConnectionModal sends testStatus).
+		if hasAPIKey {
+			dataMap["apiKey"] = newAPIKey
 		}
 
 		if hasPSD {

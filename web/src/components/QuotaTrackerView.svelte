@@ -22,6 +22,12 @@
   import { copyToClipboard } from '../lib/clipboard'
   import Toggle from '../lib/ui/Toggle.svelte'
   import { getIconPath } from './connections/types'
+  import {
+    credentialPlaceholder,
+    credentialUpdate,
+    probeReplacementKey,
+    type CredentialCheck
+  } from './connections/credential'
   import QuotaTable from './quota/QuotaTable.svelte'
   import {
     ACCOUNT_FILTER_OPTIONS,
@@ -118,6 +124,12 @@
   let editTestStatus = $state<'ok' | 'error' | null>(null)
   let editTestError = $state<string | null>(null)
   let isSavingEdit = $state(false)
+  // Issue #154: credential rotation from the account editor. Shares the
+  // helper and the wording with the providers tab's edit modal.
+  let editAPIKey = $state('')
+  let editKeyCheck = $state<CredentialCheck>(null)
+  let editKeyError = $state<string | null>(null)
+  let isCheckingEditKey = $state(false)
   let copiedArnId = $state<string | null>(null)
 
   // Timers
@@ -372,6 +384,28 @@
     editPriority = conn.priority ?? 1
     editTestStatus = null
     editTestError = null
+    editAPIKey = ''
+    editKeyCheck = null
+    editKeyError = null
+  }
+
+  /** On-demand probe of the typed key, for the Check button beside the field. */
+  async function checkReplacementKey() {
+    if (!editingConnection || !editAPIKey.trim()) return
+    isCheckingEditKey = true
+    editKeyError = null
+    try {
+      const { check, error } = await probeReplacementKey(editingConnection, editAPIKey)
+      editKeyCheck = check
+      editKeyError = error
+    } finally {
+      isCheckingEditKey = false
+    }
+  }
+
+  function resetKeyCheck() {
+    editKeyCheck = null
+    editKeyError = null
   }
 
   async function testEditingConnection() {
@@ -399,10 +433,27 @@
     if (!editingConnection) return
     isSavingEdit = true
     try {
-      await api.updateConnection(editingConnection.id, {
+      const payload: { name: string; priority: number; apiKey?: string; testStatus?: string } = {
         name: editName.trim(),
         priority: editPriority,
-      })
+      }
+      const rotation = credentialUpdate(editAPIKey)
+      if (rotation) {
+        // A key the provider rejects is never written: the stored one is the
+        // only thing keeping this account in rotation.
+        const { check, error } = await probeReplacementKey(editingConnection, rotation.apiKey)
+        editKeyCheck = check
+        editKeyError = error
+        if (error) {
+          isSavingEdit = false
+          return
+        }
+        payload.apiKey = rotation.apiKey
+        // Only a provider that actually answered may mark the row active
+        // again; an unsupported probe proves nothing about the new key.
+        if (check === 'valid') payload.testStatus = 'active'
+      }
+      await api.updateConnection(editingConnection.id, payload)
       editingConnection = null
       await fetchConnections(page)
     } catch (err) {
@@ -1422,6 +1473,43 @@
             class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background text-text-main focus:outline-none focus:border-primary"
           />
         </div>
+
+        {#if editingConnection.authType !== 'oauth'}
+          <div>
+            <label class="block text-xs font-medium text-text-muted mb-1" for="edit-quota-key">
+              API (leave blank to keep the key on file)
+            </label>
+            <div class="flex gap-2">
+              <input
+                id="edit-quota-key"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder={credentialPlaceholder(editingConnection)}
+                bind:value={editAPIKey}
+                oninput={resetKeyCheck}
+                class="min-w-0 flex-1 px-2.5 py-1.5 text-xs border border-border rounded-md bg-background text-text-main focus:outline-none focus:border-primary"
+              />
+              <button
+                type="button"
+                onclick={checkReplacementKey}
+                disabled={!editAPIKey.trim() || isCheckingEditKey || isSavingEdit}
+                class="shrink-0 px-2.5 py-1.5 text-xs font-medium rounded-md border border-border text-text-main hover:bg-surface-2 transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                {isCheckingEditKey ? 'Checking' : 'Check'}
+              </button>
+            </div>
+            {#if editKeyCheck === 'valid'}
+              <p class="mt-1.5 text-xs text-emerald-600 dark:text-emerald-400">The provider accepted this key.</p>
+            {:else if editKeyCheck === 'unsupported'}
+              <p class="mt-1.5 text-xs text-text-subtle">
+                This provider has no key check, so the new key is saved unverified.
+              </p>
+            {:else if editKeyError}
+              <p class="mt-1.5 text-xs text-red-500">{editKeyError}</p>
+            {/if}
+          </div>
+        {/if}
 
         <div>
           <label class="block text-xs font-medium text-text-muted mb-1" for="edit-quota-priority">Priority</label>
