@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { cachedTokensFor, fmt, type RequestDetailItem } from './types'
+import { cachedTokensFor, fmt, providerDisplayName, type RequestDetailItem } from './types'
 
 describe('request detail token formatting', () => {
   it('prefers canonical cached_tokens', () => {
@@ -40,5 +40,26 @@ describe('request detail token formatting', () => {
   it('renders missing cache usage as zero', () => {
     expect(fmt(cachedTokensFor({}))).toBe('0')
     expect(fmt(cachedTokensFor({ tokens: { cached_tokens: 0, cache_read_input_tokens: 25 } }))).toBe('0')
+  })
+})
+
+describe('providerDisplayName', () => {
+  it('maps a custom compatible node id to its configured name', () => {
+    const nodes = [{ id: 'openai-compatible-chat-abc', name: 'My vLLM' }]
+
+    expect(providerDisplayName('openai-compatible-chat-abc', nodes)).toBe('My vLLM')
+  })
+
+  it('resolves catalog providers by id', () => {
+    expect(providerDisplayName('deepseek')).toBe('DeepSeek')
+  })
+
+  it('passes an unknown id through unchanged', () => {
+    expect(providerDisplayName('some-unknown-provider')).toBe('some-unknown-provider')
+  })
+
+  it('renders missing provider as unknown', () => {
+    expect(providerDisplayName(undefined)).toBe('unknown')
+    expect(providerDisplayName('')).toBe('unknown')
   })
 })

@@ -539,6 +539,7 @@
       {detailsLoading}
       onPageChange={loadDetails}
       onRefresh={() => loadDetails(detailsPage)}
+      {providerNodes}
     />
   {/if}
 </div>
