@@ -257,7 +257,18 @@ func TranslateOpenAIToGemini(openaiBody []byte) ([]byte, error) {
 					ts = DefaultThinkingSignature
 				}
 				firstFunctionCallSeen = true
-				gp := GeminiPart{FunctionCall: &GeminiFunctionCall{Name: tc.Function.Name, Args: args}, ThoughtSignature: ts}
+				cleanTCID := tc.ID
+				if idx := strings.LastIndex(cleanTCID, "__ts__"); idx != -1 {
+					cleanTCID = cleanTCID[:idx]
+				}
+				gp := GeminiPart{
+					FunctionCall: &GeminiFunctionCall{
+						Name: tc.Function.Name,
+						Args: args,
+						ID:   cleanTCID,
+					},
+					ThoughtSignature: ts,
+				}
 				parts = append(parts, gp)
 			}
 
@@ -464,12 +475,15 @@ func TranslateGeminiResponseToOpenAI(geminiBody []byte) ([]byte, *OpenAIUsage, e
 					args = []byte("{}")
 				}
 				fnName := UncloakToolName(part.FunctionCall.Name, nil)
-				id := fmt.Sprintf("call_%s_%d", fnName, len(toolCalls))
+				id := part.FunctionCall.ID
+				if id == "" {
+					id = fmt.Sprintf("call_%s_%d", fnName, len(toolCalls))
+				}
 				sig := part.ThoughtSignature
 				if sig == "" {
 					sig = lastSig
 				}
-				if sig != "" {
+				if sig != "" && !strings.Contains(id, "__ts__") {
 					id += "__ts__" + sig
 				}
 				toolCalls = append(toolCalls, OpenAIToolCall{
@@ -631,14 +645,19 @@ func TranslateGeminiChunkToOpenAI(chunk []byte, state *GeminiStreamState) ([]byt
 						args = []byte("{}")
 					}
 					fnName := UncloakToolName(part.FunctionCall.Name, nil)
-					id := fmt.Sprintf("call_%s_%d", fnName, time.Now().UnixNano())
+					id := part.FunctionCall.ID
+					if id == "" {
+						id = fmt.Sprintf("call_%s_%d", fnName, time.Now().UnixNano())
+					}
 					sig := part.ThoughtSignature
 					if sig == "" {
 						sig = state.LastThoughtSignature
 					}
 					if sig != "" {
 						StoreGeminiThoughtSignature(id, sig, state.MessageId, state.Model)
-						id += "__ts__" + sig
+						if !strings.Contains(id, "__ts__") {
+							id += "__ts__" + sig
+						}
 					}
 					delta["tool_calls"] = []map[string]any{
 						{

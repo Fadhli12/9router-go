@@ -3,6 +3,7 @@ package translator
 import (
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -626,5 +627,143 @@ func TestHardenAntigravityRequest_GuardsThinkingBudget(t *testing.T) {
 	maxTokens := gc["maxOutputTokens"].(float64)
 	if maxTokens <= 4096 {
 		t.Errorf("expected maxOutputTokens (%v) > 4096", maxTokens)
+	}
+}
+
+func TestTranslateOpenAIToGemini_ToolCallIDPreserved(t *testing.T) {
+	tests := []struct {
+		name        string
+		toolCallID  string
+		toolRespID  string
+		wantCleanID string
+	}{
+		{
+			name:        "plain tool call id",
+			toolCallID:  "call_weather_123",
+			toolRespID:  "call_weather_123",
+			wantCleanID: "call_weather_123",
+		},
+		{
+			name:        "claude tool use id",
+			toolCallID:  "toolu_01ABC123XYZ",
+			toolRespID:  "toolu_01ABC123XYZ",
+			wantCleanID: "toolu_01ABC123XYZ",
+		},
+		{
+			name:        "tool call id with thought signature suffix",
+			toolCallID:  "call_calc_456__ts__EvEFCu4FAQw...",
+			toolRespID:  "call_calc_456__ts__EvEFCu4FAQw...",
+			wantCleanID: "call_calc_456",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqBody := fmt.Sprintf(`{
+				"model": "gemini-2.5-pro",
+				"messages": [
+					{"role": "user", "content": "What is 2+2?"},
+					{
+						"role": "assistant",
+						"tool_calls": [
+							{
+								"id": %q,
+								"type": "function",
+								"function": {
+									"name": "calculator",
+									"arguments": "{\"expr\":\"2+2\"}"
+								}
+							}
+						]
+					},
+					{
+						"role": "tool",
+						"tool_call_id": %q,
+						"content": "4"
+					}
+				]
+			}`, tt.toolCallID, tt.toolRespID)
+
+			geminiBytes, err := TranslateOpenAIToGemini([]byte(reqBody))
+			if err != nil {
+				t.Fatalf("TranslateOpenAIToGemini failed: %v", err)
+			}
+
+			var geminiReq GeminiRequest
+			if err := json.Unmarshal(geminiBytes, &geminiReq); err != nil {
+				t.Fatalf("unmarshal gemini request: %v", err)
+			}
+
+			var callPart *GeminiFunctionCall
+			var respPart *GeminiFunctionResp
+			for _, c := range geminiReq.Contents {
+				for _, p := range c.Parts {
+					if p.FunctionCall != nil {
+						callPart = p.FunctionCall
+					}
+					if p.FunctionResponse != nil {
+						respPart = p.FunctionResponse
+					}
+				}
+			}
+
+			if callPart == nil {
+				t.Fatal("expected functionCall part in contents")
+			}
+			if respPart == nil {
+				t.Fatal("expected functionResponse part in contents")
+			}
+
+			if callPart.ID != tt.wantCleanID {
+				t.Errorf("functionCall.ID = %q, want %q", callPart.ID, tt.wantCleanID)
+			}
+			if respPart.ID != tt.wantCleanID {
+				t.Errorf("functionResponse.ID = %q, want %q", respPart.ID, tt.wantCleanID)
+			}
+			if callPart.ID != respPart.ID {
+				t.Errorf("functionCall.ID %q does not match functionResponse.ID %q", callPart.ID, respPart.ID)
+			}
+		})
+	}
+}
+
+func TestTranslateGeminiResponseToOpenAI_PreservesFunctionCallID(t *testing.T) {
+	geminiResp := `{
+		"candidates": [{
+			"content": {
+				"role": "model",
+				"parts": [{
+					"functionCall": {
+						"id": "toolu_01ExplicitID",
+						"name": "lookup",
+						"args": {"q": "golang"}
+					}
+				}]
+			},
+			"finishReason": "STOP"
+		}]
+	}`
+
+	openaiBytes, _, err := TranslateGeminiResponseToOpenAI([]byte(geminiResp))
+	if err != nil {
+		t.Fatalf("TranslateGeminiResponseToOpenAI failed: %v", err)
+	}
+
+	var openaiResp struct {
+		Choices []struct {
+			Message struct {
+				ToolCalls []OpenAIToolCall `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(openaiBytes, &openaiResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(openaiResp.Choices) == 0 || len(openaiResp.Choices[0].Message.ToolCalls) == 0 {
+		t.Fatal("expected tool call in choice")
+	}
+	tc := openaiResp.Choices[0].Message.ToolCalls[0]
+	if tc.ID != "toolu_01ExplicitID" {
+		t.Errorf("expected tool_call.id %q, got %q", "toolu_01ExplicitID", tc.ID)
 	}
 }
