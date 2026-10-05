@@ -275,17 +275,20 @@ func TranslateOpenAIToGemini(openaiBody []byte) ([]byte, error) {
 			if name == "" {
 				name = tcID2Name[cleanID]
 			}
+
+			// If this tool message cannot be paired with an assistant tool call (e.g. background task
+			// notifications or system status updates injected with role: "tool"), converting it into an
+			// orphan Gemini functionResponse causes upstream (especially Antigravity Claude / Vertex AI)
+			// to synthesize a phantom tool_use without an ID and reject the request with HTTP 400
+			// ("messages.1.content.1.tool_use.id: Field required").
+			// Instead, treat orphan tool messages cleanly as regular user text content.
 			if name == "" {
-				name = cleanID
-				if strings.HasPrefix(name, "call_") {
-					rest := strings.TrimPrefix(name, "call_")
-					if lastUnderscore := strings.LastIndex(rest, "_"); lastUnderscore > 0 {
-						name = rest[:lastUnderscore]
-					} else {
-						name = rest
-					}
-				}
+				parts := []GeminiPart{{Text: content}}
+				parts = append(parts, geminiToolMediaParts(msg.Content)...)
+				req.Contents = append(req.Contents, GeminiContent{Role: "user", Parts: parts})
+				continue
 			}
+
 			// Tool result content may be plain text or JSON.
 			// Gemini requires the result to be valid JSON.
 			var resultValue any
@@ -298,6 +301,7 @@ func TranslateOpenAIToGemini(openaiBody []byte) ([]byte, error) {
 			parts := []GeminiPart{{
 				FunctionResponse: &GeminiFunctionResp{
 					Name:     name,
+					ID:       cleanID,
 					Response: &GeminiFuncResp{Result: resultValue},
 				},
 			}}
