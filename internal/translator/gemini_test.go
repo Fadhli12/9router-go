@@ -767,3 +767,283 @@ func TestTranslateGeminiResponseToOpenAI_PreservesFunctionCallID(t *testing.T) {
 		t.Errorf("expected tool_call.id %q, got %q", "toolu_01ExplicitID", tc.ID)
 	}
 }
+
+type geminiStreamChunkOut struct {
+	Choices []struct {
+		FinishReason *string `json:"finish_reason"`
+		Delta        struct {
+			ToolCalls []struct {
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"delta"`
+	} `json:"choices"`
+}
+
+func parseGeminiSSE(t *testing.T, sse string) []geminiStreamChunkOut {
+	t.Helper()
+	var out []geminiStreamChunkOut
+	for _, line := range strings.Split(strings.TrimSpace(sse), "\n\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		if payload == line || payload == "[DONE]" {
+			continue
+		}
+		var c geminiStreamChunkOut
+		if err := json.Unmarshal([]byte(payload), &c); err != nil {
+			t.Fatalf("unmarshal SSE chunk %q: %v", payload, err)
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func lastFinishReason(chunks []geminiStreamChunkOut) (string, bool) {
+	for i := len(chunks) - 1; i >= 0; i-- {
+		if len(chunks[i].Choices) > 0 && chunks[i].Choices[0].FinishReason != nil {
+			return *chunks[i].Choices[0].FinishReason, true
+		}
+	}
+	return "", false
+}
+
+func TestGeminiStreamFinishReason_ToolCallsInSeparateChunk(t *testing.T) {
+	state := &GeminiStreamState{}
+
+	toolChunk := `{
+		"candidates": [{
+			"content": {
+				"role": "model",
+				"parts": [{
+					"functionCall": {"name": "get_weather", "args": {"location": "Jakarta"}}
+				}]
+			},
+			"index": 0
+		}]
+	}`
+	finishChunk := `{
+		"candidates": [{
+			"finishReason": "STOP",
+			"index": 0
+		}]
+	}`
+
+	if _, err := TranslateGeminiChunkToOpenAI([]byte(toolChunk), state); err != nil {
+		t.Fatalf("tool chunk failed: %v", err)
+	}
+	out, err := TranslateGeminiChunkToOpenAI([]byte(finishChunk), state)
+	if err != nil {
+		t.Fatalf("finish chunk failed: %v", err)
+	}
+
+	chunks := parseGeminiSSE(t, string(out))
+	got, ok := lastFinishReason(chunks)
+	if !ok {
+		t.Fatalf("no chunk with finish_reason in output:\n%s", string(out))
+	}
+	if got != "tool_calls" {
+		t.Errorf("expected finish_reason %q when tool calls were streamed, got %q", "tool_calls", got)
+	}
+	if !state.HasToolCalls {
+		t.Error("expected state.HasToolCalls to be true after emitting a tool call")
+	}
+}
+
+func TestGeminiStreamFinishReason_ToolCallAndFinishInSameChunk(t *testing.T) {
+	state := &GeminiStreamState{}
+
+	sameChunk := `{
+		"candidates": [{
+			"content": {
+				"role": "model",
+				"parts": [{
+					"functionCall": {"name": "search_web", "args": {"query": "golang sse"}}
+				}]
+			},
+			"finishReason": "STOP",
+			"index": 0
+		}]
+	}`
+
+	out, err := TranslateGeminiChunkToOpenAI([]byte(sameChunk), state)
+	if err != nil {
+		t.Fatalf("translate failed: %v", err)
+	}
+
+	chunks := parseGeminiSSE(t, string(out))
+	var sawToolCall bool
+	for _, c := range chunks {
+		if len(c.Choices) > 0 && len(c.Choices[0].Delta.ToolCalls) > 0 {
+			sawToolCall = true
+		}
+	}
+	if !sawToolCall {
+		t.Fatalf("no tool_calls delta in output:\n%s", string(out))
+	}
+	got, ok := lastFinishReason(chunks)
+	if !ok {
+		t.Fatalf("no chunk with finish_reason in output:\n%s", string(out))
+	}
+	if got != "tool_calls" {
+		t.Errorf("expected finish_reason %q, got %q", "tool_calls", got)
+	}
+}
+
+func TestGeminiStreamFinishReason_StopWithoutToolCalls(t *testing.T) {
+	state := &GeminiStreamState{}
+
+	textChunk := `{
+		"candidates": [{
+			"content": {"role": "model", "parts": [{"text": "hello"}]},
+			"index": 0
+		}]
+	}`
+	finishChunk := `{
+		"candidates": [{"finishReason": "STOP", "index": 0}]
+	}`
+
+	if _, err := TranslateGeminiChunkToOpenAI([]byte(textChunk), state); err != nil {
+		t.Fatalf("text chunk failed: %v", err)
+	}
+	out, err := TranslateGeminiChunkToOpenAI([]byte(finishChunk), state)
+	if err != nil {
+		t.Fatalf("finish chunk failed: %v", err)
+	}
+
+	chunks := parseGeminiSSE(t, string(out))
+	got, ok := lastFinishReason(chunks)
+	if !ok {
+		t.Fatalf("no chunk with finish_reason in output:\n%s", string(out))
+	}
+	if got != "stop" {
+		t.Errorf("expected finish_reason %q for text-only stream, got %q", "stop", got)
+	}
+	if state.HasToolCalls {
+		t.Error("expected state.HasToolCalls to stay false for a text-only stream")
+	}
+}
+
+func TestGeminiStreamFinishReason_MaxTokensKeepsLength(t *testing.T) {
+	state := &GeminiStreamState{}
+
+	toolChunk := `{
+		"candidates": [{
+			"content": {
+				"role": "model",
+				"parts": [{
+					"functionCall": {"name": "get_weather", "args": {"location": "Tokyo"}}
+				}]
+			},
+			"index": 0
+		}]
+	}`
+	finishChunk := `{
+		"candidates": [{"finishReason": "MAX_TOKENS", "index": 0}]
+	}`
+
+	if _, err := TranslateGeminiChunkToOpenAI([]byte(toolChunk), state); err != nil {
+		t.Fatalf("tool chunk failed: %v", err)
+	}
+	out, err := TranslateGeminiChunkToOpenAI([]byte(finishChunk), state)
+	if err != nil {
+		t.Fatalf("finish chunk failed: %v", err)
+	}
+
+	chunks := parseGeminiSSE(t, string(out))
+	got, ok := lastFinishReason(chunks)
+	if !ok {
+		t.Fatalf("no chunk with finish_reason in output:\n%s", string(out))
+	}
+	if got != "length" {
+		t.Errorf("expected finish_reason %q for MAX_TOKENS even with tool calls, got %q", "length", got)
+	}
+}
+
+func TestGeminiStreamFinishReason_MultipleToolCallsAcrossChunks(t *testing.T) {
+	state := &GeminiStreamState{}
+
+	parallelChunk := `{
+		"candidates": [{
+			"content": {
+				"role": "model",
+				"parts": [
+					{"functionCall": {"name": "get_weather", "args": {"location": "Jakarta"}}},
+					{"functionCall": {"name": "get_time", "args": {"tz": "Asia/Jakarta"}}}
+				]
+			},
+			"index": 0
+		}]
+	}`
+	finishChunk := `{
+		"candidates": [{"finishReason": "STOP", "index": 0}],
+		"usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5}
+	}`
+
+	out, err := TranslateGeminiChunkToOpenAI([]byte(parallelChunk), state)
+	if err != nil {
+		t.Fatalf("parallel tool chunk failed: %v", err)
+	}
+	chunks := parseGeminiSSE(t, string(out))
+	var toolCallChunks int
+	for _, c := range chunks {
+		if len(c.Choices) > 0 && len(c.Choices[0].Delta.ToolCalls) > 0 {
+			toolCallChunks++
+		}
+	}
+	if toolCallChunks != 2 {
+		t.Fatalf("expected one tool_calls delta per parallel tool call (2), got %d:\n%s", toolCallChunks, string(out))
+	}
+
+	out, err = TranslateGeminiChunkToOpenAI([]byte(finishChunk), state)
+	if err != nil {
+		t.Fatalf("finish chunk failed: %v", err)
+	}
+	chunks = parseGeminiSSE(t, string(out))
+	got, ok := lastFinishReason(chunks)
+	if !ok {
+		t.Fatalf("no chunk with finish_reason in output:\n%s", string(out))
+	}
+	if got != "tool_calls" {
+		t.Errorf("expected finish_reason %q after multiple tool calls, got %q", "tool_calls", got)
+	}
+}
+
+func TestGeminiStreamFinishReason_StateIsolatedPerStream(t *testing.T) {
+	first := &GeminiStreamState{}
+	toolChunk := `{
+		"candidates": [{
+			"content": {
+				"role": "model",
+				"parts": [{"functionCall": {"name": "get_weather", "args": {"location": "Jakarta"}}}]
+			},
+			"index": 0
+		}]
+	}`
+	if _, err := TranslateGeminiChunkToOpenAI([]byte(toolChunk), first); err != nil {
+		t.Fatalf("tool chunk failed: %v", err)
+	}
+	if !first.HasToolCalls {
+		t.Fatal("first stream state should have HasToolCalls=true")
+	}
+
+	second := &GeminiStreamState{}
+	finishChunk := `{"candidates": [{"finishReason": "STOP", "index": 0}]}`
+	out, err := TranslateGeminiChunkToOpenAI([]byte(finishChunk), second)
+	if err != nil {
+		t.Fatalf("finish chunk failed: %v", err)
+	}
+	chunks := parseGeminiSSE(t, string(out))
+	got, ok := lastFinishReason(chunks)
+	if !ok {
+		t.Fatalf("no chunk with finish_reason in output:\n%s", string(out))
+	}
+	if got != "stop" {
+		t.Errorf("fresh state without tool calls must emit %q, got %q", "stop", got)
+	}
+}

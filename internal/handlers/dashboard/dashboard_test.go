@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"9router/proxy/internal/concurrency"
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/models"
 )
@@ -367,6 +368,53 @@ func TestCombosEndpoints(t *testing.T) {
 	combo, _ = repo.GetComboById("combo-1")
 	if combo != nil {
 		t.Fatalf("expected combo to be deleted, got: %+v", combo)
+	}
+}
+
+func TestKeysConcurrencyEndpoint(t *testing.T) {
+	repo, cleanup := setupTestDB(t)
+	defer cleanup()
+	router := setupTestRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/keys/concurrency", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/keys/concurrency expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Active map[string]int `json:"active"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal concurrency response: %v", err)
+	}
+	if resp.Active == nil {
+		t.Fatalf("expected non-nil active map, got %v", resp)
+	}
+
+	// Acquiring a slot against a key must show up in the snapshot under that
+	// key's SHA-256 digest, not under the plaintext key.
+	release, ok := concurrency.GlobalLimiter.Acquire("sk-concurrency-test-key", 1)
+	if !ok {
+		t.Fatal("expected limiter acquire to succeed")
+	}
+	defer release()
+
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req.Clone(req.Context()))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/keys/concurrency (with active key) expected 200, got %d", rec.Code)
+	}
+	resp.Active = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal concurrency response: %v", err)
+	}
+	if resp.Active[concurrency.HashKey("sk-concurrency-test-key")] != 1 {
+		t.Fatalf("expected active count 1 under key hash, got %v", resp.Active)
+	}
+	if _, found := resp.Active["sk-concurrency-test-key"]; found {
+		t.Fatal("concurrency snapshot must not expose plaintext keys")
 	}
 }
 

@@ -1,6 +1,7 @@
 package concurrency
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -80,9 +81,9 @@ func TestLimiter_EnforcesLimit(t *testing.T) {
 	}
 
 	// Entry must be deleted from map when 0
-	l.mu.Lock()
-	_, exists := l.entries["keyA"]
-	l.mu.Unlock()
+	l.mu.RLock()
+	_, exists := l.entries[hashKey("keyA")]
+	l.mu.RUnlock()
 	if exists {
 		t.Fatalf("expected keyA entry to be evicted from map when count is 0")
 	}
@@ -116,5 +117,120 @@ func TestLimiter_ConcurrentGoroutines(t *testing.T) {
 
 	if l.ActiveCount("keyConc") != 0 {
 		t.Fatalf("expected final active count 0, got %d", l.ActiveCount("keyConc"))
+	}
+}
+
+func TestLimiter_AcquireWithTimeout_WaitsForSlot(t *testing.T) {
+	l := NewLimiter()
+	const limit = 1
+
+	r1, ok := l.Acquire("waitKey", limit)
+	if !ok {
+		t.Fatal("expected first acquire to succeed")
+	}
+
+	releaseAfter := 40 * time.Millisecond
+	go func() {
+		time.Sleep(releaseAfter)
+		r1()
+	}()
+
+	start := time.Now()
+	r2, err := l.AcquireWithTimeout(context.Background(), "waitKey", limit, 2*time.Second)
+	if err != nil {
+		t.Fatalf("expected AcquireWithTimeout to succeed after slot release, got %v", err)
+	}
+	if r2 == nil {
+		t.Fatal("expected non-nil release func")
+	}
+	if elapsed := time.Since(start); elapsed < releaseAfter {
+		t.Fatalf("expected to wait for slot release (>= %v), got %v", releaseAfter, elapsed)
+	}
+	r2()
+	if l.ActiveCount("waitKey") != 0 {
+		t.Fatalf("expected active count 0, got %d", l.ActiveCount("waitKey"))
+	}
+}
+
+func TestLimiter_AcquireWithTimeout_TimesOut(t *testing.T) {
+	l := NewLimiter()
+	const limit = 1
+
+	r1, ok := l.Acquire("timeoutKey", limit)
+	if !ok {
+		t.Fatal("expected first acquire to succeed")
+	}
+	defer r1()
+
+	start := time.Now()
+	r2, err := l.AcquireWithTimeout(context.Background(), "timeoutKey", limit, 50*time.Millisecond)
+	if err == nil {
+		r2()
+		t.Fatal("expected AcquireWithTimeout to time out")
+	}
+	if elapsed := time.Since(start); elapsed < 50*time.Millisecond {
+		t.Fatalf("expected to wait until timeout, got %v", elapsed)
+	}
+	if l.ActiveCount("timeoutKey") != 1 {
+		t.Fatalf("expected active count to remain 1, got %d", l.ActiveCount("timeoutKey"))
+	}
+}
+
+func TestLimiter_AcquireWithTimeout_ContextCancel(t *testing.T) {
+	l := NewLimiter()
+	const limit = 1
+
+	r1, ok := l.Acquire("ctxKey", limit)
+	if !ok {
+		t.Fatal("expected first acquire to succeed")
+	}
+	defer r1()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := l.AcquireWithTimeout(ctx, "ctxKey", limit, 2*time.Second)
+	if err == nil {
+		t.Fatal("expected AcquireWithTimeout to fail on context cancellation")
+	}
+}
+
+func TestLimiter_AcquireWithTimeout_NoWait(t *testing.T) {
+	l := NewLimiter()
+	const limit = 1
+
+	r1, ok := l.Acquire("noWaitKey", limit)
+	if !ok {
+		t.Fatal("expected first acquire to succeed")
+	}
+	defer r1()
+
+	_, err := l.AcquireWithTimeout(context.Background(), "noWaitKey", limit, 0)
+	if err != ErrNoWait {
+		t.Fatalf("expected ErrNoWait, got %v", err)
+	}
+}
+
+func TestLimiter_GetActiveCounts(t *testing.T) {
+	l := NewLimiter()
+
+	r1, ok := l.Acquire("countsKey", 3)
+	if !ok {
+		t.Fatal("expected acquire to succeed")
+	}
+	defer r1()
+
+	counts := l.GetActiveCounts()
+	keyHash := hashKey("countsKey")
+	if counts[keyHash] != 1 {
+		t.Fatalf("expected active count 1 for %s, got %v", keyHash, counts)
+	}
+
+	// The snapshot must not expose plaintext keys.
+	if _, found := counts["countsKey"]; found {
+		t.Fatal("GetActiveCounts must only contain hashed keys")
 	}
 }

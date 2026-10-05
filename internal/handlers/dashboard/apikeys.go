@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"9router/proxy/internal/auth"
+	"9router/proxy/internal/concurrency"
 	"9router/proxy/internal/handlerutil"
 )
 
@@ -22,6 +23,9 @@ import (
 // them at the guard), this router lets API keys through dashboard auth for
 // CLI compat, so listing full secrets there would let one leaked key dump
 // them all. Creation still returns the full value once.
+//
+// Each key also carries `activeCount`, its current in-flight request count
+// from the process-local concurrency limiter (0 when unlimited or idle).
 func (h *DashboardHandler) HandleGetApiKeys(w http.ResponseWriter, r *http.Request) {
 	reveal := auth.SessionValid(r) ||
 		auth.ValidCLIToken(r.Header.Get(auth.CLITokenHeader)) ||
@@ -31,11 +35,13 @@ func (h *DashboardHandler) HandleGetApiKeys(w http.ResponseWriter, r *http.Reque
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	active := concurrency.GlobalLimiter.GetActiveCounts()
 	sanitized := make([]map[string]any, 0, len(keys))
 	for _, k := range keys {
 		if k == nil {
 			continue
 		}
+		activeCount := active[concurrency.HashKey(k.Key)]
 		key := k.Key
 		if !reveal {
 			key = maskClientKey(key)
@@ -43,10 +49,18 @@ func (h *DashboardHandler) HandleGetApiKeys(w http.ResponseWriter, r *http.Reque
 		sanitized = append(sanitized, map[string]any{
 			"id": k.ID, "key": key, "name": k.Name,
 			"machineId": k.MachineID, "isActive": k.IsActive, "createdAt": k.CreatedAt,
-			"maxConcurrent": k.MaxConcurrent,
+			"maxConcurrent": k.MaxConcurrent, "activeCount": activeCount,
 		})
 	}
 	handlerutil.WriteJSON(w, http.StatusOK, sanitized)
+}
+
+// HandleKeysConcurrency handles GET /api/keys/concurrency and returns the
+// process-local in-flight request snapshot: { "active": { "<keyHash>": count } }.
+func (h *DashboardHandler) HandleKeysConcurrency(w http.ResponseWriter, r *http.Request) {
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"active": concurrency.GlobalLimiter.GetActiveCounts(),
+	})
 }
 
 // maskClientKey shows the first/last few chars of a client key (dashboard

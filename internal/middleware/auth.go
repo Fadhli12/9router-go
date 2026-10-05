@@ -75,10 +75,12 @@ func RequireApiKey(repo *db.Repo) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Concurrency limit enforcement per API key
+			// Concurrency limit enforcement per API key. When the limit is
+			// reached we wait briefly (grace period) for a slot to free up
+			// instead of rejecting with 429 immediately.
 			if apiKeyObj.MaxConcurrent != nil && *apiKeyObj.MaxConcurrent > 0 {
-				release, ok := concurrency.GlobalLimiter.Acquire(apiKeyObj.Key, *apiKeyObj.MaxConcurrent)
-				if !ok {
+				release, err := concurrency.GlobalLimiter.AcquireWithTimeout(r.Context(), apiKeyObj.Key, *apiKeyObj.MaxConcurrent, concurrency.DefaultAcquireTimeout)
+				if err != nil {
 					handlerutil.WriteJSONError(w, http.StatusTooManyRequests, fmt.Sprintf("Concurrent request limit exceeded for this API key (%d allowed)", *apiKeyObj.MaxConcurrent))
 					return
 				}

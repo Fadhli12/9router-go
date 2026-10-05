@@ -79,6 +79,7 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 
 		// API Keys
 		r.Get("/keys", h.HandleGetApiKeys)
+		r.Get("/keys/concurrency", h.HandleKeysConcurrency)
 		r.Post("/keys", h.HandleCreateApiKey)
 		r.Delete("/keys/{id}", h.HandleDeleteApiKey)
 		r.Put("/keys/{id}/toggle", h.HandleToggleApiKey)

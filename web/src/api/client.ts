@@ -47,6 +47,7 @@ export interface APIKey {
   isActive: number
   createdAt: string
   maxConcurrent?: number | null
+  activeCount?: number
 }
 
 export interface ProviderStrategyConfig {
@@ -692,6 +693,7 @@ return conns.map(normalizeConnection)
 
   // API Keys
   getApiKeys: () => request<APIKey[]>('/api/keys'),
+  getApiKeysConcurrency: () => request<{ active: Record<string, number> }>('/api/keys/concurrency'),
   createApiKey: (payload: { name?: string; machineId?: string; key?: string; maxConcurrent?: number }) =>
     request<{ success: boolean; id: string; key: string }>('/api/keys', {
       method: 'POST',

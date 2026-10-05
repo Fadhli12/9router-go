@@ -163,6 +163,7 @@
           {#each apiKeys as k (k.id)}
             {@const isActive = k.isActive === 1}
             {@const limit = k.maxConcurrent ?? 0}
+            {@const activeCount = k.activeCount ?? 0}
             <tr class="hover:bg-surface-2/40 transition">
               <td class="py-3 px-4 font-body font-bold text-text-main">{k.name || 'Client Token'}</td>
               <td class="py-3 px-4 text-text-muted">
@@ -185,18 +186,30 @@
                 </div>
               </td>
               <td class="py-3 px-4">
-                <button
-                  type="button"
-                  onclick={() => openEditLimit(k)}
-                  class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition hover:opacity-80 {limit > 0
-                    ? 'bg-brand-500/10 text-brand-400 border-brand-500/25'
-                    : 'bg-surface-2 text-text-subtle border-border'}"
-                  title="Click to edit concurrent session limit"
-                >
-                  <Users class="w-3 h-3" />
-                  <span>{limit > 0 ? `Max ${limit}` : 'Unlimited'}</span>
-                  <Edit2 class="w-2.5 h-2.5 opacity-60" />
-                </button>
+                <div class="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onclick={() => openEditLimit(k)}
+                    class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition hover:opacity-80 {limit > 0
+                      ? 'bg-brand-500/10 text-brand-400 border-brand-500/25'
+                      : 'bg-surface-2 text-text-subtle border-border'}"
+                    title="Click to edit concurrent session limit"
+                  >
+                    <Users class="w-3 h-3" />
+                    <span>{limit > 0 ? `Max ${limit}` : 'Unlimited'}</span>
+                    <Edit2 class="w-2.5 h-2.5 opacity-60" />
+                  </button>
+                  {#if limit > 0}
+                    <span
+                      class="px-1.5 py-0.5 rounded text-[10px] font-bold border {activeCount >= limit
+                        ? 'bg-warning/10 text-warning border-warning/25'
+                        : 'bg-info/10 text-info border-info/25'}"
+                      title="In-flight requests for this key"
+                    >
+                      Active: {activeCount} / {limit}
+                    </span>
+                  {/if}
+                </div>
               </td>
               <td class="py-3 px-4">
                 <span

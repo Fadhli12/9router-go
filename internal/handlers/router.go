@@ -205,7 +205,9 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	r.Post("/api/proxy-pools/deno-deploy", relayH.HandleDenoDeploy)
 	r.Post("/api/proxy-pools/cloudflare-deploy", relayH.HandleCloudflareDeploy)
 
+	// API Keys
 	r.Get("/api/keys", dashH.HandleGetApiKeys)
+	r.Get("/api/keys/concurrency", dashH.HandleKeysConcurrency)
 	r.Post("/api/keys", dashH.HandleCreateApiKey)
 	r.Delete("/api/keys/{id}", dashH.HandleDeleteApiKey)
 	r.Put("/api/keys/{id}/toggle", dashH.HandleToggleApiKey)

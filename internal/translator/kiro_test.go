@@ -216,6 +216,91 @@ func TestOpenAIToKiro_ProfileArnOnlyWhenProvided(t *testing.T) {
 	}
 }
 
+// TestOpenAIToKiro_OrphanToolResultBecomesText covers Kiro's
+// "Bad Request: Invalid tool use format." — a tool result whose
+// tool_call_id does not match any toolUseId emitted by the preceding
+// assistant turn must never reach userInputMessageContext.toolResults.
+func TestOpenAIToKiro_OrphanToolResultBecomesText(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"user","content":"weather?"},
+		{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"NYC\"}"}}]},
+		{"role":"tool","tool_call_id":"call_999_stale","content":"sunny"}
+	]}`)
+	out, err := OpenAIToKiro(body, KiroTranslateOptions{Model: "m"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := decodeKiro(t, out)
+	cs := m["conversationState"].(map[string]any)
+	cur := cs["currentMessage"].(map[string]any)["userInputMessage"].(map[string]any)
+
+	if ctx, ok := cur["userInputMessageContext"].(map[string]any); ok {
+		if results, _ := ctx["toolResults"].([]any); len(results) > 0 {
+			t.Fatalf("orphan tool result must not reach toolResults, got %v", results)
+		}
+	}
+	content, _ := cur["content"].(string)
+	if !strings.Contains(content, "sunny") {
+		t.Errorf("orphan tool result content should be folded into text, got %q", content)
+	}
+}
+
+// TestOpenAIToKiro_ToolMessageWithoutIDBecomesText covers rule 3: a tool-role
+// message with no tool_call_id at all must be sanitized to plain text rather
+// than silently dropped or passed through with an empty toolUseId.
+func TestOpenAIToKiro_ToolMessageWithoutIDBecomesText(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"user","content":"weather?"},
+		{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{}"}}]},
+		{"role":"tool","content":"sunny, no id attached"}
+	]}`)
+	out, err := OpenAIToKiro(body, KiroTranslateOptions{Model: "m"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := decodeKiro(t, out)
+	cs := m["conversationState"].(map[string]any)
+	cur := cs["currentMessage"].(map[string]any)["userInputMessage"].(map[string]any)
+
+	if ctx, ok := cur["userInputMessageContext"].(map[string]any); ok {
+		if results, _ := ctx["toolResults"].([]any); len(results) > 0 {
+			t.Fatalf("id-less tool message must not reach toolResults, got %v", results)
+		}
+	}
+	content, _ := cur["content"].(string)
+	if !strings.Contains(content, "sunny, no id attached") {
+		t.Errorf("id-less tool message content should be folded into text, got %q", content)
+	}
+}
+
+// TestOpenAIToKiro_ToolResultBlockOrphanBecomesText covers the Claude-shape
+// tool_result content block (not the OpenAI tool_call_id envelope) with an
+// id that was never emitted by the preceding assistant turn.
+func TestOpenAIToKiro_ToolResultBlockOrphanBecomesText(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"user","content":"weather?"},
+		{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{}"}}]},
+		{"role":"user","content":[{"type":"tool_result","tool_use_id":"orphan_id","content":"cloudy"}]}
+	]}`)
+	out, err := OpenAIToKiro(body, KiroTranslateOptions{Model: "m"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := decodeKiro(t, out)
+	cs := m["conversationState"].(map[string]any)
+	cur := cs["currentMessage"].(map[string]any)["userInputMessage"].(map[string]any)
+
+	if ctx, ok := cur["userInputMessageContext"].(map[string]any); ok {
+		if results, _ := ctx["toolResults"].([]any); len(results) > 0 {
+			t.Fatalf("orphan tool_result block must not reach toolResults, got %v", results)
+		}
+	}
+	content, _ := cur["content"].(string)
+	if !strings.Contains(content, "cloudy") {
+		t.Errorf("orphan tool_result block content should be folded into text, got %q", content)
+	}
+}
+
 func TestOpenAIToKiro_EmptyUserTurnGetsPlaceholder(t *testing.T) {
 	body := []byte(`{"messages":[{"role":"user","content":""}]}`)
 	out, err := OpenAIToKiro(body, KiroTranslateOptions{Model: "m"})

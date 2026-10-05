@@ -133,11 +133,19 @@ func OpenAIToKiro(body []byte, opts KiroTranslateOptions) ([]byte, error) {
 // kiroConvertMessages maps OpenAI messages onto Kiro turns. system/tool become
 // user turns, consecutive same-role turns merge, and the trailing user turn is
 // returned separately as the current message.
+//
+// Kiro 400s with "Invalid tool use format." when userInputMessageContext.
+// toolResults carries a toolUseId that was never emitted by the immediately
+// preceding assistantResponseMessage.toolUses (orphan tool result), or when a
+// tool-role message has no id at all. validToolUseIDs tracks the IDs the last
+// assistant turn actually emitted; it is consumed (reset) once a user/tool
+// turn uses it, so a result can only pair with the toolUses that produced it.
 func kiroConvertMessages(messages []map[string]any, model string) ([]map[string]any, map[string]any, error) {
 	var history []map[string]any
 	currentRole := ""
 	var pendingUser, pendingAssistant []string
 	var pendingToolResults, pendingImages []any
+	validToolUseIDs := map[string]bool{}
 	flush := func() {
 		switch currentRole {
 		case "user":
@@ -197,9 +205,12 @@ func kiroConvertMessages(messages []map[string]any, model string) ([]map[string]
 
 		switch role {
 		case "user":
-			content, images, toolResults := kiroUserContent(msg)
+			content, images, toolResults, orphanText := kiroUserContent(msg, validToolUseIDs)
 			pendingImages = append(pendingImages, images...)
 			pendingToolResults = append(pendingToolResults, toolResults...)
+			if orphanText != "" {
+				content = strings.TrimSpace(strings.Join([]string{content, orphanText}, "\n\n"))
+			}
 			if content != "" {
 				if wasSystem {
 					content = "<instructions>\n" + content + "\n</instructions>"
@@ -220,6 +231,7 @@ func kiroConvertMessages(messages []map[string]any, model string) ([]map[string]
 					}
 				}
 				currentRole = ""
+				validToolUseIDs = kiroToolUseIDSet(toolUses)
 			}
 		}
 	}
@@ -243,25 +255,33 @@ func kiroConvertMessages(messages []map[string]any, model string) ([]map[string]
 	return mergeKiroConsecutiveUsers(history), current, nil
 }
 
-// kiroUserContent flattens one user/tool message into text, Kiro image blocks
-// and tool-result blocks.
-func kiroUserContent(msg map[string]any) (string, []any, []any) {
-	var textParts []string
+// kiroUserContent flattens one user/tool message into text, Kiro image
+// blocks, tool-result blocks and sanitized orphan-tool-result text.
+//
+// validToolUseIDs holds the toolUseId values the immediately preceding
+// assistantResponseMessage.toolUses actually emitted. A tool result whose id
+// is empty or missing from that set cannot be placed in
+// userInputMessageContext.toolResults — Kiro 400s with "Invalid tool use
+// format." on orphan ids — so it is downgraded to plain text instead and
+// returned via the orphanText value for the caller to fold into content.
+func kiroUserContent(msg map[string]any, validToolUseIDs map[string]bool) (string, []any, []any, string) {
+	var textParts, orphanParts []string
 	var images, toolResults []any
 
 	appendToolResult := func(id string, isErr bool, content string) {
-		if id == "" {
+		if id != "" && validToolUseIDs[id] {
+			status := "success"
+			if isErr {
+				status = "error"
+			}
+			toolResults = append(toolResults, map[string]any{
+				"toolUseId": id,
+				"status":    status,
+				"content":   []any{map[string]any{"text": content}},
+			})
 			return
 		}
-		status := "success"
-		if isErr {
-			status = "error"
-		}
-		toolResults = append(toolResults, map[string]any{
-			"toolUseId": id,
-			"status":    status,
-			"content":   []any{map[string]any{"text": content}},
-		})
+		orphanParts = append(orphanParts, "[Tool Result]: "+content)
 	}
 
 	switch content := msg["content"].(type) {
@@ -269,9 +289,9 @@ func kiroUserContent(msg map[string]any) (string, []any, []any) {
 		if msg["tool_call_id"] != nil {
 			isErr, _ := msg["is_error"].(bool)
 			appendToolResult(fmt.Sprint(msg["tool_call_id"]), isErr, content)
-			return "", images, toolResults
+			return "", images, toolResults, strings.Join(orphanParts, "\n\n")
 		}
-		return content, images, toolResults
+		return content, images, toolResults, ""
 	case []any:
 		for _, raw := range content {
 			block, ok := raw.(map[string]any)
@@ -332,7 +352,7 @@ func kiroUserContent(msg map[string]any) (string, []any, []any) {
 			}
 		}
 	}
-	return strings.Join(textParts, "\n"), images, toolResults
+	return strings.Join(textParts, "\n"), images, toolResults, strings.Join(orphanParts, "\n\n")
 }
 
 func kiroAssistantText(msg map[string]any) string {
@@ -406,6 +426,23 @@ func kiroAssistantToolUses(msg map[string]any) []any {
 		}
 	}
 	return out
+}
+
+// kiroToolUseIDSet collects the toolUseId of each entry in toolUses, so a
+// later tool result can be checked for a matching active tool_use before it
+// is placed in userInputMessageContext.toolResults.
+func kiroToolUseIDSet(toolUses []any) map[string]bool {
+	ids := make(map[string]bool, len(toolUses))
+	for _, raw := range toolUses {
+		tu, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if id, _ := tu["toolUseId"].(string); id != "" {
+			ids[id] = true
+		}
+	}
+	return ids
 }
 
 // kiroParseToolInput decodes a JSON-encoded arguments string, tolerating the

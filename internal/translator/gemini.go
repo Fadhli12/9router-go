@@ -19,6 +19,12 @@ type GeminiStreamState struct {
 	Usage                *OpenAIUsage
 	FinishReason         string
 	LastThoughtSignature string
+	// HasToolCalls records whether any tool_calls delta was emitted during
+	// this stream. OpenAI's SSE protocol requires the terminal chunk's
+	// finish_reason to be "tool_calls" (not "stop") when a turn produced
+	// tool calls, so agent clients continue the multi-turn loop instead of
+	// treating the turn as complete.
+	HasToolCalls bool
 }
 
 // GeminiFileData represents remote or uploaded files referenced by URI.
@@ -670,6 +676,7 @@ func TranslateGeminiChunkToOpenAI(chunk []byte, state *GeminiStreamState) ([]byt
 							},
 						},
 					}
+					state.HasToolCalls = true
 				}
 				if len(delta) > 0 {
 					results = append(results, map[string]any{
@@ -701,6 +708,9 @@ func TranslateGeminiChunkToOpenAI(chunk []byte, state *GeminiStreamState) ([]byt
 				openAIStop = "stop"
 			default:
 				openAIStop = "stop"
+			}
+			if state.HasToolCalls && openAIStop != "length" {
+				openAIStop = "tool_calls"
 			}
 
 			inputTokens, outputTokens, cachedTokens := 0, 0, 0
