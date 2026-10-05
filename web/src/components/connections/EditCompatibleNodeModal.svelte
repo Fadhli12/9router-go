@@ -11,13 +11,20 @@
     node?: ProviderNode | null
     isAnthropic?: boolean
     onClose: () => void
-    onSave: (data: { name: string; prefix: string; apiType?: string; baseUrl: string }) => Promise<void> | void
+    onSave: (data: {
+      name: string
+      prefix: string
+      apiType?: string
+      baseUrl: string
+      urlSuffix: string
+    }) => Promise<void> | void
   }
 
   let { isOpen, node = null, isAnthropic = false, onClose, onSave }: Props = $props()
 
   let formName = $state('')
   let formPrefix = $state('')
+  let formUrlSuffix = $state('')
   let formApiType = $state<'chat' | 'responses'>('chat')
   let formBaseUrl = $state('')
   let checkKey = $state('')
@@ -30,7 +37,10 @@
   $effect(() => {
     if (isOpen && node) {
       formName = node.name || ''
-      formPrefix = node.prefix || ''
+      // A node created before the field existed carries a uuid tail. Showing it
+      // as editable text would invite the user to "fix" a value they never
+      // chose, so the field starts empty and a blank submit keeps the random id.
+      formUrlSuffix = node.urlSuffixGenerated ? '' : node.urlSuffix || ''
       formApiType = node.apiType === 'responses' ? 'responses' : 'chat'
       formBaseUrl = node.baseUrl || (isAnthropic ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1')
       checkKey = ''
@@ -66,10 +76,17 @@
     if (saveDisabled) return
     saving = true
     try {
-      const payload: { name: string; prefix: string; apiType?: string; baseUrl: string } = {
+      const payload: {
+        name: string
+        prefix: string
+        apiType?: string
+        baseUrl: string
+        urlSuffix: string
+      } = {
         name: formName.trim(),
         prefix: formPrefix.trim(),
         baseUrl: formBaseUrl.trim(),
+        urlSuffix: formUrlSuffix.trim(),
       }
       if (!isAnthropic) payload.apiType = formApiType
       await onSave(payload)
@@ -93,6 +110,15 @@
       bind:value={formPrefix}
       placeholder={isAnthropic ? 'ac-prod' : 'oc-prod'}
       hint="Required. Used as the provider prefix for model IDs."
+    />
+    <Input
+      label="Custom URL Suffix"
+      bind:value={formUrlSuffix}
+      placeholder="e.g. bai"
+      hint={node.urlSuffixGenerated
+        ? 'Optional. This provider still carries a randomized suffix; fill this in to name it.'
+        : 'Optional. Changing this renames the provider id and carries this node\'s credentials, models and history with it.'}
+      inputClass="font-mono"
     />
     {#if !isAnthropic}
       <div>

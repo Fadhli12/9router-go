@@ -11,6 +11,8 @@ export interface ProviderConnection {
   data: string // JSON string
   createdAt: string
   updatedAt: string
+  /** Masked hint of the stored credential; the raw secret is never listed. */
+  apiKeyMasked?: string
   testStatus?: string | null
   lastError?: string | null
   displayName?: string | null
@@ -208,6 +210,13 @@ export interface ProviderNode {
   prefix?: string
   apiType?: string
   baseUrl?: string
+  /**
+   * The custom tail of the provider id, without the "openai-compatible-chat-"
+   * literal in front of it. Empty for a node created before the field existed.
+   */
+  urlSuffix?: string
+  /** True when the id tail is the random fallback rather than a chosen value. */
+  urlSuffixGenerated?: boolean
   createdAt?: string
   updatedAt?: string
 }
@@ -631,7 +640,15 @@ return conns.map(normalizeConnection)
     const res = await request<{ nodes: ProviderNode[] }>('/api/provider-nodes')
     return res.nodes || []
   },
-  createProviderNode: async (payload: { name: string; prefix: string; apiType?: string; baseUrl?: string; type?: string }) => {
+  createProviderNode: async (payload: {
+    name: string
+    prefix: string
+    apiType?: string
+    baseUrl?: string
+    type?: string
+    /** Replaces the random uuid in the provider id. Omit to keep it generated. */
+    urlSuffix?: string
+  }) => {
     const res = await request<{ node: ProviderNode }>('/api/provider-nodes', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -646,7 +663,15 @@ return conns.map(normalizeConnection)
         body: JSON.stringify(payload),
       }
     ),
-  updateProviderNode: (id: string, payload: { name: string; prefix: string; apiType?: string; baseUrl: string }) =>
+  /**
+   * Update a node. Sending a different `urlSuffix` renames the provider id and
+   * carries the node's connections, models and history with it, so the returned
+   * node carries the new id and the caller must navigate to it.
+   */
+  updateProviderNode: (
+    id: string,
+    payload: { name: string; prefix: string; apiType?: string; baseUrl: string; urlSuffix?: string }
+  ) =>
     request<{ node: ProviderNode }>(`/api/provider-nodes/${encodeURIComponent(id)}`, {
       method: 'PUT',
       body: JSON.stringify(payload),

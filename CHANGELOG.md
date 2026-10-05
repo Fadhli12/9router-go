@@ -2,6 +2,109 @@
 
 ## [Unreleased]
 
+### 🏷️ Provider kustom bisa memakai URL suffix sendiri — `openai-compatible-chat-<suffix>`, bukan `<uuid>`
+
+Latar (issue #155): setiap node OpenAI/Anthropic-compatible yang dibuat dari
+dashboard memakai `generateId()` untuk ekor provider id-nya, jadi id yang
+tersimpan selalu `openai-compatible-chat-46b3f72a-5618-4485-8527-0eb4424e85db`.
+Id itu bukan label: ia jadi prefix model di `/v1/models`, kolom `provider` di
+`providerConnections`/`usageHistory`/`requestDetails`, dan key seluruh baris
+`customModels` milik node tersebut — sehingga tercatat di mana-mana dan tidak
+bisa dibaca.
+
+Perubahan (`internal/handlers/dashboard/provider_node_id.go`, baru):
+1. `POST /api/provider-nodes` menerima `urlSuffix`. Kalau diisi, ekor id memakai
+   nilai itu (`openai-compatible-chat-bai`); kalau kosong, uuid acak upstream
+   tetap dipakai, jadi tidak ada node lama yang berubah bentuk.
+2. Aturan sufiks: `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. `/` ditolak karena
+   `resolution.go` memecah alamat model dengan `SplitN(entry, "/", 2)` — sufiks
+   ber-/ akan merusak routing; sufiks yang diawali literal provider
+   (`openai-compatible`, `anthropic-compatible`, `custom-embedding`) ditolak
+   karena seluruh pembaca id adalah `strings.HasPrefix`.
+3. Id yang sudah dipakai node lain dijawab **409**
+   `PROVIDER_NODE_ID_CONFLICT`, bukan 500 dari constraint SQLite.
+4. `GET /api/provider-nodes` melaporkan `urlSuffix` + `urlSuffixGenerated`,
+   sehingga field di dashboard menampilkan nilai yang benar untuk node uuid
+   (kosong + generated) alih-alih memaksa user "memperbaiki" uuid.
+5. Field `Custom URL Suffix` di `AddCompatibleNodeModal` (dengan preview id
+   lengkap) dan `EditCompatibleNodeModal`.
+
+**Rename beserta seluruh kakinya** (`internal/db/provider_node_rename.go`, baru).
+`urlSuffix` yang diubah pada edit memindahkan `providerNodes.id`, dan id itu
+storage key dari semua yang dimiliki node tersebut. `RenameProviderNode`
+memindahkan semuanya dalam **satu transaksi**: `providerConnections.provider`,
+key **dan** nilai `kv.customModels`, key `kv.disabledModels`, target
+`kv.modelAliases`, member `combos.models`, kolom `provider` di `usageHistory` +
+`requestDetails`, dan map ber-key provider di blob `settings`
+(`providerStrategies`, `providerOverrides`). Tanpa ini, satu edit akan
+meninggalkan node tanpa kredensial, tanpa model buatan, dan tanpa riwayat.
+`MediaKindView` yang semula memanggil modal dengan prop `nodeType`/`onCreated`
+yang tidak pernah ada ikut diperbaiki ke `type`/`onSubmit`.
+
+Satu koreksi sekuler di jalur yang sama: `isCompatibleProviderID` kini juga
+menerima `custom-embedding-`. Sebelumnya node embedding yang id-nya
+di-generating dengan `openai-compatible-chat-<uuid>` lolos sebagai
+"compatible", dan begitu `urlSuffix` membuat id-nya jadi `custom-embedding-*`,
+jalur tersebut akan fell through ke katalog registry dan `/v1/models`
+mengiklankan provider yang tidak dilayani node itu.
+
+**Verifikasi:** `go vet ./...` bersih · `go test -count=1 ./...` hijau ·
+`bun run build` + `bun run ratchet:svelte` (0 unresolved identifier, 91 error —
+1 di bawah baseline, `bun run ratchet:svelte -- --update` disertakan) ·
+`bun test` 210 pass. Smoke ke binary asli di `DATA_DIR` terisolasi: create
+dengan sufiks menghasilkan `openai-compatible-chat-bai`, tanpa sufiks tetap
+uuid, 409 saat bentrok, 400 untuk sufiks ber-`/`, lalu **rename** `bai` →
+`bai-v2` yang terbukti ikut memindahkan koneksi, `customModels`,
+`disabledModels`, alias, member combo, `usageHistory`, `requestDetails`, dan
+kedua map `settings` — `POST /v1/chat/completions {"model":"bai/glm-5.3"}`
+lalu dijawab upstream (`"content":"routed"`) dan tercatat di `usageHistory`
+dengan provider `openai-compatible-chat-bai-v2`, sementara `/v1/models`
+tetap mengiklankan `bai/glm-5.3` tanpa membocorkan id mentah.
+
+### ✨ `feat(connections): ganti API key langsung dari modal Edit Connection` (issue #154)
+
+Modal Edit Connection di tab **Providers** dan di **Quota Tracker** sekarang
+punya kolom API. Isian kosong berarti "memakai key yang tersimpan", bukan
+"hapus key" — itu yang membuat modal ini bisa dipakai untuk rotasi tanpa
+menyalin key lama ke input teks.
+
+Kolomnya menampilkan key yang tersimpan sebagai mask (`sk-smo…inal`) dari
+`apiKeyMasked`, hasil baru di `GET /api/connections`. Mask, bukan key mentah,
+karena endpoint itu terjangkau dengan API key klien berprivat rendah: key
+mentah di sana berarti satu key bocor bisa mencuri seluruh secret. Bentuk
+mask-nya sama dengan `maskClientKey` yang sudah dipakai untuk daftar
+`/api/keys`.
+
+`PUT /api/connections/{id}` sekarang menerima `apiKey`:
+
+- `apiKey` tidak ada atau kosong setelah `TrimSpace` → key tersimpan utuh.
+- `apiKey` terisi → hanya `data.apiKey` yang ditulis. `authToken`,
+  `providerSpecificData`, dan status probe tidak disentuh.
+
+Handler sengaja **tidak** mengubah `testStatus`/`lastError` saat rotasi.
+Mengganti key bukan bukti koneksi kembali hidup — satu-satunya buktinya
+jawaban provider, jadi modal yang meng-clear-nya setelah probe benar-benar
+menjawab, dengan mengirim `testStatus: "active"` secara eksplisit (parity
+dengan `EditConnectionModal` upstream).
+
+Modal menjalankan probe `/api/providers/validate` sebelum menulis:
+
+- key ditolak provider → **tidak disimpan**, modal tetap terbuka dengan
+  alasannya. Key yang tersimpan adalah satu-satunya yang menjaga akun ini di
+  rotasi, jadi key yang salah akan diam-diam dikeluarkan.
+- provider tanpa probe (`supported: false`) → bukan verdict, key tetap
+  disimpan tanpa `testStatus` yang dikoreksi.
+- field OAuth disembunyikan: yang dirotasi access token, bukan stuff yang
+  diketik user.
+
+Logika bersama ada di `web/src/components/connections/credential.ts`
+(placeholder, pemangkasan whitespace, pemetaan verdict, probe) supaya kedua
+modal tidak mengulang aturan yang sama.
+
+Upstream parity: `decolua/9router` `src/shared/components/EditConnectionModal.js`
+— label "Leave blank to keep the current API key.", tombol Check via
+`/api/providers/validate`, dan `testStatus` hanya di-set saat validasi sukses.
+
 ## [v1.9.9] - 2026-10-05
 
 ### 🐛 `TestGateAcquire_JitterOnlyWidensTheGap` masih flaky — stopwatch diukur dari slot sebelumnya

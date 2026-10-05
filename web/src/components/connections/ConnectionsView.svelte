@@ -39,6 +39,7 @@
     baseUrl: string
     apiType?: 'chat' | 'responses'
     type: string
+    urlSuffix: string
   }) {
     try {
       const node = await api.createProviderNode({
@@ -46,7 +47,8 @@
         prefix: data.prefix,
         baseUrl: data.baseUrl,
         apiType: data.apiType,
-        type: data.type as unknown as string
+        type: data.type as unknown as string,
+        urlSuffix: data.urlSuffix || undefined
       })
       showAddOpenAIModal = false
       showAddAnthropicModal = false
@@ -69,6 +71,7 @@
       onBackToOverview?.()
     }}
     {onRefresh}
+    {onSelectProvider}
   />
 {:else}
   <ProvidersOverviewGrid
