@@ -95,6 +95,7 @@
   let editingKey = $state<APIKey | null>(null)
   let editLimitVal = $state(0)
   let isSavingLimit = $state(false)
+  let rotatingKeyId = $state<string | null>(null)
 
   // Confirmation modal
   let confirmModal = $state<{
@@ -424,6 +425,25 @@
       alert(`Failed to create key: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       isSubmittingKey = false
+    }
+  }
+
+  async function handleRotateKey(key: APIKey) {
+    if (!confirm('Rotate API key "' + (key.name || 'API Key') + '"? The old secret key will stop working immediately.')) {
+      return
+    }
+    try {
+      rotatingKeyId = key.id
+      const res = await api.rotateApiKey(key.id)
+      if (res && res.key) {
+        localKeys = localKeys.map((k) => (k.id === key.id ? { ...k, key: res.key } : k))
+        newlyCreatedKey = res.key
+        onRefresh?.()
+      }
+    } catch (err) {
+      alert('Failed to rotate key: ' + (err instanceof Error ? err.message : String(err)))
+    } finally {
+      rotatingKeyId = null
     }
   }
 
