@@ -16,6 +16,7 @@
       baseUrl: string
       apiType?: 'chat' | 'responses'
       type: string
+      urlSuffix: string
     }) => Promise<void> | void
   }
 
@@ -60,6 +61,7 @@
 
   let formName = $state('')
   let formPrefix = $state('')
+  let formUrlSuffix = $state('')
   let formApiType = $state<'chat' | 'responses'>('chat')
   let formBaseUrl = $state('')
   let checkKey = $state('')
@@ -68,12 +70,23 @@
   let validationResult = $state<{ valid: boolean; error?: string; method?: string; dimensions?: number } | null>(null)
   let submitting = $state(false)
 
-  // Reset the form when the modal opens.
+  // The literal the backend pins in front of the suffix, so the field can show
+  // the provider id the user is about to create instead of a bare "suffix".
+  let idLiteral = $derived(
+    type === 'anthropic-compatible'
+      ? 'anthropic-compatible'
+      : type === 'custom-embedding'
+        ? 'custom-embedding'
+        : `openai-compatible-${formApiType}`
+  )
+  let composedID = $derived(formUrlSuffix.trim() ? `${idLiteral}-${formUrlSuffix.trim()}` : '')
 
+  // Reset the form when the modal opens.
   $effect(() => {
     if (isOpen) {
       formName = ''
       formPrefix = ''
+      formUrlSuffix = ''
       formApiType = 'chat'
       checkKey = ''
       checkModelId = ''
@@ -121,6 +134,7 @@
       baseUrl: formBaseUrl.trim(),
       apiType: config.hasApiType ? formApiType : undefined,
       type,
+      urlSuffix: formUrlSuffix.trim(),
     })).finally(() => {
       submitting = false
     })
@@ -143,6 +157,16 @@
       placeholder={config.prefixPlaceholder}
       hint={type === 'custom-embedding' ? 'Required. Used as the provider prefix for model IDs (e.g. voyage/voyage-3).' : 'Required. Used as the provider prefix for model IDs.'}
       required
+    />
+
+    <Input
+      label="Custom URL Suffix"
+      bind:value={formUrlSuffix}
+      placeholder="e.g. bai"
+      hint={composedID
+        ? `Optional. Replaces the random suffix of this provider id: ${composedID}`
+        : `Optional. Leave blank to keep a randomized suffix for '${idLiteral}-<this_is_user_custom_suffix>'.`}
+      inputClass="font-mono"
     />
 
     {#if config.hasApiType}

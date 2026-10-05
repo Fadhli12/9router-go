@@ -2,6 +2,65 @@
 
 ## [Unreleased]
 
+### 🏷️ Provider kustom bisa memakai URL suffix sendiri — `openai-compatible-chat-<suffix>`, bukan `<uuid>`
+
+Latar (issue #155): setiap node OpenAI/Anthropic-compatible yang dibuat dari
+dashboard memakai `generateId()` untuk ekor provider id-nya, jadi id yang
+tersimpan selalu `openai-compatible-chat-46b3f72a-5618-4485-8527-0eb4424e85db`.
+Id itu bukan label: ia jadi prefix model di `/v1/models`, kolom `provider` di
+`providerConnections`/`usageHistory`/`requestDetails`, dan key seluruh baris
+`customModels` milik node tersebut — sehingga tercatat di mana-mana dan tidak
+bisa dibaca.
+
+Perubahan (`internal/handlers/dashboard/provider_node_id.go`, baru):
+1. `POST /api/provider-nodes` menerima `urlSuffix`. Kalau diisi, ekor id memakai
+   nilai itu (`openai-compatible-chat-bai`); kalau kosong, uuid acak upstream
+   tetap dipakai, jadi tidak ada node lama yang berubah bentuk.
+2. Aturan sufiks: `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. `/` ditolak karena
+   `resolution.go` memecah alamat model dengan `SplitN(entry, "/", 2)` — sufiks
+   ber-/ akan merusak routing; sufiks yang diawali literal provider
+   (`openai-compatible`, `anthropic-compatible`, `custom-embedding`) ditolak
+   karena seluruh pembaca id adalah `strings.HasPrefix`.
+3. Id yang sudah dipakai node lain dijawab **409**
+   `PROVIDER_NODE_ID_CONFLICT`, bukan 500 dari constraint SQLite.
+4. `GET /api/provider-nodes` melaporkan `urlSuffix` + `urlSuffixGenerated`,
+   sehingga field di dashboard menampilkan nilai yang benar untuk node uuid
+   (kosong + generated) alih-alih memaksa user "memperbaiki" uuid.
+5. Field `Custom URL Suffix` di `AddCompatibleNodeModal` (dengan preview id
+   lengkap) dan `EditCompatibleNodeModal`.
+
+**Rename beserta seluruh kakinya** (`internal/db/provider_node_rename.go`, baru).
+`urlSuffix` yang diubah pada edit memindahkan `providerNodes.id`, dan id itu
+storage key dari semua yang dimiliki node tersebut. `RenameProviderNode`
+memindahkan semuanya dalam **satu transaksi**: `providerConnections.provider`,
+key **dan** nilai `kv.customModels`, key `kv.disabledModels`, target
+`kv.modelAliases`, member `combos.models`, kolom `provider` di `usageHistory` +
+`requestDetails`, dan map ber-key provider di blob `settings`
+(`providerStrategies`, `providerOverrides`). Tanpa ini, satu edit akan
+meninggalkan node tanpa kredensial, tanpa model buatan, dan tanpa riwayat.
+`MediaKindView` yang semula memanggil modal dengan prop `nodeType`/`onCreated`
+yang tidak pernah ada ikut diperbaiki ke `type`/`onSubmit`.
+
+Satu koreksi sekuler di jalur yang sama: `isCompatibleProviderID` kini juga
+menerima `custom-embedding-`. Sebelumnya node embedding yang id-nya
+di-generating dengan `openai-compatible-chat-<uuid>` lolos sebagai
+"compatible", dan begitu `urlSuffix` membuat id-nya jadi `custom-embedding-*`,
+jalur tersebut akan fell through ke katalog registry dan `/v1/models`
+mengiklankan provider yang tidak dilayani node itu.
+
+**Verifikasi:** `go vet ./...` bersih · `go test -count=1 ./...` hijau ·
+`bun run build` + `bun run ratchet:svelte` (0 unresolved identifier, 91 error —
+1 di bawah baseline, `bun run ratchet:svelte -- --update` disertakan) ·
+`bun test` 210 pass. Smoke ke binary asli di `DATA_DIR` terisolasi: create
+dengan sufiks menghasilkan `openai-compatible-chat-bai`, tanpa sufiks tetap
+uuid, 409 saat bentrok, 400 untuk sufiks ber-`/`, lalu **rename** `bai` →
+`bai-v2` yang terbukti ikut memindahkan koneksi, `customModels`,
+`disabledModels`, alias, member combo, `usageHistory`, `requestDetails`, dan
+kedua map `settings` — `POST /v1/chat/completions {"model":"bai/glm-5.3"}`
+lalu dijawab upstream (`"content":"routed"`) dan tercatat di `usageHistory`
+dengan provider `openai-compatible-chat-bai-v2`, sementara `/v1/models`
+tetap mengiklankan `bai/glm-5.3` tanpa membocorkan id mentah.
+
 ## [v1.9.9] - 2026-10-05
 
 ### 🐛 `TestGateAcquire_JitterOnlyWidensTheGap` masih flaky — stopwatch diukur dari slot sebelumnya

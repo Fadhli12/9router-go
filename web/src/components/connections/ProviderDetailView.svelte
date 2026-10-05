@@ -55,6 +55,8 @@
     providerNodes: ProviderNode[]
     onBack: () => void
     onRefresh: () => void
+    /** Called with the new id after a URL-suffix rename moves this node. */
+    onSelectProvider?: (id: string) => void
   }
 
   let {
@@ -62,7 +64,8 @@
     connections = [],
     providerNodes = [],
     onBack,
-    onRefresh
+    onRefresh,
+    onSelectProvider
   }: Props = $props()
 
   // Catalog & Node resolution
@@ -2219,16 +2222,30 @@
   }
 
   // Upstream parity: PUT /api/provider-nodes/[id] then refresh the node list.
-  async function handleSaveEditedNode(data: { name: string; prefix: string; apiType?: string; baseUrl: string }) {
+  //
+  // A changed URL suffix renames the provider id, and this page is routed by
+  // that id — so a rename has to navigate to the new one or the user lands on a
+  // node that no longer exists.
+  async function handleSaveEditedNode(data: {
+    name: string
+    prefix: string
+    apiType?: string
+    baseUrl: string
+    urlSuffix: string
+  }) {
     if (!selectedNode) return
     try {
-      await api.updateProviderNode(selectedNode.id, {
+      const res = await api.updateProviderNode(selectedNode.id, {
         name: data.name,
         prefix: data.prefix,
         ...(selectedNode.type === 'openai-compatible' && data.apiType ? { apiType: data.apiType } : {}),
         baseUrl: data.baseUrl,
+        urlSuffix: data.urlSuffix || undefined
       })
       showEditNodeModal = false
+      if (res?.node?.id && res.node.id !== selectedNode.id) {
+        onSelectProvider?.(res.node.id)
+      }
       onRefresh()
     } catch (err) {
       alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
