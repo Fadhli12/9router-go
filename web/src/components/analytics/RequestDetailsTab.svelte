@@ -48,9 +48,9 @@ let {
     return 'danger'
   }
 
-  /** Extra classes to recolor the `slow` tier badge from danger-red to the dedicated orange token. */
+  /** Extra classes to recolor the `slow` tier badge to rose (matches the latency threshold color). */
   function latencyBadgeClass(tier: LatencyTier): string {
-    return tier === 'slow' ? 'bg-orange/10 text-orange border-orange/25' : ''
+    return tier === 'slow' ? 'bg-rose-500/10 text-rose-500 border-rose-500/25' : ''
   }
 
   /** TTFT as a percentage share of total latency, clamped to [0, 100]. Null when total is unusable. */
@@ -166,13 +166,11 @@ let {
                   </Badge>
                   {#if ttftRatioPct(item.latency.ttft, item.latency.total) != null}
                     <div
-                      class="h-1 w-14 rounded-full bg-surface-3 overflow-hidden mt-1 ml-auto"
+                      class="flex h-1.5 w-16 rounded-full overflow-hidden mt-1 ml-auto"
                       title={`TTFT ${item.latency.ttft}ms of ${item.latency.total}ms total (${Math.round(ttftRatioPct(item.latency.ttft, item.latency.total) ?? 0)}%)`}
                     >
-                      <div
-                        class="h-full bg-brand-500 rounded-full"
-                        style={`width: ${ttftRatioPct(item.latency.ttft, item.latency.total)}%`}
-                      ></div>
+                      <span class="h-full bg-brand-500" style={`width: ${ttftRatioPct(item.latency.ttft, item.latency.total)}%`}></span>
+                      <span class="h-full flex-1 bg-surface-3"></span>
                     </div>
                   {/if}
                 {:else}
@@ -282,14 +280,32 @@ let {
           <div class="p-3 rounded-lg bg-surface-2 border border-border">
             <div class="text-text-muted text-[10px] uppercase font-bold">Latency</div>
             <div class="font-code text-sm font-bold text-text-main mt-1">
-              {selectedDetail.latency?.total || 0}ms
+              {selectedDetail.latency?.total ?? 0}ms
             </div>
+            {#if selectedDetail.latency?.total != null}
+              <Badge
+                tone={latencyBadgeTone(latencyTier(selectedDetail.latency.total) ?? 'fast')}
+                size="sm"
+                class="text-[10px] px-1.5 py-0 font-semibold mt-1.5 {latencyBadgeClass(latencyTier(selectedDetail.latency.total) ?? 'fast')}"
+              >
+                {latencyTier(selectedDetail.latency.total)}
+              </Badge>
+            {/if}
           </div>
           <div class="p-3 rounded-lg bg-surface-2 border border-border">
             <div class="text-text-muted text-[10px] uppercase font-bold">TTFT</div>
             <div class="font-code text-sm font-bold text-text-main mt-1">
-              {selectedDetail.latency?.ttft || 0}ms
+              {selectedDetail.latency?.ttft ?? 0}ms
             </div>
+            {#if selectedDetail.latency?.ttft != null}
+              <Badge
+                tone={latencyBadgeTone(latencyTier(selectedDetail.latency.ttft) ?? 'fast')}
+                size="sm"
+                class="text-[10px] px-1.5 py-0 font-semibold mt-1.5 {latencyBadgeClass(latencyTier(selectedDetail.latency.ttft) ?? 'fast')}"
+              >
+                {latencyTier(selectedDetail.latency.ttft)}
+              </Badge>
+            {/if}
           </div>
           <div class="p-3 rounded-lg bg-surface-2 border border-border">
             <div class="text-text-muted text-[10px] uppercase font-bold">Total Input</div>
@@ -316,6 +332,24 @@ let {
             </div>
           </div>
         </div>
+
+        <!-- TTFT vs Total Latency ratio bar -->
+        {#if ttftRatioPct(selectedDetail.latency?.ttft, selectedDetail.latency?.total) != null}
+          <div class="p-3.5 rounded-lg bg-surface-2 border border-border">
+            <div class="flex items-center justify-between text-[10px] uppercase font-bold text-text-muted mb-2">
+              <span>Time to first token</span>
+              <span>Remaining generation time</span>
+            </div>
+            <div class="flex h-2.5 w-full rounded-full overflow-hidden">
+              <span class="h-full bg-brand-500" style={`width: ${ttftRatioPct(selectedDetail.latency?.ttft, selectedDetail.latency?.total)}%`}></span>
+              <span class="h-full flex-1 bg-surface-3"></span>
+            </div>
+            <div class="flex items-center justify-between text-[11px] font-code text-text-muted mt-1.5">
+              <span class="text-brand-500 font-semibold">{selectedDetail.latency?.ttft}ms ({Math.round(ttftRatioPct(selectedDetail.latency?.ttft, selectedDetail.latency?.total) ?? 0)}%)</span>
+              <span>{(selectedDetail.latency?.total ?? 0) - (selectedDetail.latency?.ttft ?? 0)}ms ({100 - Math.round(ttftRatioPct(selectedDetail.latency?.ttft, selectedDetail.latency?.total) ?? 0)}%)</span>
+            </div>
+          </div>
+        {/if}
 
         <!-- Raw JSON details inspector -->
         <div class="space-y-1.5">

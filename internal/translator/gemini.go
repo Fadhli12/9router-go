@@ -179,16 +179,13 @@ func TranslateOpenAIToGemini(openaiBody []byte) ([]byte, error) {
 	var req GeminiRequest
 
 	// Parse messages
-	var msgs []struct {
-		Role             string           `json:"role"`
-		Content          any              `json:"content"`
-		ToolCalls        []OpenAIToolCall `json:"tool_calls,omitempty"`
-		ToolCallID       string           `json:"tool_call_id,omitempty"`
-		ReasoningContent string           `json:"reasoning_content,omitempty"`
-	}
+	var msgs []OpenAIMessage
 	if err := json.Unmarshal(oreq.Messages, &msgs); err != nil {
 		return nil, fmt.Errorf("parse messages: %w", err)
 	}
+
+	// Empty assistant shells and orphan tool messages would make Gemini 400.
+	msgs = SanitizeOpenAIMessages(msgs)
 
 	// Pre-map tool_call_id -> function name from assistant messages
 	tcID2Name := make(map[string]string)
