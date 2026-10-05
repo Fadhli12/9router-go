@@ -210,6 +210,7 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	r.Delete("/api/keys/{id}", dashH.HandleDeleteApiKey)
 	r.Put("/api/keys/{id}/toggle", dashH.HandleToggleApiKey)
 	r.Put("/api/keys/{id}/limit", dashH.HandleUpdateApiKeyLimit)
+	r.Post("/api/keys/{id}/rotate", dashH.HandleRotateApiKey)
 
 	r.Get("/api/models/custom", dashH.HandleGetCustomModels)
 	r.Get("/api/models/caps", dashH.HandleGetModelCaps)
