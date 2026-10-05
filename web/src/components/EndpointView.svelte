@@ -16,6 +16,7 @@
     Radio,
     Shield,
     Trash2,
+    Users,
     X
   } from 'lucide-svelte'
   import Card from '../lib/ui/Card.svelte'
@@ -84,8 +85,15 @@
   // Keys modal state
   let isCreateKeyOpen = $state(false)
   let newKeyName = $state('')
+  let newKeyMaxConcurrent = $state(0)
   let isSubmittingKey = $state(false)
   let newlyCreatedKey = $state<string | null>(null)
+
+  // Edit Limit modal state
+  let isEditLimitOpen = $state(false)
+  let editingKey = $state<APIKey | null>(null)
+  let editLimitVal = $state(0)
+  let isSavingLimit = $state(false)
 
   // Confirmation modal
   let confirmModal = $state<{
@@ -398,11 +406,15 @@
 
     isSubmittingKey = true
     try {
-      const res = await api.createApiKey({ name: newKeyName.trim() })
+      const res = await api.createApiKey({
+        name: newKeyName.trim(),
+        maxConcurrent: Number(newKeyMaxConcurrent) || 0
+      })
       if (res.key) {
         newlyCreatedKey = res.key
         localStorage.setItem('9router_key', res.key)
         newKeyName = ''
+        newKeyMaxConcurrent = 0
         isCreateKeyOpen = false
         await loadStatus()
         onRefresh?.()
@@ -411,6 +423,31 @@
       alert(`Failed to create key: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       isSubmittingKey = false
+    }
+  }
+
+  function openEditLimit(key: APIKey) {
+    editingKey = key
+    editLimitVal = key.maxConcurrent ?? 0
+    isEditLimitOpen = true
+  }
+
+  async function handleSaveLimit(e: SubmitEvent) {
+    e.preventDefault()
+    if (!editingKey) return
+    try {
+      isSavingLimit = true
+      await api.updateApiKeyLimit(editingKey.id, Number(editLimitVal))
+      localKeys = localKeys.map((k) =>
+        k.id === editingKey!.id ? { ...k, maxConcurrent: Number(editLimitVal) } : k
+      )
+      isEditLimitOpen = false
+      editingKey = null
+      onRefresh?.()
+    } catch (err) {
+      alert(`Failed to update concurrent limit: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      isSavingLimit = false
     }
   }
 
@@ -850,6 +887,7 @@
         {#each localKeys as key (key.id)}
           {@const isShown = shownKeyIds.has(key.id)}
           {@const isActive = key.isActive === 1 || key.isActive === true}
+          {@const limit = key.maxConcurrent ?? 0}
           <div class="group flex items-center justify-between py-3.5 transition {isActive ? '' : 'opacity-60'}">
             <div class="flex-1 min-w-0 pr-4">
               <p class="text-sm font-semibold text-text-main">{key.name || 'Default Key'}</p>
@@ -896,7 +934,20 @@
               </div>
             </div>
 
-            <div class="flex items-center gap-3 shrink-0">
+            <div class="flex items-center gap-2 shrink-0">
+              <!-- Concurrency Limit Badge & Quick Edit -->
+              <button
+                type="button"
+                onclick={() => openEditLimit(key)}
+                class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold border transition cursor-pointer {limit > 0
+                  ? 'bg-brand-500/10 text-brand-400 border-brand-500/25 hover:bg-brand-500/20'
+                  : 'bg-surface-2 text-text-subtle border-border hover:text-text-main hover:bg-surface-3'}"
+                title="Edit Concurrent Limit"
+              >
+                <Users class="w-3.5 h-3.5" />
+                <span>{limit > 0 ? `Max ${limit}` : 'Unlimited'}</span>
+              </button>
+
               <!-- Active Switch -->
               <Toggle
                 checked={isActive}
@@ -953,6 +1004,23 @@
             placeholder="Production Key"
             class="w-full px-3 py-2 rounded-lg bg-bg border border-border text-sm text-text-main focus:outline-none focus:border-brand-500"
           />
+        </div>
+
+        <div class="space-y-1">
+          <label for="key-limit-input" class="block text-xs font-semibold text-text-muted">
+            Max Concurrent Sessions
+          </label>
+          <input
+            id="key-limit-input"
+            type="number"
+            min="0"
+            bind:value={newKeyMaxConcurrent}
+            placeholder="0 (Unlimited)"
+            class="w-full px-3 py-2 rounded-lg bg-bg border border-border text-sm text-text-main focus:outline-none focus:border-brand-500"
+          />
+          <span class="text-[10px] text-text-subtle block">
+            0 or leave empty for unlimited concurrent requests.
+          </span>
         </div>
 
         <div class="flex gap-2 pt-2">
@@ -1263,6 +1331,70 @@
           Cancel
         </button>
       </div>
+    </div>
+  </div>
+{/if}
+
+<!-- MODAL: Edit Concurrency Limit -->
+{#if isEditLimitOpen && editingKey}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+    <div class="w-full max-w-sm p-6 rounded-2xl bg-surface border border-border shadow-2xl space-y-4">
+      <div class="flex items-center justify-between pb-3 border-b border-border">
+        <h3 class="text-base font-bold text-text-main">Set Concurrency Limit</h3>
+        <button
+          type="button"
+          onclick={() => {
+            isEditLimitOpen = false
+            editingKey = null
+          }}
+          class="text-text-muted hover:text-text-main cursor-pointer"
+        >
+          <X class="w-4 h-4" />
+        </button>
+      </div>
+
+      <form onsubmit={handleSaveLimit} class="space-y-3 font-body text-xs">
+        <div>
+          <span class="block text-text-subtle text-[11px] mb-1 font-body">Token Label:</span>
+          <div class="font-bold text-text-main mb-2 font-headline">{editingKey.name || 'API Key'}</div>
+          <label for="edit-key-limit-endpoint" class="block font-semibold text-text-muted mb-1">
+            Max Concurrent Sessions
+          </label>
+          <input
+            id="edit-key-limit-endpoint"
+            type="number"
+            min="0"
+            bind:value={editLimitVal}
+            class="w-full bg-surface-2 border border-border rounded-lg px-3 py-2 font-code text-xs text-text-main focus:outline-none focus:border-brand-500"
+          />
+          <span class="text-[10px] text-text-subtle mt-1 block">
+            Set to 0 for unlimited concurrent requests.
+          </span>
+        </div>
+
+        <div class="flex justify-end gap-2 pt-3 border-t border-border">
+          <button
+            type="button"
+            onclick={() => {
+              isEditLimitOpen = false
+              editingKey = null
+            }}
+            class="px-4 py-2 rounded-lg text-text-muted hover:text-text-main cursor-pointer"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={isSavingLimit}
+            class="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-white font-bold shadow-md shadow-brand-500/25 cursor-pointer"
+          >
+            {#if isSavingLimit}
+              <Loader2 class="w-3.5 h-3.5 animate-spin" />
+            {/if}
+            <span>Save Limit</span>
+          </button>
+        </div>
+      </form>
     </div>
   </div>
 {/if}
