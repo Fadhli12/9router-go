@@ -702,7 +702,7 @@ return conns.map(normalizeConnection)
       method: 'POST',
     }),
   updateApiKeyLimit: (id: string, maxConcurrent: number) =>
-    request<{ status: string; id: string; maxConcurrent: number }>(`/keys/${id}/limit`, {
+    request<{ status: string; id: string; maxConcurrent: number }>(`/api/keys/${encodeURIComponent(id)}/limit`, {
       method: 'PUT',
       body: JSON.stringify({ maxConcurrent })
     }),
