@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+### 🩺 `go test -race ./...` jadi gerbang CI — sebelumnya tidak pernah jalan, dan menemukan satu test flaky
+
+Job `test` menjalankan `go test ./...` **tanpa** `-race`, dan satu-satunya job
+yang memakai `-race` adalah `Integration tests`, yang cakupannya hanya
+`./internal/integration/...`. Artinya `internal/db`, `internal/usagetracker`,
+`internal/proxy`, dan `internal/handlers/chat` — tempat shared state gateway
+berada (ring buffer usage tracker, sticky state per handler, pompa SSE, peta
+cooldown koneksi, cache pool-id di `Repo`) — belum pernah diuji race detector
+di CI. Data race bisa merge hijau lalu muncul di mesin user saat dipakai.
+
+Job baru `race` menjalankan `go test -race -count=1 -timeout 10m ./...`.
+Dipisah dari job `test`, bukan menambah step, supaya laporan race bernama sendiri
+di daftar check dan dua kegagalan (assertion flaky vs race asli) tidak saling
+menutupi di satu log. Target lokal `make test-race` menjalankan perintah yang
+sama; `-race` butuh cgo, jadi sengaja tidak ikut `make test`/`test-short`.
+
+Dua hal yang membuat ini mungkin sekarang: test live upstream sudah dipisah dari
+CI lewat opt-in `9ROUTER_LIVE_TESTS=1` (#150) — sebelumnya `go test -race
+./...` gagal karena `space-bunny-free` kena rate limit, bukan karena gateway —
+dan `web/dist` dibangun lebih dulu di step yang sama seperti job `integration`,
+karena `internal/app` → `web` → `web/embed.go` gagal compile tanpa SPA.
+
+Menambah gerbang ini langsung membongkar satu bug:
+`TestTranscribeGeminiLive_PartialTranscriptOnClose` gagal sekitar **1 dari 12
+run**. Fake server-nya menutup socket begitu saja setelah membaca satu frame,
+padahal client masih menulis chunk audio-nya — jadi close bisa mendahului delta
+transkripsi yang baru dikirim, dan kasus yang harusnya lulus jadi `socket
+closed before completion`. Fake server kini membaca sampai frame
+`clientContent.turnComplete` (titik di mana client sudah menunggu di read loop)
+sebelum mengirim delta dan menutup. Deterministik gagal di `-count=3`, dan
+sekarang 0 gagal di 20 run beruntun. Tidak ada kode produksi yang berubah.
+
+**Verifikasi:** `go build ./...` dan `go vet ./...` bersih; `go test ./...`
+hijau; `go test -count=8 -run TestTranscribeGeminiLive ./internal/handlers/media/`
+hijau; 20 run beruntun test yang tadinya flaky hijau. Berkas workflow
+dijalankan runner ubuntu (cgo tersedia di sana), bukan mesin lokal tanpa C
+compiler.
+
 ### 🩹 Pembacaan usage yang gagal diam-diam dilaporkan sebagai nol — dashboard Usage & Analytics
 
 `GetUsageDailyRecent`, `GetUsageHistorySince`, `GetRecentUsageHistory`,

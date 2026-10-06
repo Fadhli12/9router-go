@@ -73,6 +73,49 @@ jobs:
           }
           go version -m /tmp/9router-go | grep -- '-pgo='
 
+  # The `test` job above runs `go test ./...` without -race, so a data race
+  # could merge green and only surface on a user's machine under load. The
+  # gateway's shared state is exactly the kind that races: the in-memory usage
+  # tracker ring, per-handler sticky account state, SSE pumps, connection
+  # cooldown maps, and the pool-ID cache on Repo.
+  #
+  # -race needs cgo, and it needs the SPA compiled: internal/app imports the
+  # handlers, they import web, and web/embed.go fails to build without
+  # web/dist. This runs as its own job rather than a step in `test` so a race
+  # report names itself in the checks list, and so a flaky assertion and a
+  # real race do not hide behind each other in one log.
+  #
+  # -count=1 defeats the cache so every PR re-runs it. -timeout 10m matches
+  # the integration job: -race is roughly an order of magnitude slower than an
+  # un-raced build, and internal/handlers/chat alone takes ~50s without it.
+  race:
+    name: Race detector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # web/dist must exist before any Go package compiles. The SPA is
+      # otherwise untouched by this job.
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Build Web SPA
+        run: |
+          cd web
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache: true
+
+      - name: Test with race detector
+        run: go test -race -count=1 -timeout 10m ./...
+
   # Unit tests exercise handlers with a hand-built router, so they cannot see a
   # regression in the wiring that production actually mounts: a route
   # registered in the wrong group, the /v1 prefix rewrite dropped, the account
