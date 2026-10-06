@@ -19,6 +19,7 @@ import (
 
 	json "encoding/json/v2"
 
+	"9router/proxy/internal/auth"
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlerutil"
 )
@@ -41,6 +42,18 @@ type Handler struct {
 // NewHandler creates an SSO settings handler bound to the repo.
 func NewHandler(repo *db.Repo) *Handler {
 	return &Handler{Repo: repo}
+}
+
+// IssueSession creates and writes an authenticated session token for SSO logins,
+// respecting the configured session TTL from repo settings.
+func (h *Handler) IssueSession(w http.ResponseWriter, r *http.Request, claims auth.SessionClaims) (string, error) {
+	ttl := auth.SessionTTL(h.Repo)
+	token, err := auth.SignWithTTL(auth.Secret(), time.Now(), claims, ttl)
+	if err != nil {
+		return "", err
+	}
+	auth.SetCookieWithTTL(w, r, token, ttl)
+	return token, nil
 }
 
 // HandleOidcTest handles POST /api/auth/oidc/test: load the issuer's OIDC

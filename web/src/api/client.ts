@@ -452,8 +452,28 @@ export function onUnauthorized(listener: UnauthorizedListener): () => void {
 }
 
 let unauthorizedTimer: number | null = null
+let unauthorizedStatusCheck: Promise<boolean> | null = null
 
-export function handleUnauthorized(path?: string) {
+async function hasLiveDashboardSession(): Promise<boolean> {
+  if (unauthorizedStatusCheck !== null) return unauthorizedStatusCheck
+  unauthorizedStatusCheck = (async () => {
+    try {
+      const res = await fetch('/api/auth/status', {
+        headers: getAuthHeaders(),
+      })
+      if (!res.ok) return false
+      const data = await res.json()
+      return data?.requireLogin === false || data?.authenticated === true
+    } catch {
+      return false
+    } finally {
+      unauthorizedStatusCheck = null
+    }
+  })()
+  return unauthorizedStatusCheck
+}
+
+export async function handleUnauthorized(path?: string) {
   // Do not redirect for public auth endpoints or if already on login page
   if (
     path === '/api/auth/login' ||
@@ -464,7 +484,11 @@ export function handleUnauthorized(path?: string) {
     return
   }
 
-  if (typeof window !== 'undefined' && window.location.pathname === '/login') {
+  if (typeof window !== 'undefined' && window.location?.pathname === '/login') {
+    return
+  }
+
+  if (await hasLiveDashboardSession()) {
     return
   }
 

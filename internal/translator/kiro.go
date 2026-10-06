@@ -60,7 +60,12 @@ func OpenAIToKiro(body []byte, opts KiroTranslateOptions) ([]byte, error) {
 		return nil, fmt.Errorf("kiro: parse openai body: %w", err)
 	}
 
-	history, current, err := kiroConvertMessages(in.Messages, opts.Model)
+	sanitized, err := kiroSanitizeMessages(in.Messages)
+	if err != nil {
+		return nil, err
+	}
+
+	history, current, err := kiroConvertMessages(sanitized, opts.Model)
 	if err != nil {
 		return nil, err
 	}
@@ -128,6 +133,48 @@ func OpenAIToKiro(body []byte, opts KiroTranslateOptions) ([]byte, error) {
 		return nil, fmt.Errorf("kiro: marshal envelope: %w", err)
 	}
 	return out, nil
+}
+
+// kiroSanitizeMessages runs the shared OpenAI message sanitizer
+// (SanitizeOpenAIMessages) over the raw map[string]any messages before
+// kiroConvertMessages sees them. It drops empty assistant shells that lead
+// straight into a tool message (decolua/9router #4109's dummy "..." turn
+// otherwise survives into Kiro history) and rewrites orphan tool messages
+// (no tool_call_id, or an id no assistant turn declared anywhere in the
+// conversation) into plain user text, matching the Gemini/Anthropic
+// translators. kiroConvertMessages still re-checks tool-result ids against
+// the immediately preceding assistant turn's toolUses afterwards: that
+// stricter, turn-local check (vs. this whole-conversation one) is what
+// catches a stale id reused from an earlier turn.
+//
+// Messages round-trip through OpenAIMessage via JSON so arbitrary content
+// block shapes (Claude-style tool_use/tool_result blocks, image blocks)
+// survive unchanged; only the two shapes above are rewritten.
+func kiroSanitizeMessages(messages []map[string]any) ([]map[string]any, error) {
+	if len(messages) == 0 {
+		return messages, nil
+	}
+
+	raw, err := json.Marshal(messages)
+	if err != nil {
+		return nil, fmt.Errorf("kiro: marshal messages for sanitize: %w", err)
+	}
+	var typed []OpenAIMessage
+	if err := json.Unmarshal(raw, &typed); err != nil {
+		return nil, fmt.Errorf("kiro: unmarshal messages for sanitize: %w", err)
+	}
+
+	sanitized := SanitizeOpenAIMessages(typed)
+
+	out, err := json.Marshal(sanitized)
+	if err != nil {
+		return nil, fmt.Errorf("kiro: marshal sanitized messages: %w", err)
+	}
+	var result []map[string]any
+	if err := json.Unmarshal(out, &result); err != nil {
+		return nil, fmt.Errorf("kiro: unmarshal sanitized messages: %w", err)
+	}
+	return result, nil
 }
 
 // kiroConvertMessages maps OpenAI messages onto Kiro turns. system/tool become

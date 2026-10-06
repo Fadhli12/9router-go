@@ -1,10 +1,12 @@
 package dashboard
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	json "encoding/json/v2"
 
@@ -91,6 +93,75 @@ func TestHandleAuthLogin_SetsSessionCookie(t *testing.T) {
 	if !auth.Verify(session.Value, auth.Secret()) {
 		t.Error("session cookie must carry a verifiable token")
 	}
+}
+
+func TestHandleAuthLogin_UsesConfiguredSessionTimeout(t *testing.T) {
+	tests := []struct {
+		name          string
+		sessionTTL    string
+		wantMaxAge    int
+		wantExpiresIn time.Duration
+	}{
+		{name: "15 minutes", sessionTTL: "15m", wantMaxAge: 900, wantExpiresIn: 15 * time.Minute},
+		{name: "never", sessionTTL: "never", wantMaxAge: auth.NeverCookieMaxAge, wantExpiresIn: auth.NeverTTL},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			authTestEnv(t)
+			auth.ResetLoginLimiter()
+			repo, cleanup := setupTestDB(t)
+			defer cleanup()
+			storePassword(t, repo, "s3cret-pass")
+			if err := repo.UpdateSettingsRaw(map[string]any{"sessionTimeout": tt.sessionTTL}); err != nil {
+				t.Fatalf("set sessionTimeout: %v", err)
+			}
+
+			started := time.Now()
+			rec := postLogin(t, NewDashboardHandler(repo), "s3cret-pass")
+			finished := time.Now()
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+
+			session := findSessionCookie(t, rec)
+			if session.MaxAge != tt.wantMaxAge {
+				t.Fatalf("cookie MaxAge = %d, want %d", session.MaxAge, tt.wantMaxAge)
+			}
+			claims := decodeSessionClaims(t, session.Value)
+			if claims.Exp < started.Add(tt.wantExpiresIn).Unix() || claims.Exp > finished.Add(tt.wantExpiresIn).Unix() {
+				t.Fatalf("claims.Exp = %d, want between %d and %d", claims.Exp, started.Add(tt.wantExpiresIn).Unix(), finished.Add(tt.wantExpiresIn).Unix())
+			}
+		})
+	}
+}
+
+func findSessionCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
+	t.Helper()
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == auth.CookieName {
+			return c
+		}
+	}
+	t.Fatalf("expected an %s cookie", auth.CookieName)
+	return nil
+}
+
+func decodeSessionClaims(t *testing.T, token string) auth.SessionClaims {
+	t.Helper()
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("expected jwt token, got %q", token)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode claims: %v", err)
+	}
+	var claims auth.SessionClaims
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		t.Fatalf("unmarshal claims: %v", err)
+	}
+	return claims
 }
 
 func TestHandleAuthStatus_SessionRoundTrip(t *testing.T) {

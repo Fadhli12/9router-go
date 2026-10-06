@@ -28,10 +28,73 @@ const (
 	CookieName = "auth_token"
 	// TokenTTL is the session lifetime (upstream SESSION_MAX_AGE_SEC = 24h).
 	TokenTTL = 24 * time.Hour
+	// NeverTTL represents effectively non-expiring sessions (~100 years).
+	NeverTTL = 100 * 365 * 24 * time.Hour
+	// NeverCookieMaxAge is the cookie MaxAge for 'never' expiry (10 years in seconds).
+	NeverCookieMaxAge = 10 * 365 * 24 * 3600 // 315360000
 	// CLITokenHeader lets local CLI clients bypass the login gate, mirroring
 	// upstream's x-9r-cli-token bypass in dashboardGuard.
 	CLITokenHeader = "x-9r-cli-token"
 )
+
+// ParseSessionTimeout maps sessionTimeout strings to durations:
+// '15m' -> 15m, '1h' -> 1h, '24h' -> 24h (default), '7d' -> 7d, 'never' -> NeverTTL.
+func ParseSessionTimeout(v string) time.Duration {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "15m":
+		return 15 * time.Minute
+	case "1h":
+		return 1 * time.Hour
+	case "24h":
+		return 24 * time.Hour
+	case "7d":
+		return 7 * 24 * time.Hour
+	case "never":
+		return NeverTTL
+	default:
+		return TokenTTL
+	}
+}
+
+// TokenTTLFromRaw returns the session duration configured in raw settings.
+func TokenTTLFromRaw(raw map[string]any) time.Duration {
+	if raw == nil {
+		return TokenTTL
+	}
+	if v, ok := raw["sessionTimeout"].(string); ok {
+		return ParseSessionTimeout(v)
+	}
+	return TokenTTL
+}
+
+// TokenTTLFromSettings returns the session duration configured in repo settings.
+func TokenTTLFromSettings(repo *db.Repo) time.Duration {
+	if repo == nil {
+		return TokenTTL
+	}
+	raw, err := repo.GetSettingsRaw()
+	if err != nil || raw == nil {
+		return TokenTTL
+	}
+	return TokenTTLFromRaw(raw)
+}
+
+// SessionTTL is an alias for TokenTTLFromSettings.
+func SessionTTL(repo *db.Repo) time.Duration {
+	return TokenTTLFromSettings(repo)
+}
+
+// CookieMaxAge calculates the cookie Max-Age in seconds for the given duration.
+// For 'never' (or any duration >= 10 years), it returns NeverCookieMaxAge (10 years / 315360000s).
+func CookieMaxAge(ttl time.Duration) int {
+	if ttl <= 0 {
+		return int(TokenTTL.Seconds())
+	}
+	if ttl >= 10*365*24*time.Hour {
+		return NeverCookieMaxAge
+	}
+	return int(ttl.Seconds())
+}
 
 // Secret returns the HS256 signing secret: JWT_SECRET if set, otherwise the
 // persisted DATA_DIR/jwt-secret generated at config load.
@@ -76,14 +139,29 @@ type SessionClaims struct {
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 // Sign creates a signed HS256 JWT carrying the `authenticated` claim.
-func Sign(secret string, now time.Time) (string, error) {
-	return SignWith(secret, now, SessionClaims{Authenticated: true})
+// An optional TTL may be provided; defaults to TokenTTL (24h).
+func Sign(secret string, now time.Time, ttl ...time.Duration) (string, error) {
+	return SignWith(secret, now, SessionClaims{Authenticated: true}, ttl...)
+}
+
+// SignWithTTL creates a signed HS256 JWT with extra claims and an explicit TTL.
+func SignWithTTL(secret string, now time.Time, extra SessionClaims, ttl time.Duration) (string, error) {
+	return SignWith(secret, now, extra, ttl)
 }
 
 // SignWith creates a signed HS256 JWT with extra claims (SSO login flows).
-func SignWith(secret string, now time.Time, extra SessionClaims) (string, error) {
+// An optional TTL may be provided; defaults to TokenTTL (24h).
+func SignWith(secret string, now time.Time, extra SessionClaims, ttl ...time.Duration) (string, error) {
 	if secret == "" {
 		return "", errors.New("no jwt secret available")
+	}
+	sessionTTL := TokenTTL
+	if len(ttl) > 0 && ttl[0] > 0 {
+		sessionTTL = ttl[0]
+	}
+	exp := extra.Exp
+	if exp == 0 {
+		exp = now.Add(sessionTTL).Unix()
 	}
 	payload, err := json.Marshal(SessionClaims{
 		Authenticated: true,
@@ -94,7 +172,7 @@ func SignWith(secret string, now time.Time, extra SessionClaims) (string, error)
 		SamlName:      extra.SamlName,
 		SamlEmail:     extra.SamlEmail,
 		Iat:           now.Unix(),
-		Exp:           now.Add(TokenTTL).Unix(),
+		Exp:           exp,
 	})
 	if err != nil {
 		return "", err
@@ -197,8 +275,13 @@ func secureCookie(r *http.Request) bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv("AUTH_COOKIE_SECURE")), "true")
 }
 
-// SetCookie writes the session cookie (httpOnly, SameSite=Lax, 24h max-age).
-func SetCookie(w http.ResponseWriter, r *http.Request, token string) {
+// SetCookie writes the session cookie (httpOnly, SameSite=Lax).
+// An optional TTL may be provided; defaults to TokenTTL (24h).
+func SetCookie(w http.ResponseWriter, r *http.Request, token string, ttl ...time.Duration) {
+	duration := TokenTTL
+	if len(ttl) > 0 && ttl[0] > 0 {
+		duration = ttl[0]
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     CookieName,
 		Value:    token,
@@ -206,8 +289,13 @@ func SetCookie(w http.ResponseWriter, r *http.Request, token string) {
 		HttpOnly: true,
 		Secure:   secureCookie(r),
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(TokenTTL.Seconds()),
+		MaxAge:   CookieMaxAge(duration),
 	})
+}
+
+// SetCookieWithTTL writes the session cookie with an explicit TTL duration.
+func SetCookieWithTTL(w http.ResponseWriter, r *http.Request, token string, ttl time.Duration) {
+	SetCookie(w, r, token, ttl)
 }
 
 // ClearCookie expires the session cookie (logout).

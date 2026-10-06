@@ -191,6 +191,144 @@ func TestLoginLimiter_BoundedUnderScan(t *testing.T) {
 	ResetLoginLimiter()
 }
 
+func TestParseSessionTimeout(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected time.Duration
+	}{
+		{"15m", 15 * time.Minute},
+		{"15M", 15 * time.Minute},
+		{" 1h ", 1 * time.Hour},
+		{"24h", 24 * time.Hour},
+		{"7d", 7 * 24 * time.Hour},
+		{"never", NeverTTL},
+		{"NEVER", NeverTTL},
+		{"unknown", TokenTTL},
+		{"", TokenTTL},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := ParseSessionTimeout(tt.input)
+			if got != tt.expected {
+				t.Errorf("ParseSessionTimeout(%q) = %v, want %v", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCookieMaxAge(t *testing.T) {
+	tests := []struct {
+		ttl      time.Duration
+		expected int
+	}{
+		{15 * time.Minute, 900},
+		{1 * time.Hour, 3600},
+		{24 * time.Hour, 86400},
+		{7 * 24 * time.Hour, 604800},
+		{NeverTTL, NeverCookieMaxAge},
+		{0, 86400},
+		{-1, 86400},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.ttl.String(), func(t *testing.T) {
+			got := CookieMaxAge(tt.ttl)
+			if got != tt.expected {
+				t.Errorf("CookieMaxAge(%v) = %d, want %d", tt.ttl, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestTokenTTLFromRaw(t *testing.T) {
+	if got := TokenTTLFromRaw(nil); got != TokenTTL {
+		t.Errorf("TokenTTLFromRaw(nil) = %v, want %v", got, TokenTTL)
+	}
+	raw := map[string]any{"sessionTimeout": "7d"}
+	if got := TokenTTLFromRaw(raw); got != 7*24*time.Hour {
+		t.Errorf("TokenTTLFromRaw(7d) = %v, want %v", got, 7*24*time.Hour)
+	}
+}
+
+func TestSessionTTLValues(t *testing.T) {
+	tests := []struct {
+		input string
+		want  time.Duration
+	}{
+		{"15m", 15 * time.Minute},
+		{"1h", 1 * time.Hour},
+		{"24h", 24 * time.Hour},
+		{"7d", 7 * 24 * time.Hour},
+		{"never", NeverTTL},
+		{"", 24 * time.Hour},
+		{"invalid", 24 * time.Hour},
+	}
+	for _, tt := range tests {
+		raw := map[string]any{"sessionTimeout": tt.input}
+		if got := TokenTTLFromRaw(raw); got != tt.want {
+			t.Errorf("TokenTTLFromRaw(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestSignWithCustomTTL(t *testing.T) {
+	secret := "test-secret"
+	now := time.Now()
+	token, err := Sign(secret, now, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("Sign failed: %v", err)
+	}
+	claims := decodeClaims(token, secret)
+	if claims == nil {
+		t.Fatal("decodeClaims returned nil")
+	}
+	expectedExp := now.Add(15 * time.Minute).Unix()
+	if claims.Exp != expectedExp {
+		t.Errorf("claims.Exp = %d, want %d", claims.Exp, expectedExp)
+	}
+}
+
+func TestSignWithTTLUsesExtraClaims(t *testing.T) {
+	secret := "test-secret"
+	now := time.Now()
+	token, err := SignWithTTL(secret, now, SessionClaims{Oidc: true, OidcEmail: "user@example.test"}, time.Hour)
+	if err != nil {
+		t.Fatalf("SignWithTTL failed: %v", err)
+	}
+	claims := decodeClaims(token, secret)
+	if claims == nil {
+		t.Fatal("decodeClaims returned nil")
+	}
+	if !claims.Oidc || claims.OidcEmail != "user@example.test" {
+		t.Errorf("claims = %+v, want OIDC email claims", claims)
+	}
+	if claims.Exp != now.Add(time.Hour).Unix() {
+		t.Errorf("claims.Exp = %d, want %d", claims.Exp, now.Add(time.Hour).Unix())
+	}
+}
+
+func TestSetCookieRespectsTTL(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	SetCookie(rec, req, "token123", NeverTTL)
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("expected cookie to be set")
+	}
+	if cookies[0].MaxAge != NeverCookieMaxAge {
+		t.Errorf("cookie MaxAge = %d, want %d", cookies[0].MaxAge, NeverCookieMaxAge)
+	}
+
+	rec2 := httptest.NewRecorder()
+	SetCookieWithTTL(rec2, req, "token456", 15*time.Minute)
+	cookies2 := rec2.Result().Cookies()
+	if len(cookies2) == 0 || cookies2[0].MaxAge != 900 {
+		t.Errorf("cookie MaxAge = %v, want 900", cookies2[0].MaxAge)
+	}
+}
+
 func itoa(i int) string {
 	if i == 0 {
 		return "0"

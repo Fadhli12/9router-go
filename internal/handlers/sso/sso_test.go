@@ -17,6 +17,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"9router/proxy/internal/auth"
 	"9router/proxy/internal/db"
 )
 
@@ -202,4 +203,46 @@ func TestFormatCertificate_AcceptsRawBase64(t *testing.T) {
 func toJSONString(s string) string {
 	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`)
 	return `"` + replacer.Replace(s) + `"`
+}
+
+func TestIssueSession_RespectsConfiguredSessionTTL(t *testing.T) {
+	t.Setenv("JWT_SECRET", "sso-test-secret")
+	repo, cleanup := newTestRepo(t)
+	defer cleanup()
+
+	if err := repo.UpdateSettingsRaw(map[string]any{"sessionTimeout": "never"}); err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+
+	h := NewHandler(repo)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	claims := auth.SessionClaims{
+		Authenticated: true,
+		Oidc:          true,
+		OidcEmail:     "admin@example.com",
+	}
+	token, err := h.IssueSession(rec, req, claims)
+	if err != nil {
+		t.Fatalf("IssueSession: %v", err)
+	}
+	if !auth.Verify(token, auth.Secret()) {
+		t.Fatalf("token failed verification")
+	}
+
+	cookies := rec.Result().Cookies()
+	var sessionCookie *http.Cookie
+	for _, c := range cookies {
+		if c.Name == auth.CookieName {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatalf("expected session cookie")
+	}
+	if sessionCookie.MaxAge != auth.NeverCookieMaxAge {
+		t.Errorf("cookie MaxAge = %d, want %d", sessionCookie.MaxAge, auth.NeverCookieMaxAge)
+	}
 }

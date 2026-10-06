@@ -315,3 +315,169 @@ func TestOpenAIToKiro_EmptyUserTurnGetsPlaceholder(t *testing.T) {
 		t.Errorf("empty user turn should get %q placeholder, got %q", kiroEmptyUserPlaceholder, c)
 	}
 }
+
+// kiroHistoryAssistantTexts collects the content string of every
+// assistantResponseMessage turn in history, in order.
+func kiroHistoryAssistantTexts(hist []any) []string {
+	var out []string
+	for _, h := range hist {
+		turn, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		arm, ok := turn["assistantResponseMessage"].(map[string]any)
+		if !ok {
+			continue
+		}
+		c, _ := arm["content"].(string)
+		out = append(out, c)
+	}
+	return out
+}
+
+// TestOpenAIToKiro_SanitizesOrphanToolsAndEmptyAssistantShells covers the
+// exact failure shape SanitizeOpenAIMessages exists for: alternating tool
+// messages carrying no tool_call_id at all, interleaved with empty
+// assistant shells that otherwise precede them. Before sanitization was
+// wired in, kiroConvertMessages would both (a) emit a dummy "..."
+// assistantResponseMessage for every empty shell and (b) try to place the
+// id-less tool content as a toolResult, which Kiro rejects with "Invalid
+// tool use format." The sanitized conversation must build a valid
+// conversationState with no "..." placeholder turn and no toolResults
+// entries, and must preserve the tool content as readable text instead of
+// dropping it.
+func TestOpenAIToKiro_SanitizesOrphanToolsAndEmptyAssistantShells(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"user","content":"run the two checks"},
+		{"role":"assistant","content":""},
+		{"role":"tool","content":"first check: pass"},
+		{"role":"assistant","content":""},
+		{"role":"tool","content":"second check: pass"},
+		{"role":"assistant","content":"Both checks passed."},
+		{"role":"user","content":"thanks, run one more"}
+	]}`)
+	out, err := OpenAIToKiro(body, KiroTranslateOptions{Model: "m"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := decodeKiro(t, out)
+	cs := m["conversationState"].(map[string]any)
+	hist, _ := cs["history"].([]any)
+
+	for _, text := range kiroHistoryAssistantTexts(hist) {
+		if text == kiroAssistantPlaceholder {
+			t.Errorf("history must not contain a dummy %q assistant turn after sanitization, got turns %v", kiroAssistantPlaceholder, kiroHistoryAssistantTexts(hist))
+		}
+	}
+
+	// No two adjacent user turns (Kiro requires strict alternation), and no
+	// turn may carry a toolResults entry since every tool message here was
+	// id-less and must have been folded into user text instead.
+	prevUser := false
+	for _, h := range hist {
+		turn := h.(map[string]any)
+		uim, isUser := turn["userInputMessage"].(map[string]any)
+		if isUser && prevUser {
+			t.Error("history has consecutive user turns")
+		}
+		prevUser = isUser
+		if !isUser {
+			prevUser = false
+			continue
+		}
+		if ctx, ok := uim["userInputMessageContext"].(map[string]any); ok {
+			if results, _ := ctx["toolResults"].([]any); len(results) > 0 {
+				t.Errorf("id-less tool message must not reach toolResults, got %v", results)
+			}
+		}
+	}
+
+	// The sanitized tool content must still be present as readable text
+	// somewhere in the conversation (not silently dropped).
+	full := kiroFlattenConversationText(t, m)
+	for _, want := range []string{"first check: pass", "second check: pass"} {
+		if !strings.Contains(full, want) {
+			t.Errorf("expected sanitized tool content %q to survive as text, got %q", want, full)
+		}
+	}
+}
+
+// kiroFlattenConversationText concatenates every user/assistant content
+// string across history and the current message, for substring assertions
+// that don't care which turn ended up holding the text.
+func kiroFlattenConversationText(t *testing.T, m map[string]any) string {
+	t.Helper()
+	var b strings.Builder
+	cs, ok := m["conversationState"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	hist, _ := cs["history"].([]any)
+	for _, h := range hist {
+		turn, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		if uim, ok := turn["userInputMessage"].(map[string]any); ok {
+			if c, _ := uim["content"].(string); c != "" {
+				b.WriteString(c)
+				b.WriteString("\n")
+			}
+		}
+		if arm, ok := turn["assistantResponseMessage"].(map[string]any); ok {
+			if c, _ := arm["content"].(string); c != "" {
+				b.WriteString(c)
+				b.WriteString("\n")
+			}
+		}
+	}
+	if cur, ok := cs["currentMessage"].(map[string]any); ok {
+		if uim, ok := cur["userInputMessage"].(map[string]any); ok {
+			if c, _ := uim["content"].(string); c != "" {
+				b.WriteString(c)
+			}
+		}
+	}
+	return b.String()
+}
+
+// TestOpenAIToKiro_EmptyAssistantShellBeforeToolCallsIsDropped covers the
+// legitimate (non-orphan) shell shape: an assistant turn with no text that
+// immediately precedes its own tool_calls announcement is NOT what the
+// sanitizer targets (SanitizeOpenAIMessages only drops a *separate*
+// contentless assistant message that precedes a *tool*-role message), so it
+// must still flow through to toolUses as before. This guards against a
+// regression where sanitization accidentally eats legitimate tool_calls.
+func TestOpenAIToKiro_EmptyAssistantShellBeforeToolCallsIsDropped(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"user","content":"weather?"},
+		{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{}"}}]},
+		{"role":"tool","tool_call_id":"call_1","content":"sunny"}
+	]}`)
+	out, err := OpenAIToKiro(body, KiroTranslateOptions{Model: "m"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := decodeKiro(t, out)
+	cs := m["conversationState"].(map[string]any)
+	hist, _ := cs["history"].([]any)
+	found := false
+	for _, h := range hist {
+		arm, ok := h.(map[string]any)["assistantResponseMessage"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if uses, _ := arm["toolUses"].([]any); len(uses) > 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("legitimate tool_calls announcement must survive sanitization and reach history as toolUses")
+	}
+	cur := cs["currentMessage"].(map[string]any)["userInputMessage"].(map[string]any)
+	ctx, _ := cur["userInputMessageContext"].(map[string]any)
+	results, _ := ctx["toolResults"].([]any)
+	if len(results) != 1 || results[0].(map[string]any)["toolUseId"] != "call_1" {
+		t.Errorf("matched tool result must still reach toolResults, got %v", ctx)
+	}
+}
