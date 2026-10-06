@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v1.9.10-exp.2] - 2026-10-06
+
 ### 🩺 `text-danger` gagal bar kontras di tema gelap — teks error nyaris tak terbaca
 
 Tracing dari #168 menemukan bahwa perbaikannya sendiri belum lolos ukur.
