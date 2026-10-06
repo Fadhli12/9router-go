@@ -1,6 +1,42 @@
 # Changelog
 
 ## [Unreleased]
+### 🩺 Test throttle quota mengukur sesuatu yang tidak dijamin scheduler
+
+`TestHandleGetConnectionUsage_SpacesBurstAcrossConnections` dan
+`...SpacesAntigravityBurst` gagal kadang-kadang di mesin penuh: gap antar-read
+terukur 33ms terhadap lantai 40ms. Gate-nya sendiri benar.
+
+**Akar masalahnya bukan gate, tapi cara test mengukurnya.** `assertSpaced`
+menuntut setiap pasangan `time.Now()` di handler HTTP berjarak >= 40ms.
+Tapi jaraknya hanya dijamin di *reservation* — `fetchgate.reserve` menetapkan
+`start` lalu tidur sampai ke sana, jadi yang dijamin adalah durasi tidurnya,
+bukan wake-up tepat waktu. Selisih latensi bangun goroutine sebelumnya
+dibebankan ke gap berikutnya. `internal/fetchgate/gate_test.go` sudah
+mendokumentasikan ini dan menyelesaikan masalahnya di sisi sana: **bandingkan
+promised starts, bukan stopwatch**. Test di sana mencatat kasus yang sama —
+gate berperilaku benar tapi terbaca 39.43ms terhadap lantai 40ms, dan
+29.77ms terhadap 30ms, pada indeks yang tidak berpola. Solusinya menghapus
+suku itu, bukan membeli margin.
+
+**Perbaikannya mengukur hal yang sama dengan cara yang tidak bisa kalah.**
+Sekarang `assertSpaced` memakai **jarak rata-rata** (`span / (n-1)`), bukan
+tiap gap satu per satu. Noise latensi bangun yang tumpang tindih saling
+meniadakan, dan ini memang properti yang gate janjikan: N read harus berjarak
+sedikitnya N-1 reservation.
+
+Lantainya diletakkan **di antara** dua hasil, bukan di gap yang dikonfigurasi.
+Terukur di mesin ini dengan gate 40ms: read berpacing rata-rata ~39.8ms, yang
+tak berpacing ~4.3ms. Lantai 20ms memberi jarak ~5x dari yang tak berpacing
+dan ~2x dari yang berpacing, jadi assertion bertahan baik di bawah scheduler
+berbeban maupun di atasnya. Meminta tepat 40ms akan menguji ketepatan timer
+yang tidak pernah dijanjikan.
+
+Diverifikasi menangkap regresi: dengan gate dimatikan sementara (`New(0,0)`),
+kedua test gagal dengan jarak rata-rata 9.46ms dan 3.91ms — jauh di bawah
+lantai. Dengan gate dipulihkan, keduanya hijau berulang: 6x sendirian, 3x di
+bawah 5 suite penuh yang berjalan bersamaan.
+
 
 ### 🩹 `text-error` / `bg-error` adalah utility mati — enam elemen diam-diam kehilangan warna error
 
