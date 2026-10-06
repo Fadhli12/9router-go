@@ -184,25 +184,46 @@ func TranslateOpenAIToGemini(openaiBody []byte) ([]byte, error) {
 		return nil, fmt.Errorf("parse messages: %w", err)
 	}
 
-	// Empty assistant shells and orphan tool messages would make Gemini 400.
-	msgs = SanitizeOpenAIMessages(msgs)
+	// Empty assistant shells would make Gemini 400; drop them.
+	// Orphan tool messages (unknown tool_call_id) are kept and handled below
+	// by deriving a functionResponse name from the id.
+	msgs = SanitizeOpenAIMessagesForGemini(msgs)
 
-	// Pre-map tool_call_id -> function name from assistant messages
+	// Pre-map tool_call_id -> function names from assistant messages, queued per
+	// id. An OpenAI tool_call_id is only unique within its own assistant turn, so
+	// a long agent session can reuse one id for two different tools; a plain
+	// id->name map keeps only the LAST name and an earlier turn's tool result
+	// would then be renamed to the later tool. Each tool result consumes the
+	// oldest unconsumed name for its id, so a functionResponse always answers the
+	// functionCall it belongs to. Parity with decolua/9router #4273 / #4589.
+	tcID2Names := make(map[string][]string)
 	tcID2Name := make(map[string]string)
 	for _, msg := range msgs {
-		if msg.Role == "assistant" {
-			for _, tc := range msg.ToolCalls {
-				if tc.ID != "" && tc.Function.Name != "" {
-					cleanID := tc.ID
-					if ts := strings.LastIndex(cleanID, "__ts__"); ts != -1 {
-						cleanID = cleanID[:ts]
-					}
-					tcID2Name[tc.ID] = tc.Function.Name
-					tcID2Name[cleanID] = tc.Function.Name
-				}
+		if msg.Role != "assistant" {
+			continue
+		}
+		for _, tc := range msg.ToolCalls {
+			if tc.ID == "" || tc.Function.Name == "" {
+				continue
+			}
+			cleanID := tc.ID
+			if ts := strings.LastIndex(cleanID, "__ts__"); ts != -1 {
+				cleanID = cleanID[:ts]
+			}
+			tcID2Names[tc.ID] = append(tcID2Names[tc.ID], tc.Function.Name)
+			if cleanID != tc.ID {
+				tcID2Names[cleanID] = append(tcID2Names[cleanID], tc.Function.Name)
+			}
+			tcID2Name[tc.ID] = tc.Function.Name
+			if cleanID != tc.ID {
+				tcID2Name[cleanID] = tc.Function.Name
 			}
 		}
 	}
+
+	// Cursor into tcID2Names: each tool result takes the oldest unconsumed name
+	// for its id, so a reused tool_call_id cannot rename an earlier turn.
+	tcNameCursor := make(map[string]int)
 
 	var systemParts []GeminiPart
 	for _, msg := range msgs {
@@ -285,23 +306,30 @@ func TranslateOpenAIToGemini(openaiBody []byte) ([]byte, error) {
 			if ts := strings.LastIndex(cleanID, "__ts__"); ts != -1 {
 				cleanID = cleanID[:ts]
 			}
-			name := tcID2Name[msg.ToolCallID]
-			if name == "" {
-				name = tcID2Name[cleanID]
-			}
+		name := nextToolNameForID(tcID2Names, tcID2Name, tcNameCursor, msg.ToolCallID, cleanID)
 
-			// If this tool message cannot be paired with an assistant tool call (e.g. background task
-			// notifications or system status updates injected with role: "tool"), converting it into an
-			// orphan Gemini functionResponse causes upstream (especially Antigravity Claude / Vertex AI)
-			// to synthesize a phantom tool_use without an ID and reject the request with HTTP 400
-			// ("messages.1.content.1.tool_use.id: Field required").
-			// Instead, treat orphan tool messages cleanly as regular user text content.
-			if name == "" {
+		// If the name lookup returned "" we have two cases:
+		//   1. cleanID is non-empty but unknown — derive the name from the id by
+		//      stripping the conventional "call_" prefix (parity with upstream #4589).
+		//   2. cleanID is empty — a genuine orphan (e.g. background task notification
+		//      injected as role:"tool" with no tool_call_id). Converting that into a
+		//      functionResponse causes upstream (Antigravity Claude / Vertex AI) to
+		//      synthesize a phantom tool_use and reject the request with HTTP 400
+		//      ("messages.1.content.1.tool_use.id: Field required").
+		//      Treat it as plain user text instead.
+		if name == "" {
+			if cleanID == "" {
 				parts := []GeminiPart{{Text: content}}
 				parts = append(parts, geminiToolMediaParts(msg.Content)...)
 				req.Contents = append(req.Contents, GeminiContent{Role: "user", Parts: parts})
 				continue
 			}
+			// Derive from id: strip leading "call_" if present.
+			name = strings.TrimPrefix(cleanID, "call_")
+			if name == "" {
+				name = cleanID
+			}
+		}
 
 			// Tool result content may be plain text or JSON.
 			// Gemini requires the result to be valid JSON.
@@ -502,19 +530,7 @@ func TranslateGeminiResponseToOpenAI(geminiBody []byte) ([]byte, *OpenAIUsage, e
 	}
 
 	// Map finish reason
-	claudeStop := "stop"
-	switch finishReason {
-	case "STOP":
-		claudeStop = "stop"
-	case "MAX_TOKENS":
-		claudeStop = "length"
-	case "SAFETY":
-		claudeStop = "stop"
-	case "RECITATION":
-		claudeStop = "stop"
-	case "FINISH_REASON_UNSPECIFIED":
-		claudeStop = "stop"
-	}
+	claudeStop := geminiFinishToOpenAI(finishReason)
 	if len(toolCalls) > 0 {
 		claudeStop = "tool_calls"
 	}
@@ -695,17 +711,7 @@ func TranslateGeminiChunkToOpenAI(chunk []byte, state *GeminiStreamState) ([]byt
 
 		// Finish reason
 		if candidate.FinishReason != "" {
-			openAIStop := "stop"
-			switch candidate.FinishReason {
-			case "STOP":
-				openAIStop = "stop"
-			case "MAX_TOKENS":
-				openAIStop = "length"
-			case "SAFETY", "RECITATION", "OTHER":
-				openAIStop = "stop"
-			default:
-				openAIStop = "stop"
-			}
+			openAIStop := geminiFinishToOpenAI(candidate.FinishReason)
 			if state.HasToolCalls && openAIStop != "length" {
 				openAIStop = "tool_calls"
 			}
@@ -990,6 +996,44 @@ func geminiTerminalUserParts(modelParts []GeminiPart) []GeminiPart {
 		})
 	}
 	return responses
+}
+
+// geminiFinishToOpenAI maps a Gemini finishReason to the OpenAI finish_reason
+// shared by the non-stream and streaming paths, so the two can never drift.
+// Parity with toOpenAIFinish(reason, "gemini") in
+// open-sse/translator/concerns/finishReason.js.
+func geminiFinishToOpenAI(reason string) string {
+	switch strings.ToUpper(reason) {
+	case "MAX_TOKENS":
+		return "length"
+	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT":
+		return "content_filter"
+	default:
+		return "stop"
+	}
+}
+
+// nextToolNameForID resolves the function name a tool result must carry: the
+// name of the functionCall it actually answers. Names are queued per
+// tool_call_id and consumed in document order, because that id is only unique
+// within a single assistant turn — a replayed id would otherwise make an
+// earlier turn's result carry a later tool's name. Returns "" when no call for
+// the id is known, so the caller can fall back to the id-derived name.
+// Parity with decolua/9router #4273 / #4589.
+func nextToolNameForID(queued map[string][]string, fallback map[string]string, cursor map[string]int, id, cleanID string) string {
+	queue, key := queued[id], id
+	if len(queue) == 0 && cleanID != id {
+		queue, key = queued[cleanID], cleanID
+	}
+	if len(queue) > cursor[key] {
+		name := queue[cursor[key]]
+		cursor[key]++
+		return name
+	}
+	if name := fallback[id]; name != "" {
+		return name
+	}
+	return fallback[cleanID]
 }
 
 func isGeminiPartEmpty(p GeminiPart) bool {

@@ -1112,12 +1112,28 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "name": "GPT-6 Sol"
     },
     {
+      "id": "grok-4.7",
+      "name": "Grok 4.7"
+    },
+    {
+      "id": "mimo-v2.6-flash:free",
+      "name": "MiMo V2.6 Flash (Free)"
+    },
+    {
+      "id": "mimo-v2.5:free",
+      "name": "MiMo V2.5 (Free)"
+    },
+    {
+      "id": "qwen3.8-flash:free",
+      "name": "Qwen 3.8 Flash (Free)"
+    },
+    {
       "id": "deepseek-v4.1-flash:free",
       "name": "DeepSeek V4.1 Flash (Free)"
     },
     {
-      "id": "grok-4.7",
-      "name": "Grok 4.7"
+      "id": "deepseek-v4-flash:free",
+      "name": "DeepSeek V4 Flash (Free)"
     }
   ],
   "dahl": [
@@ -1150,6 +1166,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "agnes-3.0-flash",
       "name": "Agnes 3.0 Flash"
+    },
+    {
+      "id": "agnes-3.0-pro",
+      "name": "Agnes 3.0 Pro"
     }
   ],
   "atria": [

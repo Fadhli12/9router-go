@@ -21,6 +21,10 @@ import (
 //
 // The returned slice is a new slice; the input messages are not mutated in
 // place where a message is dropped or rewritten.
+//
+// For Gemini specifically, use SanitizeOpenAIMessagesForGemini, which skips the
+// orphan-rewrite step: the Gemini translator derives functionResponse names from
+// unknown tool_call_ids instead of converting them to user text.
 func SanitizeOpenAIMessages(messages []OpenAIMessage) []OpenAIMessage {
 	if len(messages) == 0 {
 		return messages
@@ -73,6 +77,34 @@ func SanitizeOpenAIMessages(messages []OpenAIMessage) []OpenAIMessage {
 		default:
 			out = append(out, msg)
 		}
+	}
+	return out
+}
+
+// SanitizeOpenAIMessagesForGemini is like SanitizeOpenAIMessages but skips the
+// orphan-tool-message rewrite. Tool messages with an unknown tool_call_id are
+// passed through unchanged so the Gemini translator can derive a
+// functionResponse name from the id rather than converting the message to user
+// text (which would hide the result from Gemini's multi-turn tool protocol).
+// Empty assistant shells are still dropped because Gemini rejects them.
+func SanitizeOpenAIMessagesForGemini(messages []OpenAIMessage) []OpenAIMessage {
+	if len(messages) == 0 {
+		return messages
+	}
+	out := make([]OpenAIMessage, 0, len(messages))
+	for i, msg := range messages {
+		if msg.Role != "assistant" || !isOpenAIAssistantEmpty(msg) {
+			out = append(out, msg)
+			continue
+		}
+		j := i + 1
+		for j < len(messages) && messages[j].Role == "assistant" && isOpenAIAssistantEmpty(messages[j]) {
+			j++
+		}
+		if j < len(messages) && messages[j].Role == "tool" {
+			continue
+		}
+		out = append(out, msg)
 	}
 	return out
 }

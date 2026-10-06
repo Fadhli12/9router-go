@@ -2,6 +2,600 @@
 
 ## [Unreleased]
 
+## [v1.9.10-exp.1] - 2026-10-06
+
+### 🐛 Tombol Test di halaman media provider salah probe — model System One selalu 500
+
+Gejalanya persis seperti yang dilaporkan: di
+`/dashboard/media-providers/systemone/opencode-zen`, tombol labu (Test) pada
+`jev-1.13` dan `jev-1.13-free` selalu gagal dengan
+`ForwardOpencodeZen: forward to https://opencode.ai/zen/v1/chat/completions:
+upstream returned 500`, padahal tombol **Run** di halaman yang sama langsung
+berhasil.
+
+**Penyebabnya bukan lane Zen.** Dua tombol itu memang memanggil dua endpoint
+berbeda: **Run** mem-post ke `/v1/systemone`, sedangkan **Test** memanggil
+`POST /api/models/test` — dan handler lama (`chat.HandleTestModel`) selalu
+membentuk payload Chat Completions apa pun jenis modelnya. Diverifikasi langsung
+ke upstream: `POST /zen/v1/chat/completions` dengan `jev-1.13-free` memang
+membalas `500 {"type":"error",…,"message":"Internal server error"}`, sementara
+`POST /zen/v1/systemone` pada model yang sama membalas `200` beserta `answers`.
+Jadi gateway memang benar meneruskan ke lane yang salah — dan model yang sehat
+ditandai rusak. Berlaku juga untuk model media lain di provider yang sama.
+
+**Perbaikan (parity upstream `decolua/9router#20014b31`, "probe System One models
+through /v1/systemone"):**
+
+- **Probe sekarang mengikuti `kind`, bukan asumsi chat.** File baru
+  `internal/handlers/media/model_test_ping.go` menerima `{model, kind}` lalu
+  meneruskan probe ke handler yang memiliki kind tersebut:
+  `/embeddings`, `/images/generations`, `/audio/speech`,
+  `/audio/transcriptions`, `/videos/generations`, `/systemone`, atau
+  `/chat/completions` bila `kind` kosong (halaman provider biasa, yang modelnya
+  memang chat). `chat.HandleTestModel` dihapus — tidak ada jalur tanpa shim.
+- **Verdict dibaca dari payload, bukan dari status.** Semua endpoint di atas
+  menyalin status upstream apa adanya, jadi HTTP 200 tidak otomatis berarti
+  lulus: `answers` non-kosong untuk System One, `data[].embedding` untuk
+  embedding, `data[]` untuk image, teks untuk STT, job yang ter-create untuk
+  video, dan bytes/base64 untuk TTS. File yang sama juga membaca
+  `{"error":…}` di balik 200, `status`/`msg` yang bukan sukses, dan membongkar
+  amplop `{"success":true,"data":…}` milik Cline — ketiganya akan melaporkan
+  "provider baik-baik saja" untuk upstream yang sedang rusak. Balasan
+  reasoning-only yang habis token tetap lulus (parity issue #3010).
+- **Timeout 15 detik per probe**, turunannya mengikuti konteks request, jadi
+  tombol tidak menggantung pada provider yang tidak menjawab.
+- **Frontend mengirim `kind`.** `api.testModel(model, kind?)` +
+  `MediaProviderDetail.handleTestModel` mengirim kind halaman ini, jadi jenis
+  model dibaca dari halaman yang menampilkannya — bukan dari tebakan nama id.
+- **Hasil test akhirnya tampil.** `modelTestResults` sudah diisi sejak lama tapi
+  tidak pernah dirender; baris model sekarang menampilkan ikon
+  `check_circle`/`cancel`, border hijau/merah, latensi dari pengukuran server,
+  dan pesan error sebagai tooltip — sesuai `ModelsRow` upstream.
+
+**Verifikasi:**
+
+- `internal/integration/model_test_ping_test.go` (baru) mengetes lewat router
+  produksi dengan upstream palsu: probe System One harus mendarat di
+  `/zen/v1/systemone` (dan gagal dengan jalur chat — hasilnya persis string 500
+  dari laporan user), default tanpa `kind` tetap di lane chat dengan
+  `max_tokens:1024`, dan `kind` tak dikenal ditolak 400. Suite `integration`
+  penuh hijau (70 dtk).
+- Smoke run di binary asli dengan DB terisolasi: keenam kind lewat `smokec/`
+  (node `openai-compatible` → upstream palsu) semuanya `ok:true`; yang paling
+  menentukan, `{"model":"oc/jev-1.13-free","kind":"systemone"}` membalas
+  `{"ok":true,"latencyMs":955,"status":200}` ke model yang chat lane-nya
+  terbukti 500, sementara `POST /v1/systemone` yang sama juga 200.
+  `{"model":"ocz/jev-1.13","kind":"systemone"}` kini melaporkan apa adanya
+  `HTTP 401: … Rate-limited Zen models require a workspace` — kredensial yang
+  memang belum siap, bukan model rusak.
+- `go build ./...`, `go vet ./...`, `go test ./...`, suite `integration`,
+  `bun test` 219/219, `bun run build`, dan `bun run ratchet:svelte`
+  (0 unresolved, 89 error = baseline) semuanya hijau.
+
+### 🧪 Rilis split dua channel: stabil & experimental — dipilah dari tag
+
+Selama ini `release.yml` memperlakukan semua tag `v*` sama: tag
+`v1.10.0-exp.1` akan terbit sebagai GitHub Release **non-prerelease**, jadi
+`releases/latest` — endpoint fallback yang dipakai `internal/updater` —
+menunjuk ke build experimental dan menawarkannya ke setiap user stabil. Tag
+Docker `1.10` juga ditimpa binary yang sama.
+
+Channel sekarang diturunkan dari tag itu sendiri — bukan dari branch, bukan
+dari commit, bukan dari input manual — sehingga apa yang di-tag itulah yang
+diterbitkan, dan bisa diaudit.
+
+| Tag | Channel | GitHub Release | Docker |
+|---|---|---|---|
+| `v1.10.0` | stable | final | `latest`, `1.10`, `1.10.0` |
+| `v1.10.0-exp.1` | experimental | **Pre-release** | `exp`, `1.10-exp`, `1.10.0-exp.1` |
+
+Second guard tetap `autoApplyAllowed` (#73): build experimental tidak akan
+dipasang otomatis di atas rilis final yang sedang berjalan, meski dicek manual.
+
+**Job `channel` baru gagal cepat pada ketidaksesuaian sumber versi.** Ketiga
+kasus ini sebelumnya lolos diam-diam:
+
+- `VERSION` tidak sama dengan tag → binary terbit melaporkan versi dirinya
+  sebagai versi lama, karena `make cross` dan Dockerfile sama-sama meng-embed
+  file `VERSION`.
+- Rilis stable tanpa bump `version.json` → rilis terbit tapi **tidak sampai ke
+  siapa pun**; semua install tetap melaporkan "up to date" versi sebelumnya.
+- Versi experimental bocor ke `version.json` → build experimental diblodir ke
+  seluruh install. Manifest itu dipoll `9router-go update` di channel stabil,
+  jadi ini harus menggagalkan rilis, bukan sekadar peringatan.
+
+`scripts/bump-version.sh` menulis `version.json` hanya untuk bump stabil, dan
+menyentuh `updater.CurrentVersion` untuk keduanya. Channel graduate = bump
+stabil menyusul; itulah yang memindahkan `version.json`, tag Docker `:latest`,
+dan penawaran update.
+
+**Bonus yang ketemu di tengah:** cabang `python3` pada `bump-version.sh` rusak
+dari sebelum channel ini ada. Di Windows, `command -v python3` **berhasil** untuk
+stub Microsoft Store, yang lalu keluar non-zero tanpa menjalankan apa pun — dan
+karena `set -e`, skrip **mati setelah `VERSION` ditulis**. `version.json` tetap
+di versi lama, gate versi di atas akan menolaknya, dan tidak ada yang tahu
+kenapa. Jalur `sed` sekarang dipakai langsung, jadi tanpa `python3` pun, dan
+hasilnya diverifikasi ulang dengan `grep` sebelum lanjut.
+
+**Verifikasi:** kedua skrip dieksekusi sungguhan terhadap salinan repo di
+`%TEMP%` — 10 kasus channel (7 lulus, 3 ditolak; termasuk manual dispatch dan
+prerelease multi-dash) dan 19 pemeriksaan `bump-version.sh` (stable,
+experimental, graduate setelah experimental, input tidak valid, dan jalur
+tanpa `python3`). YAML workflow diparse `js-yaml`; banner release note
+experimental juga dicek tidak punya indentasi yang akan merendernya jadi code
+block.
+
+
+### 🩺 Test throttle quota mengukur sesuatu yang tidak dijamin scheduler
+
+`TestHandleGetConnectionUsage_SpacesBurstAcrossConnections` dan
+`...SpacesAntigravityBurst` gagal kadang-kadang di mesin penuh: gap antar-read
+terukur 33ms terhadap lantai 40ms. Gate-nya sendiri benar.
+
+**Akar masalahnya bukan gate, tapi cara test mengukurnya.** `assertSpaced`
+menuntut setiap pasangan `time.Now()` di handler HTTP berjarak >= 40ms.
+Tapi jaraknya hanya dijamin di *reservation* — `fetchgate.reserve` menetapkan
+`start` lalu tidur sampai ke sana, jadi yang dijamin adalah durasi tidurnya,
+bukan wake-up tepat waktu. Selisih latensi bangun goroutine sebelumnya
+dibebankan ke gap berikutnya. `internal/fetchgate/gate_test.go` sudah
+mendokumentasikan ini dan menyelesaikan masalahnya di sisi sana: **bandingkan
+promised starts, bukan stopwatch**. Test di sana mencatat kasus yang sama —
+gate berperilaku benar tapi terbaca 39.43ms terhadap lantai 40ms, dan
+29.77ms terhadap 30ms, pada indeks yang tidak berpola. Solusinya menghapus
+suku itu, bukan membeli margin.
+
+**Perbaikannya mengukur hal yang sama dengan cara yang tidak bisa kalah.**
+Sekarang `assertSpaced` memakai **jarak rata-rata** (`span / (n-1)`), bukan
+tiap gap satu per satu. Noise latensi bangun yang tumpang tindih saling
+meniadakan, dan ini memang properti yang gate janjikan: N read harus berjarak
+sedikitnya N-1 reservation.
+
+Lantainya diletakkan **di antara** dua hasil, bukan di gap yang dikonfigurasi.
+Terukur di mesin ini dengan gate 40ms: read berpacing rata-rata ~39.8ms, yang
+tak berpacing ~4.3ms. Lantai 20ms memberi jarak ~5x dari yang tak berpacing
+dan ~2x dari yang berpacing, jadi assertion bertahan baik di bawah scheduler
+berbeban maupun di atasnya. Meminta tepat 40ms akan menguji ketepatan timer
+yang tidak pernah dijanjikan.
+
+Diverifikasi menangkap regresi: dengan gate dimatikan sementara (`New(0,0)`),
+kedua test gagal dengan jarak rata-rata 9.46ms dan 3.91ms — jauh di bawah
+lantai. Dengan gate dipulihkan, keduanya hijau berulang: 6x sendirian, 3x di
+bawah 5 suite penuh yang berjalan bersamaan.
+
+
+### 🩹 `text-error` / `bg-error` adalah utility mati — enam elemen diam-diam kehilangan warna error
+
+Mengganti `text-error` di banner Usage & Analytics (#167) membuat warna
+keluar putih, bukan merah. Ternyata memang begitu: **tidak ada
+`--color-error` di CSS hasil build**, jadi `text-error`, `bg-error`, dan
+`border-error/40` adalah kelas yang tidak pernah menghasilkan deklarasi.
+Browser diam-diam jatuh ke warna teks yang diwarisi — putih di tema gelap.
+Enam elemen menulis "error" tapi tampil tanpanya.
+
+Lokasinya: link **Uninstall** dan pesan error uninstall di `TokenSaverView`,
+tombol konfirmasi `bg-error` di modal yang sama, pesan `saveError` di
+`CreateComboModal`, serta tiga titik status `bg-error` di Usage & Analytics
+(Recent Requests, tabel Details, dan header detail).
+
+**Cakupannya jauh lebih sempit dari dugaan awal.** Audit seluruh utility
+warna di CSS hasil build menunjukkan hanya `error` yang mati — `success`,
+`info`, `warning`, dan `danger` semuanya ada dan dipakai benar di banyak
+tempat. Hanya `error` yang tidak punya token.
+
+Penggantian memakai token yang sudah ada, bukan konvensi `red-600`:
+
+| Site | classes | Alasan |
+|---|---|---|
+| teks error (`TokenSaverView`, `CreateComboModal`) | `text-danger` | token repo, sudah dipakai variant `danger` di `Badge`/`Button` |
+| tombol konfirmasi | `bg-danger hover:bg-danger/80` | teks putih di atasnya 4.77:1 |
+| titik status | `bg-red-500` | lihat paragraf berikut |
+
+Titik status tidak memakai `bg-danger` karena **gagal bar non-teks 3:1**.
+Diukur dari piksel nyata terhadap `bg-surface` yang benar-benar ada di
+belakangnya: `bg-danger` (#cf222e) hanya **2.83:1** — di bawah ambang.
+`bg-red-500` (251,44,54) memberi **3.97:1** dan lolos. Titik sukses
+`bg-success` (16,185,129) memberi 5.97:1, jadi kedua cabang benar-benar
+terpisah dan keduanya terbaca sebagai non-teks.
+
+**Verifikasi:** `bun run build` bersih; `bun test` 219/219; `bun run
+ratchet:svelte` 0 unresolved identifier, 89 error (baseline 89, tidak naik).
+Bukti piksel di binary asli dengan `DATA_DIR` terisolasi: tabel Details dengan
+satu baris `success` dan satu baris `error` menghasilkan titik hijau
+(16,185,129) dan titik merah (251,44,54) — dua cabang benar-benar terpisah.
+
+Catatan: audit pertama sempat menyimpulkan semua titik merah. Seed-nya
+meletakkan `status` di kolom, padahal `chat/usage.go` menyimpannya **di
+dalam blob `data`** — sehingga semua baris jatuh ke cabang gagal. Bukti baru
+memakai bentuk payload yang sama dengan penulis aslinya.
+
+### 🩹 Kegagalan baca usage akhirnya terlihat di Usage & Analytics — bukan hanya di console
+
+Sejak #148 backend menjawab **500** alih-alih body berisi nol, tapi
+`AnalyticsView` masih menangkap kegagalan itu dengan `console.error` saja.
+Akibatnya user melihat angka periode lalu lalu tetap membacanya sebagai angka
+sekarang — persis masalah yang #148 perbaiki di server, belum sampai ke layar.
+
+Kegagalan kini disimpan (`statsError`, `detailsError`) lewat `normalizeLastError`
+yang sudah dipakai `ProviderDetailView`, lalu ditampilkan sebagai `role="alert"`:
+
+- **Overview** — banner di bawah pemilih periode: "Usage could not be loaded. The
+  figures below are from the last successful read." plus pesan asli dari server
+  (`query recent usageDaily: SQL logic error: no such table: usageDaily (1)`),
+  dengan tombol **Retry** yang memanggil `loadStats` yang sama.
+- **Details** — banner di dalam card, tanpa tombol kedua karena **Refresh** di
+  header sudah aksi pemulihannya. Empty state juga berubah: "Nothing to show:
+  the read failed, so the request history is unknown" — bukan "No request logs
+  found", yang menyiratkan database memang kosong.
+
+Pesan sengaja ditampilkan apa adanya: operatorlah yang tahu apa arti "no such
+table: usageDaily", dan menyembunyikannya di balik "Something went wrong" hanya
+membuat #148 mustahir ditelusuri ulang.
+
+**Warna error:** `text-error` / `border-error/40` ternyata **utility mati** —
+tidak ada `--color-error` di CSS hasil build, jadi kelas itu diam-diam jatuh ke
+warna teks yang diwarisi (putih). `TokenSaverView` dan `CreateComboModal` punya
+latent bug yang sama. Warna di banner ini sekarang memakai `red-500/600` yang
+memang terdefinisi, mengikuti konvensi `ProviderDetailView` dan `UpdateModal`.
+
+**Verifikasi:** `bun run build` bersih; `bun test` 219/219; `bun run
+ratchet:svelte` 0 unresolved identifier, 89 error (baseline 89, tidak naik).
+Bukti visual di binary asli dengan DB terisolasi (`DATA_DIR` terpisah, tabel
+di-drop saat server jalan): periode sehat merender TOTAL REQUESTS 7 / $6.50
+tanpa banner; `period=7d` setelah `usageDaily` di-drop menampilkan banner
+dengan pesan server dan tombol Retry; `period=today` tetap 200 dan tidak
+menampilkan banner — jadi error hanya muncul di jalur yang benar-benar rusak.
+Details tab setelah `requestDetails` di-drop menampilkan banner + empty state
+yang benar. Setelah DB dipulihkan, Retry dan Refresh mengembalikan angka dan
+alert hilang.
+
+Kontras diukur dari piksel nyata (CSS di-resolve ke sRGB lewat canvas), bukan
+dari nama token: ikon 5.24:1, heading 12.93:1, pesan 5.96:1 — semua di atas
+AA 4.5:1 untuk teks normal. Tombol Retry adalah `<button type="button">` asli
+yang terjangkau Tab dan punya `focus-visible` 2px; `role="alert"` dibaca
+screen reader saat banner muncul.
+
+
+### 📝 Template issue & PR — pelapor dan kontributor punya guidenya
+
+Latar: repo ini belum punya `.github/ISSUE_TEMPLATE` maupun
+`.github/PULL_REQUEST_TEMPLATE`. Issue yang ada sekarang (#154, #155, #160,
+#165) kosong dari reproduksi, versi, dan OS, jadi triase dimulai dari "¿ini
+bug atau feature?" — dan PR squash-merge tanpa bukti bahwa gerbang yang
+dipakai CI pernah dijalankan lokal.
+
+Perubahan:
+1. Empat template issue berbasis form (`.github/ISSUE_TEMPLATE/`):
+   `bug_report.yml`, `feature_request.yml`, `parity_issue.yml`,
+   `question.yml`. Tiap field yang menentukan tetap punya default berbahasa
+   Inggris (`bug: `, `feat: `, `parity: `, `question: `) dan label yang
+   sudah ada di repo — `bug`, `enhancement`, `parity`, `question`.
+2. `parity_issue.yml` memuat tabel pemetaan upstream → `internal/...`
+   (`open-sse/translator/` → `internal/translator/`, `src/app/api/` →
+   `internal/handlers/dashboard/`, dan seterusnya) plus field khusus
+   OmniRoute, karena keduanya adalah jalur-PR yang berbeda: parity wajib
+   menyertakan tautan commit/PR upstream, sedangkan request orisinal tidak.
+3. `bug_report.yml` meminta `9router-go version`, OS, dan potongan
+   `9router-go logs` / tab Translator → Console Logs, karena ketiganya
+   hampir selalu dibutuhkan untuk reproduksi.
+4. `PULL_REQUEST_TEMPLATE.md` memuat daftar gerbang yang *persis* sama
+   dengan job `test`, `integration`, dan `docker` di `.github/workflows/ci.yml`
+   (`go vet`, `go test -count=1`, `make test-integration`, `bun test`,
+   `make vet-svelte`), ditambah checklist provider-isolation dari
+   `AGENTS.md` §3 dan kewajiban `Closes #<n>` di judul.
+5. `config.yml` mematikan issue kosong (`blank_issues_enabled: false`) dan
+   mengarahkan pertanyaan ke template question serta laporan keamanan ke
+   Security Advisories, bukan issue publik.
+6. Bagian **Contributing** di `README.md` meringkas keempat template dan
+   perintah verifikasinya.
+
+Riset upstream: `decolua/9router` tidak punya template issue maupun PR
+(`gh api repos/decolua/9router/contents/.github` → hanya `dependabot.yml`;
+`contents/CONTRIBUTING.md` → 404), jadi ini tambahan lokal, bukan parity.
+
+### 🔄 Tujuh perbaikan parity dari PR upstream yang masih terbuka
+
+Tujuh perubahan independen, masing-masing menutup satu PR open di
+`decolua/9router` yang audit 2026-10-05 masih menyisakan gap di gateway ini.
+Semuanya data/kapabilitas/batas-API/UI — tidak ada perubahan kontrak yang
+belum dijanjikan ke klien.
+
+**1. #4587 — Agnes 3.0 Pro + kapabilitas vision yang hilang.** `agnes-3.0-flash`
+sudah dilayani, tapi **keempat id Agnes tidak punya satu pun baris** di
+`modelCapabilities`, sehingga jatuh ke `DefaultCapabilities` dengan
+`Vision:false`. Akibatnya router mengganti gambar dengan placeholder **sebelum
+request dikirim** — input multimodal Agnes hilang diam-diam. Dua baris persis
+ditambahkan untuk id 3.0 (`Vision`, `Reasoning`, `openai`, 512k/65536) plus
+entri katalog `agnes-3.0-pro` (bentuk **bertitik** sesuai dokumen vendor —
+`agnes-30-pro` hanya slug URL) dan harga 0.45/0.90/0.045. Baris 2.5 sengaja
+tidak diberi angka: dokumen vendor yang upstream rujuk tidak memuatnya, dan
+menebaknya berarti mengarang limit (`AGENTS.md` §3 — tanpa glob `agnes*`,
+karena pola akan memegang seluruh keluarga termasuk id tak berdokumen).
+
+**2. #4575 — model probe Anthropik yang sudah pension.**
+`claude-3-haiku-20240307` masih dipatok di dua tempat
+(`connection_probe.go`, `validate.go`). Diganti satu konstanta
+`AnthropicValidationModel` = `claude-haiku-4-5-20251001`, id yang sudah dipakai
+registry dan tabel harga — tidak ada id baru yang dikarang. Precedence
+`assignedModel` di kedua jalur tidak berubah.
+
+**3. #4615 — node topologi free baru muncul setelah dipakai.** Peta Usage
+menyorot `FREE_DEFAULTS` tanpa syarat, jadi `opencode`/`nvidia`/`clinepass`
+tampil padahal tidak pernah meneruskan request. Sekarang loop itu di-gate
+`stats.byProvider[id].requests > 0`. `ProviderTopologyCard` juga kehilangan
+roster fallback hardcoded-nya dan memakai empty state — roster itu akan
+membangkitkan bug yang sama tepat di layar saat tidak ada yang dipakai.
+
+**4. #4614 — bayangan glob pada tabel thinking level.** `GetThinkingLevels`
+first-match-wins, dan baris `*deepseek-v4.*` yang tidak dikualifikasi berada
+**di atas** baris `codebuddy-cn`. Untuk id bertitik seperti
+`deepseek-v4.1-flash` glob generik menang lebih dulu, sehingga baris
+codebuddy-cn **mati** — picker menampilkan set effort yang salah untuk model
+codebuddy-cn. Dua baris persis codebuddy-cn dipindahkan ke atas glob generik
+sesuai koreksi upstream, bersama sisa sinkronisasi katalog codebuddy-cn ke
+snapshot server 2026-09-30 (glm-5.2/5.3, hy3, hy4-preview, kimi-k2.8-preview,
+maxOutput). *Residual:* baris `codebuddy-intl` yang mengalami bayangan glob
+yang sama tidak diubah upstream, jadi tidak diubah di sini juga — dicatat
+agar tidak dikira terlupakan.
+
+**5. #4584 — normalisasi identifier model di batas API.** `models` pada combo
+create/update dibaca sebagai `any` lalu ditulis ulang apa adanya, sehingga
+objek legacy `{provider,model}` atau `{fullModel}` tersimpan utuh — dan
+`comboModels` hanya bisa membaca `[]string`, jadi baris itu tidak terbaca dan
+halaman Combos rusak. Sekarang dikoerensi jadi string `provider/model` dan
+entri cacat dijawab **400** `models must contain valid model IDs` lewat
+`handlerutil.WriteJSONError` yang sudah jadi konvensi 400 di paket itu. Baris
+lama **tidak** dimigrasi — sama seperti upstream.
+
+**6. #4564 — seed model free-tier tokenharbor.** Empat id gratis baru
+(`mimo-v2.6-flash:free`, `mimo-v2.5:free`, `qwen3.8-flash:free`,
+`deepseek-v4-flash:free`) ditambahkan. Dua di antaranya akan jatuh ke lantai
+128000/4096 tanpa baris limit, jadi `GetModelTokenLimits` dapat case
+1048576/131072 untuk keluarga `mimo-v2.5`/`v2.6` — angka itu milik upstream
+bukan karangan. Tidak ada baris harga yang ditambahkan: `tables.go` tidak
+kena, sama seperti upstream.
+
+**7. #4576 — strategi fallback eksplisit pada combo.** UI menghapus entri
+`settings.comboStrategies` setiap kali strategi terpilih dianggap "default",
+jadi memilih "Fallback" pada combo yang global-nya round-robin terlihat
+tersimpan padahal tidak — combo diam-diam mewarisi round-robin lagi. Ditambah
+nilai `inherit` sebagai **satu-satunya** cara menghapus override, dan
+`ComboCard` kini menampilkan nilai `inherit` apa adanya. Konsekuensinya di
+`ComboCard`: `isFusion` sengaja memakai strategi **efektif**
+(`effectiveComboStrategy`) agar combo yang mewarisi fusion tetap menampilkan
+ikon fusion, sementara nilai select tetap menampilkan `inherit`.
+
+**Utang svelte-check juga berkurang dua.** `ComboCard` belum pernah punya
+entri baseline, jadi saat file itu disentuh tiga error lamanya ikut terhitung:
+`{#each}` yang mengadeklarasikan indeks tak terpakai, dan `title` pada dua
+ikon lucide yang bukan props-nya. Ketiganya diperbaiki (`aria-label` +
+`role="img"` sebagai pengganti `title`), bukan dilewati dengan menaikkan
+baseline — sesuai `AGENTS.md` §6.E. Baseline `svelte-check` turun dari **91 ke
+89**.
+
+**Verifikasi:** `go vet ./internal/...` bersih · `go test -count=1 ./...`
+hijau · `bun run build` + `bun run ratchet:svelte` (0 unresolved identifier,
+89 error, baseline diturunkan) · `bun test` 219 pass. Smoke ke binary asli di
+`DATA_DIR` terisolasi: routing `bai/probe` dijawab upstream, dan
+`agnes/agnes-3.0-flash` dengan `image_url` meneruskan URL gambar utuh ke
+upstream — perilaku yang sebelumnya mustahil karena `Vision:false`.
+
+### 🔧 Semantik deklarasi tool & token reasoning — lima PR upstream digabung
+
+Lima PR open yang semuanya menyentuh jalur yang sama: bagaimana gateway
+menerjemahkan deklarasi tool, pilihan tool, dan mengukur usage. Digabung
+karena memang satu change set yang saling menyentuh, bukan lima.
+
+**1. `strict` pada tool tidak pernah selamat (#4607, #4543, #4573).** Tidak ada
+field `strict` di tipe tool, dan tiga konverter membangun ulang objek tool dari
+nol — flag yang disetel klien hilang diam-diam. Sekarang `strict` diteruskan
+di kedua arah Claude <-> OpenAI dan di pembangun body Responses (dibaca datar
+dan bersarang). `strict:false` yang eksplisit **tetap dikirim**, karena itu
+Instruksi klien; absen berarti absen, bukan `false`.
+
+Satu penyimpangan dari bentuk paling sederhana: `strict` non-boolean
+(`"strict":"yes"`) **tidak** menggagalkan request. Upstream membacanya di balik
+jaring pengaman `typeof === "boolean"`, jadi nilai lain diabaikan diam-diam;
+`*bool` biasa akan menolak seluruh body. `ClaudeTool.UnmarshalJSON` karena itu
+memakai decoder dua tahap yang membuang nilai non-boolean.
+
+**2. Kebijakan satu panggilan tool (#4581).** `parallel_tool_calls:false`
+dipetakan ke `tool_choice.disable_parallel_tool_use` dan sebaliknya, tanpa
+menimpa pilihan tool bernama yang eksplisit (`{"type":"tool",name}` harus tetap
+utuh), dan tanpa efek sama sekali bila tidak ada tool. Field
+`parallel_tool_calls` yang OpenAI-only dihapus sebelum body dikirim ke Claude.
+
+**3. `tool_choice:"none"` berarti "bolos", bukan "auto" (#4577).** Arah
+OpenAI -> Claude menghapus field-nya, sehingga model bebas memanggil tool
+padahal klien melarangnya; arah lain mengembalikan `"auto"`. Dua arah kini
+menjadi `{type:"none"}` <-> `"none"`.
+
+**4. `response_format` hilang diam-diam (#4547, issue #2896).** Saat membuat
+body Responses, `response_format` tidak dipetakan ke `text.format`, dan
+allowlist Codex membuangnya — jadi klien yang meminta keluaran terstruktur
+mendapat teks bebas. Sekarang `json_schema` dipetakan dengan nama, skema, dan
+`strict` yang **default true** (`strict !== false`), `json_object` tetap
+`json_object`, dan kasus tanpa `response_format` tidak menambahkan field
+`text` sama sekali. `json_schema` tanpa `schema` sengaja dibuang — persis
+penjaga upstream.
+
+*Tambahan yang ditemukan saat verifikasi:* jalur tool berbentuk datar di
+builder Responses tidak pernah menyalin `parameters`, sehingga skema tool
+hilang. Diperbaiki di sisi yang sama.
+
+**5. `reasoning_tokens` hilang di tiga titik (#4574, sisa #4551/#4536).**
+Pembaca usage Responses-native tak pernah membaca `OutputTokensDetails` —
+padahal struct-nya sudah ada dan sudah dipancarkan di sisi outbound;
+`ProcessCodexEvent` membangun usage tanpa `completion_tokens_details`; dan
+`tokensJSON` yang ditulis ke `usageHistory` tidak menyertakan token reasoning
+meski sudah ditagih dan sudah ditulis ke `requestDetails`. Ketiga diperbaiki,
+dan build `chunkUsage` diekstrak jadi `codexUsageMap` supaya cabangnya tetap
+ringkas. Sisi cache yang sudah benar tidak disentuh.
+
+Samping itu dua perbaikan yang ikut terbawa:
+- **Nama tool untuk Gemini** (#4589) kini diambil dari panggilan yang
+  dijawabnya sendiri, bukan peta id->nama lintas percakapan. `tool_call_id`
+  hanya unik dalam satu giliran, jadi id yang diulang membuat hasil tool
+  giliran awal membawa nama tool giliran akhir.
+- **Finish reason Gemini** (#4571) dipetakan lewat satu fungsi bersama, jadi
+  `MAX_TOKENS` -> `length` dan `SAFETY`/`RECITATION` -> `content_filter` di
+  jalur streaming maupun non-streaming. Sebelumnya keduanya memetakan
+  `SAFETY` ke `"stop"`.
+
+**Tiga jalur ini dikunci di level integrasi.** Unit test
+`ensureMessagesMaxTokens` membuktikan konverternya benar, tapi tidak
+menyelubungi apa yang terjadi di sekitarnya: pemilihan koneksi,
+`isAnthropicUpstream` (yang hanya true untuk base URL `api.anthropic.com`
+asli atau relay edge), token saver, dan pembentukan URL. Di situlah
+instruksi klien bisa hilang sementara setiap test konverter tetap hijau.
+
+`internal/integration/anthropic_tool_policy_test.go` menutupnya lewat router
+produksi dengan upstream palsu: `parallel_tool_calls:false` harus sampai
+sebagai `disable_parallel_tool_use:true`, pilihan tool bernama harus tetap
+utuh sekaligus pembatasan ikut terpasang, dan `tool_choice:"none"` tidak
+boleh hilang di jalan ke Claude. Ketiganya sudah diverifikasi menangkap
+regresi — dengan `withDisabledParallelToolUse` dinonaktifkan sementara, dua
+pertama gagal dengan pesan yang tepat.
+
+
+**Verifikasi:** `go vet ./internal/...` bersih · `go test -count=1 ./...`
+hijau · `go test -tags=integration ./internal/integration/...` hijau ·
+`bun run build` + `bun run ratchet:svelte` (0 unresolved identifier, 89 error,
+sama dengan baseline yang diturunkan #163) · `bun test` 219 pass.
+
+
+
+
+### 🩺 `go test -race ./...` jadi gerbang CI — sebelumnya tidak pernah jalan, dan menemukan satu test flaky
+
+Job `test` menjalankan `go test ./...` **tanpa** `-race`, dan satu-satunya job
+yang memakai `-race` adalah `Integration tests`, yang cakupannya hanya
+`./internal/integration/...`. Artinya `internal/db`, `internal/usagetracker`,
+`internal/proxy`, dan `internal/handlers/chat` — tempat shared state gateway
+berada (ring buffer usage tracker, sticky state per handler, pompa SSE, peta
+cooldown koneksi, cache pool-id di `Repo`) — belum pernah diuji race detector
+di CI. Data race bisa merge hijau lalu muncul di mesin user saat dipakai.
+
+Job baru `race` menjalankan `go test -race -count=1 -timeout 10m ./...`.
+Dipisah dari job `test`, bukan menambah step, supaya laporan race bernama sendiri
+di daftar check dan dua kegagalan (assertion flaky vs race asli) tidak saling
+menutupi di satu log. Target lokal `make test-race` menjalankan perintah yang
+sama; `-race` butuh cgo, jadi sengaja tidak ikut `make test`/`test-short`.
+
+Dua hal yang membuat ini mungkin sekarang: test live upstream sudah dipisah dari
+CI lewat opt-in `9ROUTER_LIVE_TESTS=1` (#150) — sebelumnya `go test -race
+./...` gagal karena `space-bunny-free` kena rate limit, bukan karena gateway —
+dan `web/dist` dibangun lebih dulu di step yang sama seperti job `integration`,
+karena `internal/app` → `web` → `web/embed.go` gagal compile tanpa SPA.
+
+Menambah gerbang ini langsung membongkar satu bug:
+`TestTranscribeGeminiLive_PartialTranscriptOnClose` gagal sekitar **1 dari 12
+run**. Fake server-nya menutup socket begitu saja setelah membaca satu frame,
+padahal client masih menulis chunk audio-nya — jadi close bisa mendahului delta
+transkripsi yang baru dikirim, dan kasus yang harusnya lulus jadi `socket
+closed before completion`. Fake server kini membaca sampai frame
+`clientContent.turnComplete` (titik di mana client sudah menunggu di read loop)
+sebelum mengirim delta dan menutup. Deterministik gagal di `-count=3`, dan
+sekarang 0 gagal di 20 run beruntun. Tidak ada kode produksi yang berubah.
+
+**Verifikasi:** `go build ./...` dan `go vet ./...` bersih; `go test ./...`
+hijau; `go test -count=8 -run TestTranscribeGeminiLive ./internal/handlers/media/`
+hijau; 20 run beruntun test yang tadinya flaky hijau. Berkas workflow
+dijalankan runner ubuntu (cgo tersedia di sana), bukan mesin lokal tanpa C
+compiler.
+
+### 🩹 Pembacaan usage yang gagal diam-diam dilaporkan sebagai nol — dashboard Usage & Analytics
+
+`GetUsageDailyRecent`, `GetUsageHistorySince`, `GetRecentUsageHistory`,
+`GetRequestDetailsPaged`, dan `ListProxyPools` mengiterasi cursor
+`database/sql` tanpa mengecek `rows.Err()`, dan error `rows.Scan()` di
+`continue`-kan. Cursor yang terpotong di tengah, atau baris yang nilainya tidak
+cocok dengan kolom hasil scan, hilang tanpa satu pun jejak — sementara pemanggil
+menerima list yang lebih pendek dengan `err == nil`.
+
+`HandleUsageStats` membaca ketiga sumber usage di balik `if err == nil { ... }`
+tanpa cabang `else`, jadi kegagalan baca apa pun — tabel hilang, file tak
+terbaca, error scan — menghasilkan HTTP 200 berisi `{"totalRequests":0,
+"totalCost":0, ...}`. Dashboard merender itu sebagai "tidak ada traffic pada
+periode ini", dan tidak ada log yang mencatat kesalahannya. Angka nol karena
+sistemnya rusak terlihat identik dengan angka nol karena memang sepi.
+
+Kelima reader kini mengembalikan error yang dibungkus `%w` plus `rows.Err()`,
+dan ketiga pemanggilan di `HandleUsageStats` menulis 500 dengan pesan asalnya.
+`GetRequestDetailsPaged` juga tidak lagi menelan kegagalan `COUNT(*)` menjadi
+`total: 0` — halaman yang berisi baris tetapi melaporkan nol termasuk kelas
+"nol yang berarti rusak" yang sama. Test regresi menutup kedua arah: baris yang
+tidak bisa discan harus menghasilkan error (sebelumnya list terpotong tanpa
+error), dan pembacaan sehat tetap mengagregasi seperti sebelumnya.
+
+Tiga penyesuaian dari review:
+
+1. **`ListProxyPools` tidak gagal pada `testStatus` NULL.** Kolom itu nullable
+   di skema bersama dan database yang sama ditulis dashboard Next.js, jadi
+   pool yang belum pernah diprobe wajar punya NULL. Memindainya sebagai
+   `string` biasa akan membuat seluruh tab Proxy Pools 500 karena satu baris
+   yang hanya belum punya status. Nilainya kini dibaca sebagai `""`; kegagalan
+   scan lain tetap fatal.
+2. **`GetRecentUsageHistory` di `usagetracker` dicatat.** Ring buffer memang
+   best-effort — pembacaan yang gagal membiarkannya kosong dan push berikutnya
+   mengisinya — tapi sekarang menulis `log.Warn`, karena ring kosong tanpa jejak
+   tidak bisa dibedakan dari instalasi baru.
+3. **`rows.Err()` dibungkus dengan konteks pemanggil**, konsisten dengan
+   error `rows.Scan()` di fungsi yang sama (§4.E).
+
+### 🧹 `repos.go` dipecah per tabel; resolusi strategi combo jadi satu helper
+
+`internal/db/repos.go` tumbuh jadi 647 LoC dan melewati batas keras 400 (§4.D).
+Isinya dipecah sesuai tabel yang diquery, supaya setiap file berada di bawah
+target 300 LoC: `apikeys.go` (apiKeys), `connections.go` (providerConnections),
+`providernodes.go` (providerNodes), `combos.go` (combos), dan `aliases.go` (scope
+`kv`: modelAliases, customModels). `repos.go` sendiri kini hanya memegang tipe
+`Repo` beserta daftarnya.
+
+Daftar kolom `providerConnections` yang diulang di tiga literal SELECT dan daftar
+kolom `providerNodes`/`combos` kini menjadi konstanta + satu fungsi scan per
+tabel, dipakai bersama oleh pembaca baris tunggal dan pembaca list, sehingga
+urutan kolom tidak bisa lagi melenceng di satu jalur saja. Empat cabang
+WHERE pada `GetProviderConnections` (provider × activeOnly) diratakan jadi satu
+`switch` alih-alih dua `if` bersarang.
+
+Resolusi strategi combo yang identik diulang tiga kali (`GetComboByName`,
+`GetComboById`, `GetCombos`) kini satu helper `resolveComboStrategy`. Perilaku
+tidak berubah: default `"fallback"`, override per combo menang atas setelan
+global, dan pembacaan setelan yang gagal membiarkan defaultnya tetap.
+
+**Verifikasi:** API package `db` tidak berubah — 100 signature `func`
+sebelum dan sesudah split identik (`go doc -all ./internal/db` di bandingkan
+sebelum/sesudah). `go build ./...` dan `go vet ./...` bersih, `go test ./...`
+hijau, `go test -tags=integration ./internal/integration/...` hijau (69,7s +
+0,2s).
+
+### 🔧 Backup dashboard kembali ke JSON yang dirapikan, seperti 9router upstream
+
+Latar (issue #160): tombol **Download Backup** di Settings menawarkan `.zip`
+berisi JSON. Upstream `9router` mengunduh JSON mentah — `JSON.stringify(payload,
+null, 2)` — dengan nama `9router-backup-<stamp>.json`, jadi backup di sini tidak
+bisa dibaca tanpa ekstrak dulu dan menyimpang dari parity.
+
+- `HandleExportDatabase` (`internal/handlers/dashboard/settings.go`) tidak lagi
+  membungkus payload ke arsip. Responsnya JSON dua-spasi lekukan
+  (`JSON.stringify(x, null, 2)`) dengan
+  `Content-Disposition: attachment; filename="9router-backup-<date>.json"`.
+  Cabang `?format=zip` dan deteksi `Accept: application/zip` dihapus karena
+  export kini hanya punya satu bentuk.
+- `handlerutil.WriteJSONIndented` (baru) menulis JSON berlekuk memakai
+  `jsontext.WithIndent("  ")` sambil tetap memakai `Deterministic(true)` yang
+  sudah dipakai seluruh respons dashboard.
+- `ProfileSettingsView.svelte` mengunduh `/api/settings/database` tanpa
+  `?format=zip`, menamai berkas `.json`, dan teks konfirmasinya menyebut
+  `(.json file)`.
+- **Import tetap menerima arsip `.zip` lama**: `HandleImportDatabase` masih
+  mendeteksi magic `PK\x03\x04` dan mengekstrak `*.json` di dalamnya, jadi
+  backup yang diunduh sebelum perubahan ini tetap bisa dipulihkan.
+- Test: `TestHandleExportDatabase_PrettyJSON` (Content-Type JSON, filename
+  `.json`, ada lekukan) menggantikan round-trip zip, dan
+  `TestHandleImportDatabase_LegacyZipArchive` memastikan import zip lama masih
+  bekerja.
+
 ### 🏷️ Provider kustom bisa memakai URL suffix sendiri — `openai-compatible-chat-<suffix>`, bukan `<uuid>`
 
 Latar (issue #155): setiap node OpenAI/Anthropic-compatible yang dibuat dari

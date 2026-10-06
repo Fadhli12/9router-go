@@ -10,6 +10,12 @@ var (
 		"MiniMax-M2.5":               {InputPer1M: 0.5, OutputPer1M: 2, CachedPer1M: 0.25, ReasoningPer1M: 3, CacheCreationPer1M: 0.5},
 		"MiniMax-M2.7":               {InputPer1M: 0.5, OutputPer1M: 2, CachedPer1M: 0.25, ReasoningPer1M: 3, CacheCreationPer1M: 0.5},
 		"MiniMax-M3":                 {InputPer1M: 0.3, OutputPer1M: 1.2, CachedPer1M: 0.06, ReasoningPer1M: 1.8, CacheCreationPer1M: 0.3},
+		// Agnes AI. From the vendor's agnes-30-pro doc page: cache read is 10% of
+		// regular input. Reasoning and cache-creation rates are unpublished, so
+		// they stay zero and CalculateCost falls back to output/input the way
+		// upstream does. Announced 2026-10-05 with status "Coming soon" — seeded
+		// ahead of availability.
+		"agnes-3.0-pro":              {InputPer1M: 0.45, OutputPer1M: 0.9, CachedPer1M: 0.045},
 		"auto":                       {InputPer1M: 2, OutputPer1M: 8, CachedPer1M: 1, ReasoningPer1M: 12, CacheCreationPer1M: 2},
 		"claude-3-5-sonnet-20241022": {InputPer1M: 3, OutputPer1M: 15, CachedPer1M: 1.5, ReasoningPer1M: 15, CacheCreationPer1M: 3},
 		"claude-fable-5":             {InputPer1M: 10, OutputPer1M: 50, CachedPer1M: 1, ReasoningPer1M: 50, CacheCreationPer1M: 12.5},

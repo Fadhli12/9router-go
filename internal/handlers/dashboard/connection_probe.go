@@ -36,7 +36,6 @@ const (
 	// connectionProxyProbeTimeout mirrors the proxy pool test timeout.
 	connectionProxyProbeTimeout = 5 * time.Second
 
-	connectionAnthropicProbeModel = "claude-3-haiku-20240307"
 	codexCLIVersion               = providers.CodexCLIVersion
 	grokCLIProbeURL               = "https://cli-chat-proxy.grok.com/v1/user"
 	grokCLIProbeUA                = providers.GrokCLIPagerUserAgent
@@ -62,6 +61,16 @@ const (
 	// Upstream accepts any non-401/403 answer as proof the credentials work.
 	connectionBrowserUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 )
+
+// AnthropicValidationModel is the model an Anthropic-compatible endpoint is
+// probed with when the connection names none itself — no defaultModel and no
+// providerSpecificData.assignedModel — for both the dashboard connection test
+// and provider-node validation. Upstream hardcoded "claude-3-haiku-20240307",
+// which Anthropic has since retired, so probing a valid API key against it
+// now fails. The id is the one the model registry and pricing tables already
+// carry ("claude-haiku-4-5-20251001"), so a probe never names a model the rest
+// of the app does not know.
+const AnthropicValidationModel = "claude-haiku-4-5-20251001"
 
 // connectionProbeData is the connection blob the probe reads, mirroring the
 // fields upstream's testUtils.js touches.
@@ -491,7 +500,7 @@ func (h *DashboardHandler) probeCompatibleConnection(ctx context.Context, conn *
 			model = psdStr(data.ProviderSpecificData, "assignedModel")
 		}
 		if model == "" {
-			model = connectionAnthropicProbeModel
+			model = AnthropicValidationModel
 		}
 		body, _ := json.Marshal(map[string]any{
 			"model":      model,

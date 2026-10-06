@@ -84,19 +84,27 @@ var patternThinking = []thinkingPattern{
 	// DeepSeek v4.* (Alibaba MaaS, probed live): effort low|medium|high|xhigh|max
 	// all 200 via output_config.effort; "none" is a 400 on the anthropic route
 	// (disable thinking instead). none kept for the picker = disable.
+	//
+	// ⚠️ The codebuddy-cn exact ids below MUST stay above this unqualified
+	// glob — patternThinking is first-match-wins, so a provider-qualified
+	// entry after it would never fire for a dotted id like
+	// deepseek-v4.1-flash (upstream decolua/9router#4614).
+	{Provider: "codebuddy-cn", Pattern: "deepseek-v4-pro", Levels: []string{"low", "high", "xhigh"}},
+	{Provider: "codebuddy-cn", Pattern: "deepseek-v4.1-flash", Levels: []string{"low", "high", "max"}},
 	{Pattern: "*deepseek-v4.*", Levels: []string{"none", "low", "medium", "high", "xhigh", "max"}},
 	// codebuddy-cn per-model effort sets — the server's product-config payload
 	// publishes `reasoning.supportedEfforts` per model. NOTE: the chat endpoint
 	// accepts any level you send (probed none/minimal/low/medium/high/xhigh/max
 	// → all 200), but values outside a model's supportedEfforts are silently
 	// clamped, so the declared set stays authoritative for the picker. Models
-	// that publish no supportedEfforts (glm-5.1 / glm-5v-turbo / kimi-k2.x /
-	// kimi-k3-1 / minimax-m3) fall through to the openai format default.
-	{Provider: "codebuddy-cn", Pattern: "glm-5.3*", Levels: []string{"low", "high", "max"}},
+	// that publish no supportedEfforts (glm-5.1 / kimi-k3-1 / minimax-m3)
+	// fall through to the openai format default.
+	{Provider: "codebuddy-cn", Pattern: "glm-5.3", Levels: []string{"low", "high", "max"}},
+	{Provider: "codebuddy-cn", Pattern: "glm-5.3-flash", Levels: []string{"low", "high", "max"}},
 	{Provider: "codebuddy-cn", Pattern: "glm-5.2", Levels: []string{"high", "xhigh"}},
-	{Provider: "codebuddy-cn", Pattern: "deepseek-v4*", Levels: []string{"low", "high", "xhigh"}},
-	{Provider: "codebuddy-cn", Pattern: "hy3*", Levels: []string{"low", "high"}},
-	{Provider: "codebuddy-cn", Pattern: "hy4*", Levels: []string{"high"}},
+	{Provider: "codebuddy-cn", Pattern: "kimi-k2.8-preview", Levels: []string{"low", "medium", "high"}},
+	{Provider: "codebuddy-cn", Pattern: "hy3", Levels: []string{"low", "high"}},
+	{Provider: "codebuddy-cn", Pattern: "hy4-preview", Levels: []string{"high"}},
 	// codebuddy-intl rides the same gateway catalog, so its deepseek levels match.
 	{Provider: "codebuddy-intl", Pattern: "deepseek-v4*", Levels: []string{"low", "high", "xhigh"}},
 }
