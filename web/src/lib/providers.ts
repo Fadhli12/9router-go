@@ -122,7 +122,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#0F766E",
     "icon": "anchor",
     "website": "https://tokenharbor.ai",
-    "notice": {"text":"OpenAI-compatible aggregator. One API key reaches every model, billed per-token from a prepaid wallet. Model ids are bare (e.g. claude-opus-5.5, gpt-6-astra, deepseek-v4.1-flash:free) and are fetched live from the provider.", "apiKeyUrl":"https://tokenharbor.ai/dashboard"},
+    "notice": {"text":"OpenAI-compatible aggregator. One API key reaches every model, billed per-token from a prepaid wallet. Model ids are bare (e.g. claude-opus-5.5, gpt-6-astra, qwen3.8-flash:free) and are fetched live from the provider.", "apiKeyUrl":"https://tokenharbor.ai/dashboard"},
     "modelsFetcher": {"url": "https://tokenharbor.ai/v1/models", "type": "openai"},
     "authType": "apikey",
     "noAuth": false,

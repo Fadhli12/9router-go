@@ -2,10 +2,12 @@
   import { Layers } from 'lucide-svelte'
   import { api, type Combo, type ProviderConnection, type ProviderNode } from '../../api/client'
   import {
-    COMBO_STRATEGIES,
     clearJudgeModel,
+    comboStrategyOptions,
     getComboModels,
+    INHERIT_STRATEGY,
     parseCapacityAdapterSettings,
+    resolveComboStrategy,
     updateComboStrategy,
     updateJudgeModel,
     type CapacityAdapterState,
@@ -51,6 +53,10 @@
     vision: { enabled: true, roundRobin: false, models: ['ag/gemini-3.8-flash-high'] },
     audioInput: { enabled: true, roundRobin: false, models: [] },
   })
+  // Upstream #4576: the inherit option has to name what it inherits, and an
+  // inheriting combo still routes with the global mode, so the value has to be
+  // here even though nothing else on this page reads it.
+  let globalComboStrategy = $state('first-model')
   let copiedId = $state<string | null>(null)
 
   // Edit / Create Modal state
@@ -99,6 +105,9 @@
       if (s?.comboStrategies && typeof s.comboStrategies === 'object') {
         comboStrategies = s.comboStrategies as Record<string, ComboStrategyInfo>
       }
+      if (typeof s?.comboStrategy === 'string') {
+        globalComboStrategy = s.comboStrategy
+      }
       if (s?.capacityAdapter && typeof s.capacityAdapter === 'object') {
         capacityAdapter = parseCapacityAdapterSettings(s.capacityAdapter as Record<string, unknown>)
       }
@@ -138,7 +147,12 @@
     comboStrategies = updated
     try {
       await api.patchSettings({ comboStrategies: updated })
-      await api.updateCombo(combo.id, { strategy: newStrategy })
+      // `inherit` is a dashboard-only value: the combo row has no override to
+      // write, and the server would read the literal string as a strategy the
+      // router does not implement.
+      if (newStrategy !== INHERIT_STRATEGY) {
+        await api.updateCombo(combo.id, { strategy: newStrategy })
+      }
       onRefresh()
     } catch (e) {
       console.error('Failed to update combo strategy:', e)
@@ -305,8 +319,13 @@
     comboStrategies = next
     try {
       await api.patchSettings({ comboStrategies: next })
-      for (const combo of targets) {
-        await api.updateCombo(combo.id, { strategy: bulkStrategy })
+      // `inherit` is dashboard-only: it removes the override, so there is no
+      // strategy to write on the combo row. Sending the literal string would
+      // hand the router a mode it does not implement.
+      if (bulkStrategy !== INHERIT_STRATEGY) {
+        for (const combo of targets) {
+          await api.updateCombo(combo.id, { strategy: bulkStrategy })
+        }
       }
       bulkStrategy = ''
       onRefresh()
@@ -349,7 +368,7 @@
               class="w-full bg-surface-2 border border-border rounded-lg px-2.5 py-1.5 text-xs text-text-main focus:outline-none focus:ring-brand-500 focus:border-brand-500 cursor-pointer"
             >
               <option value="" disabled>Set strategy…</option>
-              {#each COMBO_STRATEGIES as strategy (strategy.value)}
+              {#each comboStrategyOptions(globalComboStrategy) as strategy (strategy.value)}
                 <option value={strategy.value}>{strategy.label}</option>
               {/each}
             </select>
@@ -400,6 +419,7 @@
         <ComboCard
           {combo}
           strategyInfo={comboStrategies[combo.name]}
+          globalStrategy={globalComboStrategy}
           {copiedId}
           onSetStrategy={handleSetStrategy}
           onOpenJudgePicker={(c) => { editingCombo = c; openModelPicker('judge') }}

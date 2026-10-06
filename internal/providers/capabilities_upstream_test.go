@@ -78,6 +78,94 @@ func TestGetCapabilitiesForModel_DeepseekV41FlashAlias(t *testing.T) {
 	}
 }
 
+// Port of upstream tests/unit/tokenharbor-free-models.test.js (decolua/9router
+// PR #4564): the offline seed list Token Harbor shows before a key is saved
+// must carry the rotating free tier, and the ":free" suffix must not knock an
+// id out of the family pattern that gives it its window and modalities.
+func TestTokenHarborFreeTierSeeds(t *testing.T) {
+	seeds := GetProviderModels("tokenharbor")
+
+	for _, id := range []string{
+		"mimo-v2.6-flash:free",
+		"mimo-v2.5:free",
+		"qwen3.8-flash:free",
+		"deepseek-v4.1-flash:free",
+		"deepseek-v4-flash:free",
+	} {
+		if !slices.Contains(seeds, id) {
+			t.Errorf("seed list is missing %q", id)
+		}
+	}
+
+	// The paid seeds predate #4564 and must survive it.
+	for _, id := range []string{"claude-opus-5.5", "claude-sonnet-5", "gpt-6-astra", "gpt-6-sol", "grok-4.7"} {
+		if !slices.Contains(seeds, id) {
+			t.Errorf("paid seed %q was dropped", id)
+		}
+	}
+
+	seen := make(map[string]bool, len(seeds))
+	for _, id := range seeds {
+		if seen[id] {
+			t.Errorf("duplicate seed id %q", id)
+		}
+		seen[id] = true
+	}
+
+	// Every FREE id resolves to a declared window; an id no table knows would
+	// publish the 128000/4096 floor and advertise a free tier it cannot
+	// honour. The paid seeds are aggregator pass-throughs with no local
+	// limits table of their own (grok-4.7 has no pattern row upstream either),
+	// so asserting a window for them would only pin an invented number.
+	for _, id := range []string{
+		"mimo-v2.6-flash:free",
+		"mimo-v2.5:free",
+		"qwen3.8-flash:free",
+		"deepseek-v4.1-flash:free",
+		"deepseek-v4-flash:free",
+	} {
+		t.Run(id, func(t *testing.T) {
+			cw, maxOut := GetModelTokenLimits(id)
+			if cw == 128000 && maxOut == 4096 {
+				t.Errorf("%q falls through to the default 128000/4096 limits", id)
+			}
+		})
+	}
+}
+
+// The suffix must not cost a free id its family capabilities: capabilities are
+// matched on patterns, so "deepseek-v4.1-flash:free" has to resolve exactly
+// like its bare sibling or a free DeepSeek silently loses vision and thinking.
+func TestTokenHarborFreeSuffixKeepsCapabilities(t *testing.T) {
+	tests := []struct{ suffixed, bare string }{
+		{"deepseek-v4.1-flash:free", "deepseek-v4.1-flash"},
+		{"deepseek-v4-flash:free", "deepseek-v4-flash"},
+		{"qwen3.8-flash:free", "qwen3.8-flash"},
+		{"mimo-v2.6-flash:free", "mimo-v2.6-flash"},
+		{"mimo-v2.5:free", "mimo-v2.5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.suffixed, func(t *testing.T) {
+			with := capabilitiesOf(t, "tokenharbor", tt.suffixed)
+			without := capabilitiesOf(t, "tokenharbor", tt.bare)
+			if with.Vision != without.Vision || with.Reasoning != without.Reasoning ||
+				with.ThinkingFormat != without.ThinkingFormat {
+				t.Errorf("%q resolves as %+v, want the same modalities as %q (%+v)",
+					tt.suffixed, with, tt.bare, without)
+			}
+		})
+	}
+}
+
+// The free DeepSeeds must not read as unknown models: the unresolved fallback
+// is text-only with no reasoning.
+func TestTokenHarborFreeDeepseekIsNotUnknown(t *testing.T) {
+	caps := capabilitiesOf(t, "tokenharbor", "deepseek-v4.1-flash:free")
+	if !caps.Reasoning || !caps.Vision || caps.ThinkingFormat != "deepseek" {
+		t.Errorf("deepseek-v4.1-flash:free resolved as %+v, want a DeepSeek family row", caps)
+	}
+}
+
 // Port of upstream tests/unit/gpt-6-context-window.test.js (89ffac5a), minus
 // the gateway rows 9router-go does not carry (Kiro 272k / Codex 272k+372k /
 // Devin CLI 200k live in this port's provider tables, not in capabilities.js).

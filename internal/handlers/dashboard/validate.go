@@ -257,7 +257,7 @@ func (h *DashboardHandler) validateProviderNodeConnection(
 		if strings.HasSuffix(base, "/messages") {
 			base = base[:len(base)-len("/messages")]
 		}
-		model := "claude-3-haiku-20240307"
+		model := AnthropicValidationModel
 		if psd != nil {
 			if m, ok := psd["assignedModel"].(string); ok && strings.TrimSpace(m) != "" {
 				model = strings.TrimSpace(m)

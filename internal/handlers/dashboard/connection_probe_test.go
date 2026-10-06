@@ -179,7 +179,7 @@ func TestTestConnection_AnthropicCompatibleNode(t *testing.T) {
 	if gotURL != "https://node.example.com/v1/messages" {
 		t.Errorf("probed %q, want /v1/messages with the /messages suffix collapsed", gotURL)
 	}
-	if !strings.Contains(gotBody, connectionAnthropicProbeModel) {
+	if !strings.Contains(gotBody, AnthropicValidationModel) {
 		t.Errorf("probe body missing default model: %s", gotBody)
 	}
 

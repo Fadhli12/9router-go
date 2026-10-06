@@ -22,7 +22,7 @@ func TestAggregatorProviders(t *testing.T) {
 	}{
 		{
 			id: "tokenharbor", baseURL: "https://tokenharbor.ai/v1/chat/completions",
-			models:     []string{"claude-opus-5.5", "claude-sonnet-5", "gpt-6-astra", "gpt-6-sol", "deepseek-v4.1-flash:free", "grok-4.7"},
+			models:     []string{"claude-opus-5.5", "claude-sonnet-5", "gpt-6-astra", "gpt-6-sol", "grok-4.7", "mimo-v2.6-flash:free", "mimo-v2.5:free", "qwen3.8-flash:free", "deepseek-v4.1-flash:free", "deepseek-v4-flash:free"},
 			aliases:    []string{"th", "thh"},
 			modelsList: "https://tokenharbor.ai/v1/models", wantFetcher: true,
 		},
@@ -43,7 +43,7 @@ func TestAggregatorProviders(t *testing.T) {
 			// /v1/models answers 401 without a token; bai still ships none.
 			id: "agnes", baseURL: "https://apihub.agnes-ai.com/v1/chat/completions",
 			aliases:    []string{"agnes-ai"},
-			models:     []string{"agnes-2.5-flash", "agnes-2.5-pro", "agnes-2.5-pro-beta", "agnes-3.0-flash"},
+			models:     []string{"agnes-2.5-flash", "agnes-2.5-pro", "agnes-2.5-pro-beta", "agnes-3.0-flash", "agnes-3.0-pro"},
 			modelsList: "https://apihub.agnes-ai.com/v1/models",
 		},
 		{

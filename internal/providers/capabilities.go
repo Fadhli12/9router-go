@@ -158,6 +158,18 @@ var modelCapabilities = map[string]Capabilities{
 	"claude-sonnet-5-agentic":          {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
 	"claude-sonnet-5-thinking-agentic": {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive"},
 	"gpt-image-1":                      {ImageOutput: true},
+	// Agnes AI (apihub.agnes-ai.com). Both ids take text AND image URLs, so
+	// without these rows every Agnes request resolved through
+	// DefaultCapabilities (vision:false) and the image blocks were stripped
+	// before dispatch, with no error. Limits are the vendor's per-model doc
+	// pages (agnes-30-pro / agnes-30-flash).
+	//
+	// The 2.5 line gets no row on purpose: no vendor figures are published for
+	// it, so those ids keep the default instead of inheriting 3.0's numbers,
+	// and no `agnes*` glob is added — a pattern would also capture any future
+	// id this provider ships (see the pattern-ownership rule).
+	"agnes-3.0-pro":                    {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 512000, MaxOutput: 65536},
+	"agnes-3.0-flash":                  {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 512000, MaxOutput: 65536},
 	"glm-5.3-flash":                    {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "zai"},
 	"claude-fable-5-1":                 {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive", ThinkingCanDisable: new(false)},
 	"glm-5.2":                          {Reasoning: true, Tools: true, ThinkingFormat: "zai", ThinkingCanDisable: new(false)},
@@ -243,27 +255,43 @@ var providerCapabilities = map[string]map[string]Capabilities{
 		"gpt-image-2":            {ImageOutput: true, Tools: true},
 		"gpt-image-1.5":          {ImageOutput: true, Tools: true},
 	},
+	// Catalog mirrors the codebuddy.cn product-config payload, snapshot
+	// 2026-09-30 (upstream #4614). ContextWindow AND MaxOutput are both
+	// declared on purpose: GetCapabilitiesDetailForModel only consults the
+	// models.dev catalog while both are zero, so setting one alone would
+	// silently disable the catalog lookup for these ids.
 	"codebuddy-cn": {
-		"glm-5.2":             {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(true)},
-		"glm-5.1":             {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false)},
+		"glm-5.2":             {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(true), ContextWindow: 1000000, MaxOutput: 131072},
+		"glm-5.1":             {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false), ContextWindow: 200000, MaxOutput: 48000},
 		"glm-5.0-turbo":       {Reasoning: true, Tools: true},
-		"glm-5v-turbo":        {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false)},
-		"minimax-m3":          {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false)},
-		"minimax-m2.7":        {Vision: true, Reasoning: true, Tools: true},
-		"kimi-k2.7":           {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false)},
-		"kimi-k2.6":           {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false)},
-		"kimi-k2.5":           {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false)},
-		"hy3-preview":         {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false)},
-		"hy3":                 {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false)},
+		"minimax-m3":          {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false), ContextWindow: 512000, MaxOutput: 524288},
+		"minimax-m2.7":        {Reasoning: true, Tools: true},
+		"kimi-k2.5":           {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false), ContextWindow: 164000, MaxOutput: 32000},
+		// Upstream #4614 drops glm-5v-turbo / kimi-k2.7 / kimi-k2.6 from the
+		// published server list. They stay here on purpose: the thinking-level
+		// parity fixture is captured from a released upstream tag where they
+		// still exist, and an unmerged PR is no reason to make a shipped
+		// model unroutable. The limits are the server's own figures.
+		"glm-5v-turbo":        {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false), ContextWindow: 200000, MaxOutput: 64000},
+		"kimi-k2.7":           {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false), ContextWindow: 256000, MaxOutput: 32000},
+		"kimi-k2.6":           {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false), ContextWindow: 256000, MaxOutput: 32000},
+		"hy3-preview":         {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false), ContextWindow: 192000, MaxOutput: 64000},
+		"hy3":                 {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false), ContextWindow: 192000, MaxOutput: 64000},
 		"hy3-x":               {Vision: true, Reasoning: true, Tools: true},
-		"hy4-preview":         {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false)},
+		"hy4-preview":         {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false), ContextWindow: 1000000, MaxOutput: 64000},
 		"hy4-preview-x":       {Vision: true, Reasoning: true, Tools: true},
-		"glm-5.3":             {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(true)},
-		"glm-5.3-flash":       {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(true)},
-		"kimi-k3-1":           {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false)},
-		"deepseek-v4-pro":     {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(true)},
-		"deepseek-v4.1-flash": {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(true)},
-		"deepseek-v4-flash":   {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false)},
+		"glm-5.3":             {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(true), ContextWindow: 1000000, MaxOutput: 131072},
+		"glm-5.3-flash":       {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(true), ContextWindow: 1000000, MaxOutput: 131072},
+		"kimi-k3-1":           {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false), ContextWindow: 1000000, MaxOutput: 1048576},
+		// contextWindow is the server's contextWindow.defaultLength (300000),
+		// NOT maxInputTokens: k2.8 publishes supportedLengths [300000, 1000000]
+		// and the gateway only serves 1M to callers who opt in, which this
+		// executor never does. Budgeting 1M here would let the capacity
+		// adapter plan against a window the model does not actually have.
+		"kimi-k2.8-preview":   {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(true), ContextWindow: 300000, MaxOutput: 131072},
+		"deepseek-v4-pro":     {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(true), ContextWindow: 1000000, MaxOutput: 393216},
+		"deepseek-v4.1-flash": {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(true), ContextWindow: 1000000, MaxOutput: 393216},
+		"deepseek-v4-flash":   {Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false), ContextWindow: 1000000, MaxOutput: 50000},
 		"deepseek-v3-2-volc":  {Reasoning: true, Tools: true, ThinkingFormat: "openai", ThinkingCanDisable: new(false)},
 	},
 	"poolside": {
@@ -506,6 +534,11 @@ func GetModelTokenLimits(model string) (contextWindow int, maxOutput int) {
 		return 200000, 100000
 	case strings.Contains(m, "deepseek") || strings.Contains(m, "qwen") || strings.Contains(m, "glm") || strings.Contains(m, "kimi"):
 		return 131072, 8192
+	// MiMo V2.5/V2.6 declare 1M/128k upstream (*mimo*v2.5*, *mimo*v2.6*); the
+	// generic `*mimo*` row stays at 262144/131072, so only the numbered
+	// families belong here.
+	case strings.Contains(m, "mimo-v2.6") || strings.Contains(m, "mimo-v2.5"):
+		return 1048576, 131072
 	default:
 		return 128000, 4096
 	}

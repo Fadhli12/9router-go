@@ -1,6 +1,95 @@
 # Changelog
 
 ## [Unreleased]
+### 🔄 Tujuh perbaikan parity dari PR upstream yang masih terbuka
+
+Tujuh perubahan independen, masing-masing menutup satu PR open di
+`decolua/9router` yang audit 2026-10-05 masih menyisakan gap di gateway ini.
+Semuanya data/kapabilitas/batas-API/UI — tidak ada perubahan kontrak yang
+belum dijanjikan ke klien.
+
+**1. #4587 — Agnes 3.0 Pro + kapabilitas vision yang hilang.** `agnes-3.0-flash`
+sudah dilayani, tapi **keempat id Agnes tidak punya satu pun baris** di
+`modelCapabilities`, sehingga jatuh ke `DefaultCapabilities` dengan
+`Vision:false`. Akibatnya router mengganti gambar dengan placeholder **sebelum
+request dikirim** — input multimodal Agnes hilang diam-diam. Dua baris persis
+ditambahkan untuk id 3.0 (`Vision`, `Reasoning`, `openai`, 512k/65536) plus
+entri katalog `agnes-3.0-pro` (bentuk **bertitik** sesuai dokumen vendor —
+`agnes-30-pro` hanya slug URL) dan harga 0.45/0.90/0.045. Baris 2.5 sengaja
+tidak diberi angka: dokumen vendor yang upstream rujuk tidak memuatnya, dan
+menebaknya berarti mengarang limit (`AGENTS.md` §3 — tanpa glob `agnes*`,
+karena pola akan memegang seluruh keluarga termasuk id tak berdokumen).
+
+**2. #4575 — model probe Anthropik yang sudah pension.**
+`claude-3-haiku-20240307` masih dipatok di dua tempat
+(`connection_probe.go`, `validate.go`). Diganti satu konstanta
+`AnthropicValidationModel` = `claude-haiku-4-5-20251001`, id yang sudah dipakai
+registry dan tabel harga — tidak ada id baru yang dikarang. Precedence
+`assignedModel` di kedua jalur tidak berubah.
+
+**3. #4615 — node topologi free baru muncul setelah dipakai.** Peta Usage
+menyorot `FREE_DEFAULTS` tanpa syarat, jadi `opencode`/`nvidia`/`clinepass`
+tampil padahal tidak pernah meneruskan request. Sekarang loop itu di-gate
+`stats.byProvider[id].requests > 0`. `ProviderTopologyCard` juga kehilangan
+roster fallback hardcoded-nya dan memakai empty state — roster itu akan
+membangkitkan bug yang sama tepat di layar saat tidak ada yang dipakai.
+
+**4. #4614 — bayangan glob pada tabel thinking level.** `GetThinkingLevels`
+first-match-wins, dan baris `*deepseek-v4.*` yang tidak dikualifikasi berada
+**di atas** baris `codebuddy-cn`. Untuk id bertitik seperti
+`deepseek-v4.1-flash` glob generik menang lebih dulu, sehingga baris
+codebuddy-cn **mati** — picker menampilkan set effort yang salah untuk model
+codebuddy-cn. Dua baris persis codebuddy-cn dipindahkan ke atas glob generik
+sesuai koreksi upstream, bersama sisa sinkronisasi katalog codebuddy-cn ke
+snapshot server 2026-09-30 (glm-5.2/5.3, hy3, hy4-preview, kimi-k2.8-preview,
+maxOutput). *Residual:* baris `codebuddy-intl` yang mengalami bayangan glob
+yang sama tidak diubah upstream, jadi tidak diubah di sini juga — dicatat
+agar tidak dikira terlupakan.
+
+**5. #4584 — normalisasi identifier model di batas API.** `models` pada combo
+create/update dibaca sebagai `any` lalu ditulis ulang apa adanya, sehingga
+objek legacy `{provider,model}` atau `{fullModel}` tersimpan utuh — dan
+`comboModels` hanya bisa membaca `[]string`, jadi baris itu tidak terbaca dan
+halaman Combos rusak. Sekarang dikoerensi jadi string `provider/model` dan
+entri cacat dijawab **400** `models must contain valid model IDs` lewat
+`handlerutil.WriteJSONError` yang sudah jadi konvensi 400 di paket itu. Baris
+lama **tidak** dimigrasi — sama seperti upstream.
+
+**6. #4564 — seed model free-tier tokenharbor.** Empat id gratis baru
+(`mimo-v2.6-flash:free`, `mimo-v2.5:free`, `qwen3.8-flash:free`,
+`deepseek-v4-flash:free`) ditambahkan. Dua di antaranya akan jatuh ke lantai
+128000/4096 tanpa baris limit, jadi `GetModelTokenLimits` dapat case
+1048576/131072 untuk keluarga `mimo-v2.5`/`v2.6` — angka itu milik upstream
+bukan karangan. Tidak ada baris harga yang ditambahkan: `tables.go` tidak
+kena, sama seperti upstream.
+
+**7. #4576 — strategi fallback eksplisit pada combo.** UI menghapus entri
+`settings.comboStrategies` setiap kali strategi terpilih dianggap "default",
+jadi memilih "Fallback" pada combo yang global-nya round-robin terlihat
+tersimpan padahal tidak — combo diam-diam mewarisi round-robin lagi. Ditambah
+nilai `inherit` sebagai **satu-satunya** cara menghapus override, dan
+`ComboCard` kini menampilkan nilai `inherit` apa adanya. Konsekuensinya di
+`ComboCard`: `isFusion` sengaja memakai strategi **efektif**
+(`effectiveComboStrategy`) agar combo yang mewarisi fusion tetap menampilkan
+ikon fusion, sementara nilai select tetap menampilkan `inherit`.
+
+**Utang svelte-check juga berkurang dua.** `ComboCard` belum pernah punya
+entri baseline, jadi saat file itu disentuh tiga error lamanya ikut terhitung:
+`{#each}` yang mengadeklarasikan indeks tak terpakai, dan `title` pada dua
+ikon lucide yang bukan props-nya. Ketiganya diperbaiki (`aria-label` +
+`role="img"` sebagai pengganti `title`), bukan dilewati dengan menaikkan
+baseline — sesuai `AGENTS.md` §6.E. Baseline `svelte-check` turun dari **91 ke
+89**.
+
+**Verifikasi:** `go vet ./internal/...` bersih · `go test -count=1 ./...`
+hijau · `bun run build` + `bun run ratchet:svelte` (0 unresolved identifier,
+89 error, baseline diturunkan) · `bun test` 219 pass. Smoke ke binary asli di
+`DATA_DIR` terisolasi: routing `bai/probe` dijawab upstream, dan
+`agnes/agnes-3.0-flash` dengan `image_url` meneruskan URL gambar utuh ke
+upstream — perilaku yang sebelumnya mustahil karena `Vision:false`.
+
+
+
 
 ### 🩺 `go test -race ./...` jadi gerbang CI — sebelumnya tidak pernah jalan, dan menemukan satu test flaky
 

@@ -347,10 +347,17 @@
       }
     }
 
-    // 5. Ensure core free/no-auth defaults are present
+    // 5. Free/no-auth defaults, but only once they have actually been used.
+    //    Upstream #4615: no-auth providers store no connection, so the old
+    //    unconditional pass drew every catalog free provider on a map that
+    //    reads as "who is on the bus" — including ones never routed a request.
+    //    Providers with real usage already entered above via stats.byProvider,
+    //    so this only has to cover the ids whose usage key the map lacks.
+    const usedInPeriod = (provId: string) =>
+      (stats.byProvider?.[provId]?.requests || 0) > 0
     const FREE_DEFAULTS = ['antigravity', 'opencode', 'nvidia', 'openrouter', 'clinepass']
     for (const f of FREE_DEFAULTS) {
-      addProvider(f, 'default')
+      if (usedInPeriod(f)) addProvider(f, 'default')
     }
 
     return list

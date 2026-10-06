@@ -169,10 +169,10 @@ describe('providers & media separation', () => {
   })
   it('wires the five v0.5.91 aggregators (tokenharbor, dahl, atria, agnes, bai)', () => {
     const expected: Record<string, { category: string; models: number; fetcher: boolean }> = {
-      tokenharbor: { category: 'apikey', models: 6, fetcher: true },
+      tokenharbor: { category: 'apikey', models: 10, fetcher: true },
       dahl: { category: 'apikey', models: 3, fetcher: true },
       atria: { category: 'apikey', models: 1, fetcher: false },
-      agnes: { category: 'freeTier', models: 4, fetcher: false },
+      agnes: { category: 'freeTier', models: 5, fetcher: false },
       bai: { category: 'apikey', models: 0, fetcher: true },
     }
     for (const [id, want] of Object.entries(expected)) {
