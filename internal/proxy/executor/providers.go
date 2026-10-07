@@ -681,7 +681,10 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		if cleanModel != "" {
 			reqMap["model"] = cleanModel
 		}
-		if b, err := json.Marshal(reqMap); err == nil {
+		// Deterministic marshaling keeps the serialized request prefix
+		// stable across turns, which DeepSeek's prefix prompt cache
+		// requires; json/v2 randomizes map member order by default.
+		if b, err := marshalStable(reqMap); err == nil {
 			body = b
 		}
 	}
@@ -1346,7 +1349,10 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 		if cleanModel != "" {
 			reqGoMap["model"] = cleanModel
 		}
-		if b, err := json.Marshal(reqGoMap); err == nil {
+		// Deterministic marshaling keeps the serialized request prefix
+		// stable across turns, which DeepSeek's prefix prompt cache
+		// requires; json/v2 randomizes map member order by default.
+		if b, err := marshalStable(reqGoMap); err == nil {
 			body = b
 		}
 	}
