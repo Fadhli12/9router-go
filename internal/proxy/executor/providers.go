@@ -211,9 +211,10 @@ func ForwardKiro(w http.ResponseWriter, req *Request) error {
 // for this request".
 const kiroDefaultProfileArn = "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK"
 
-// kiroProfileArn extracts the profile ARN for a Kiro request,
-// defaulting to the shared gateway profile when the connection data
-// carries none.
+// kiroProfileArn extracts the profile ARN for a Kiro request. Upstream parity:
+// only OAuth/social tokens accept a shared fallback profile — an account-bound
+// token (api_key, idc, external_idp) presenting a shared ARN from another
+// account fails, so those send the resolved ARN or none at all.
 func kiroProfileArn(psd map[string]any) string {
 	if s, ok := psd["profileArn"].(string); ok {
 		if trimmed := strings.TrimSpace(s); trimmed != "" {
@@ -227,7 +228,12 @@ func kiroProfileArn(psd map[string]any) string {
 			}
 		}
 	}
-	return kiroDefaultProfileArn
+	switch authMethod, _ := psd["authMethod"].(string); authMethod {
+	case "api_key", "idc", "external_idp":
+		return ""
+	default:
+		return kiroDefaultProfileArn
+	}
 }
 
 // kiroUpstreamBody translates an OpenAI chat body into the Kiro envelope,

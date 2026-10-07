@@ -2,7 +2,6 @@ package translator
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	json "encoding/json/v2"
 	"fmt"
@@ -85,6 +84,15 @@ func OpenAIToKiro(body []byte, opts KiroTranslateOptions) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Kiro rejects a conversation where an assistant toolUse has no matching
+	// tool result in the immediately following user turn ("Invalid tool use
+	// format."). This happens when a client drops a failed/cancelled tool call
+	// from history, or when a parallel tool call only partially returned.
+	// canonicalizeKiroConversation reconciles each assistant→user pair and
+	// flattens unmatched tool material into plain text so the envelope is
+	// always valid.
+	history, current = canonicalizeKiroConversation(history, current, opts.Model, specs, nameMap)
 
 	// history excludes currentMessage upstream; the gateway takes the last
 	// user turn separately in currentMessage.
@@ -725,10 +733,9 @@ func newKiroUUID() string {
 		hex.EncodeToString(b[10:16])
 }
 
+// newKiroConversationID mirrors upstream generateBinaryStyleId: a UUID followed
+// by the unix-milli timestamp, the format the Kiro gateways expect for
+// conversationId.
 func newKiroConversationID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return strconv.FormatInt(time.Now().UnixNano(), 16)
-	}
-	return base64.RawURLEncoding.EncodeToString(b[:])
+	return newKiroUUID() + strconv.FormatInt(time.Now().UnixMilli(), 10)
 }

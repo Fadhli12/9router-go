@@ -120,6 +120,15 @@ func ForwardKimchi(ctx context.Context, client *http.Client, cfg *providers.Prov
 // profile, and a 401/403/404 moves on to the next surface — one dead gateway
 // must not look like a dead account. authMethod decides the TokenType header
 // and the profile ARN travels in `x-amzn-codewhisperer-profile-arn`.
+// kiroDefaultProfileARNs mirrors upstream KIRO_DEFAULT_PROFILE_ARNS: builder-id
+// and social (Google/GitHub) sign-ins map to different shared CodeWhisperer
+// profiles, and sending one account's shared ARN with another account's token
+// makes the gateway reject the request.
+const (
+	kiroBuilderIDProfileARN = "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX"
+	kiroSocialProfileARN    = "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK"
+)
+
 func ForwardKiro(ctx context.Context, client *http.Client, cfg *providers.ProviderConfig, apiKey string, body []byte, isStream bool, psd map[string]any) (*http.Response, error) {
 	clean := cleanKiroBody(body)
 	endpoints := kiroEndpoints(cfg, psd)
@@ -129,7 +138,6 @@ func ForwardKiro(ctx context.Context, client *http.Client, cfg *providers.Provid
 		last := idx == len(endpoints)-1
 		invocationID := fmt.Sprintf("%d-%d", time.Now().UnixMilli(), time.Now().UnixNano())
 		headers := map[string]string{
-			"X-Amz-Target":                    "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
 			"Amz-Sdk-Request":                 "attempt=1; max=3",
 			"Amz-Sdk-Invocation-Id":           invocationID,
 			"Accept":                          "application/vnd.amazon.eventstream",
@@ -138,21 +146,21 @@ func ForwardKiro(ctx context.Context, client *http.Client, cfg *providers.Provid
 			"x-amzn-kiro-agent-mode":          "spec",
 			"x-amzn-codewhisperer-machine-id": "kiro-desktop",
 		}
+		// Only the legacy codewhisperer surface speaks the X-Amz-Target RPC
+		// protocol; q.* and kiro.dev answer a body carrying it with 400
+		// REQUEST_BODY_INVALID, so it must not ride along anywhere else.
+		if strings.Contains(endpoint, "://codewhisperer.") {
+			headers["X-Amz-Target"] = "AmazonCodeWhispererStreamingService.GenerateAssistantResponse"
+		}
 		if apiKey != "" {
 			headers["x-amz-sso-bearer"] = apiKey
 		}
-		profileArn := ""
-		if s, ok := psd["profileArn"].(string); ok && s != "" {
-			profileArn = s
-		} else if raw, ok := psd["providerSpecificData"].(map[string]any); ok {
-			if s, ok := raw["profileArn"].(string); ok && s != "" {
-				profileArn = s
-			}
+		// The header carries only the connection's own profile ARN. The shared
+		// defaults belong to specific account families, so a header default
+		// would present this token as a foreign account.
+		if ownARN := kiroOwnProfileArn(psd); ownARN != "" {
+			headers["x-amzn-codewhisperer-profile-arn"] = ownARN
 		}
-		if profileArn == "" {
-			profileArn = "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK"
-		}
-		headers["x-amzn-codewhisperer-profile-arn"] = profileArn
 		if tokenType := kiroTokenType(psd); tokenType != "" {
 			headers["TokenType"] = tokenType
 		}
@@ -177,6 +185,24 @@ func ForwardKiro(ctx context.Context, client *http.Client, cfg *providers.Provid
 		lastErr = fmt.Errorf("kiro: no endpoint available")
 	}
 	return nil, lastErr
+}
+
+// kiroOwnProfileArn extracts the connection's own profile ARN without any
+// shared-default fallback.
+func kiroOwnProfileArn(psd map[string]any) string {
+	if s, ok := psd["profileArn"].(string); ok {
+		if trimmed := strings.TrimSpace(s); trimmed != "" {
+			return trimmed
+		}
+	}
+	if raw, ok := psd["providerSpecificData"].(map[string]any); ok {
+		if s, ok := raw["profileArn"].(string); ok {
+			if trimmed := strings.TrimSpace(s); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
 }
 
 // kiroTokenType mirrors upstream buildHeaders: API-key connections announce

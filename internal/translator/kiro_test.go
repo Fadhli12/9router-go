@@ -662,3 +662,122 @@ func TestOpenAIToKiro_DropsToolCallWithoutSpec(t *testing.T) {
 		t.Errorf("tool call with no matching spec must be dropped:\n%s", s)
 	}
 }
+
+// TestOpenAIToKiro_MissingToolResultFlattensToolUse covers the case where an
+// assistant emitted two parallel tool calls but only one returned a result
+// (the other was cancelled/failed). Kiro rejects the unmatched toolUse with
+// "Invalid tool use format.", so it must be flattened into text instead.
+func TestOpenAIToKiro_MissingToolResultFlattensToolUse(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"user","content":"do A and B"},
+		{"role":"assistant","content":"","tool_calls":[
+			{"id":"call_1","type":"function","function":{"name":"grep","arguments":"{}"}},
+			{"id":"call_2","type":"function","function":{"name":"read","arguments":"{}"}}
+		]},
+		{"role":"tool","tool_call_id":"call_1","content":"A done"},
+		{"role":"assistant","content":"Done."},
+		{"role":"user","content":"next"}
+	],"tools":[
+		{"type":"function","function":{"name":"grep","description":"search","parameters":{"type":"object","properties":{}}}},
+		{"type":"function","function":{"name":"read","description":"read","parameters":{"type":"object","properties":{}}}}
+	]}`)
+	out, err := OpenAIToKiro(body, KiroTranslateOptions{Model: "m"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := decodeKiro(t, out)
+	cs := m["conversationState"].(map[string]any)
+	hist, _ := cs["history"].([]any)
+
+	// The assistant turn must NOT carry call_2 as a toolUse — it has no result.
+	for _, h := range hist {
+		arm, ok := h.(map[string]any)["assistantResponseMessage"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if uses, _ := arm["toolUses"].([]any); len(uses) > 0 {
+			for _, u := range uses {
+				um := u.(map[string]any)
+				if um["toolUseId"] == "call_2" {
+					t.Errorf("unmatched toolUse call_2 must be flattened, got %v", arm)
+				}
+			}
+		}
+	}
+	// call_2 must appear as flattened text instead.
+	foundText := false
+	for _, h := range hist {
+		arm, ok := h.(map[string]any)["assistantResponseMessage"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if c, _ := arm["content"].(string); strings.Contains(c, "[Tool call: read") {
+			foundText = true
+		}
+	}
+	if !foundText {
+		t.Errorf("unmatched toolUse call_2 must appear as flattened text")
+	}
+	// call_1 must still be a proper toolUse with its result.
+	foundPair := false
+	for i, h := range hist {
+		arm, ok := h.(map[string]any)["assistantResponseMessage"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if uses, _ := arm["toolUses"].([]any); len(uses) > 0 {
+			for _, u := range uses {
+				um := u.(map[string]any)
+				if um["toolUseId"] == "call_1" {
+					// Next turn must be a user turn with the matching result.
+					if i+1 < len(hist) {
+						uim, _ := hist[i+1].(map[string]any)["userInputMessage"].(map[string]any)
+						ctx, _ := uim["userInputMessageContext"].(map[string]any)
+						results, _ := ctx["toolResults"].([]any)
+						for _, r := range results {
+							rm := r.(map[string]any)
+							if rm["toolUseId"] == "call_1" {
+								foundPair = true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if !foundPair {
+		t.Errorf("matched toolUse call_1 must still pair with its result")
+	}
+}
+
+// TestOpenAIToKiro_OrphanToolResultInCurrentTurnIsFlattened covers the case
+// where the current user turn carries a tool result that no assistant turn
+// ever emitted — it must be flattened into text instead of reaching
+// userInputMessageContext.toolResults.
+func TestOpenAIToKiro_OrphanToolResultInCurrentTurnIsFlattened(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"user","content":"do A"},
+		{"role":"assistant","content":"Done."},
+		{"role":"user","content":[
+			{"type":"tool_result","tool_use_id":"orphan_id","content":"mystery result"},
+			{"type":"text","text":"next"}
+		]}
+	],"tools":[
+		{"type":"function","function":{"name":"grep","description":"search","parameters":{"type":"object","properties":{}}}}
+	]}`)
+	out, err := OpenAIToKiro(body, KiroTranslateOptions{Model: "m"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := decodeKiro(t, out)
+	cs := m["conversationState"].(map[string]any)
+	cur := cs["currentMessage"].(map[string]any)["userInputMessage"].(map[string]any)
+	ctx, _ := cur["userInputMessageContext"].(map[string]any)
+	if results, _ := ctx["toolResults"].([]any); len(results) > 0 {
+		t.Errorf("orphan tool result in current turn must not reach toolResults, got %v", results)
+	}
+	content, _ := cur["content"].(string)
+	if !strings.Contains(content, "mystery result") {
+		t.Errorf("orphan tool result content must be folded into current turn text, got %q", content)
+	}
+}
