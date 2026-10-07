@@ -24,6 +24,33 @@ Both sides now carry the id, stripped of the `__ts__<sig>` suffix — that suffi
 is 9router-go's private thought-signature transport and must not reach the wire
 or desynchronise a call from its response.
 
+### 🐛 Edit Compatible Node opens with a blank Prefix field (#177)
+
+`EditCompatibleNodeModal` seeded `name`, `urlSuffix`, `apiType` and `baseUrl` from
+the node but never `prefix`, so the field rendered empty with only its
+`oc-prod` / `ac-prod` placeholder. The stored prefix is the namespace the
+node's models already resolve under (`oc/<model>`), and the submit guard
+requires it, so opening the modal also left Save disabled until the value was
+retyped by hand.
+
+The seed logic now lives in `nodeFormSeed.ts`, which the modal calls for every
+field, with a regression test covering the prefix, the generated-suffix
+exception and the per-flavour default base URL. The `urlSuffixGenerated`
+behaviour is unchanged: a random uuid tail is still not offered as editable
+text.
+
+Verified against a running binary on an isolated `DATA_DIR`: both the OpenAI
+and Anthropic variants open with the stored prefix and an enabled Save, a
+renamed prefix round-trips through `PUT /api/provider-nodes/{id}` and is shown
+again on reopen, and a node whose id tail is a random uuid still opens with an
+empty suffix.
+
+Re-verified against a snapshot of a real 16-node database: every stored prefix
+— including the capitalised and multi-character ones (`Arg`, `Id`, `bai`) —
+opens in the field with Save enabled, a rename round-trips through
+`PUT /api/provider-nodes/{id}` and is shown again on reopen, and a node whose
+id tail is a random uuid still opens with an empty suffix.
+
 ## [v1.9.10] - 2026-10-07
 
 ### 🩺 `text-danger` fails the contrast bar in dark theme — error text is nearly unreadable
