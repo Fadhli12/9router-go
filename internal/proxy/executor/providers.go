@@ -220,6 +220,13 @@ func kiroProfileArn(psd map[string]any) string {
 			return trimmed
 		}
 	}
+	if raw, ok := psd["providerSpecificData"].(map[string]any); ok {
+		if s, ok := raw["profileArn"].(string); ok {
+			if trimmed := strings.TrimSpace(s); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
 	return kiroDefaultProfileArn
 }
 

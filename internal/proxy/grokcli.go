@@ -141,9 +141,18 @@ func ForwardKiro(ctx context.Context, client *http.Client, cfg *providers.Provid
 		if apiKey != "" {
 			headers["x-amz-sso-bearer"] = apiKey
 		}
-		if profileArn, ok := psd["profileArn"].(string); ok && profileArn != "" {
-			headers["x-amzn-codewhisperer-profile-arn"] = profileArn
+		profileArn := ""
+		if s, ok := psd["profileArn"].(string); ok && s != "" {
+			profileArn = s
+		} else if raw, ok := psd["providerSpecificData"].(map[string]any); ok {
+			if s, ok := raw["profileArn"].(string); ok && s != "" {
+				profileArn = s
+			}
 		}
+		if profileArn == "" {
+			profileArn = "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK"
+		}
+		headers["x-amzn-codewhisperer-profile-arn"] = profileArn
 		if tokenType := kiroTokenType(psd); tokenType != "" {
 			headers["TokenType"] = tokenType
 		}

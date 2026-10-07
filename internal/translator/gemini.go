@@ -19,6 +19,12 @@ type GeminiStreamState struct {
 	Usage                *OpenAIUsage
 	FinishReason         string
 	LastThoughtSignature string
+	// HasToolCalls records whether any tool_calls delta was emitted during
+	// this stream. OpenAI's SSE protocol requires the terminal chunk's
+	// finish_reason to be "tool_calls" (not "stop") when a turn produced
+	// tool calls, so agent clients continue the multi-turn loop instead of
+	// treating the turn as complete.
+	HasToolCalls bool
 }
 
 // GeminiFileData represents remote or uploaded files referenced by URI.
@@ -173,16 +179,15 @@ func TranslateOpenAIToGemini(openaiBody []byte) ([]byte, error) {
 	var req GeminiRequest
 
 	// Parse messages
-	var msgs []struct {
-		Role             string           `json:"role"`
-		Content          any              `json:"content"`
-		ToolCalls        []OpenAIToolCall `json:"tool_calls,omitempty"`
-		ToolCallID       string           `json:"tool_call_id,omitempty"`
-		ReasoningContent string           `json:"reasoning_content,omitempty"`
-	}
+	var msgs []OpenAIMessage
 	if err := json.Unmarshal(oreq.Messages, &msgs); err != nil {
 		return nil, fmt.Errorf("parse messages: %w", err)
 	}
+
+	// Empty assistant shells would make Gemini 400; drop them.
+	// Orphan tool messages (unknown tool_call_id) are kept and handled below
+	// by deriving a functionResponse name from the id.
+	msgs = SanitizeOpenAIMessagesForGemini(msgs)
 
 	// Pre-map tool_call_id -> function names from assistant messages, queued per
 	// id. An OpenAI tool_call_id is only unique within its own assistant turn, so
@@ -201,7 +206,10 @@ func TranslateOpenAIToGemini(openaiBody []byte) ([]byte, error) {
 			if tc.ID == "" || tc.Function.Name == "" {
 				continue
 			}
-			cleanID := geminiCleanToolCallID(tc.ID)
+			cleanID := tc.ID
+			if ts := strings.LastIndex(cleanID, "__ts__"); ts != -1 {
+				cleanID = cleanID[:ts]
+			}
 			tcID2Names[tc.ID] = append(tcID2Names[tc.ID], tc.Function.Name)
 			if cleanID != tc.ID {
 				tcID2Names[cleanID] = append(tcID2Names[cleanID], tc.Function.Name)
@@ -273,16 +281,18 @@ func TranslateOpenAIToGemini(openaiBody []byte) ([]byte, error) {
 					ts = DefaultThinkingSignature
 				}
 				firstFunctionCallSeen = true
-				// The id pairs this call with its functionResponse. Antigravity
-				// forwards the Gemini body to Claude through Vertex Anthropic,
-				// which rebuilds a tool_use block per functionCall and rejects
-				// the request with "tool_use.id: Field required" when it has
-				// none. Parity with openai-to-gemini.js (id: tc.id).
-				gp := GeminiPart{FunctionCall: &GeminiFunctionCall{
-					Name: tc.Function.Name,
-					Args: args,
-					ID:   geminiCleanToolCallID(tc.ID),
-				}, ThoughtSignature: ts}
+				cleanTCID := tc.ID
+				if idx := strings.LastIndex(cleanTCID, "__ts__"); idx != -1 {
+					cleanTCID = cleanTCID[:idx]
+				}
+				gp := GeminiPart{
+					FunctionCall: &GeminiFunctionCall{
+						Name: tc.Function.Name,
+						Args: args,
+						ID:   cleanTCID,
+					},
+					ThoughtSignature: ts,
+				}
 				parts = append(parts, gp)
 			}
 
@@ -292,19 +302,35 @@ func TranslateOpenAIToGemini(openaiBody []byte) ([]byte, error) {
 
 		case "tool":
 			content := extractContentString(msg.Content)
-			cleanID := geminiCleanToolCallID(msg.ToolCallID)
-			name := nextToolNameForID(tcID2Names, tcID2Name, tcNameCursor, msg.ToolCallID, cleanID)
+			cleanID := msg.ToolCallID
+			if ts := strings.LastIndex(cleanID, "__ts__"); ts != -1 {
+				cleanID = cleanID[:ts]
+			}
+		name := nextToolNameForID(tcID2Names, tcID2Name, tcNameCursor, msg.ToolCallID, cleanID)
+
+		// If the name lookup returned "" we have two cases:
+		//   1. cleanID is non-empty but unknown — derive the name from the id by
+		//      stripping the conventional "call_" prefix (parity with upstream #4589).
+		//   2. cleanID is empty — a genuine orphan (e.g. background task notification
+		//      injected as role:"tool" with no tool_call_id). Converting that into a
+		//      functionResponse causes upstream (Antigravity Claude / Vertex AI) to
+		//      synthesize a phantom tool_use and reject the request with HTTP 400
+		//      ("messages.1.content.1.tool_use.id: Field required").
+		//      Treat it as plain user text instead.
+		if name == "" {
+			if cleanID == "" {
+				parts := []GeminiPart{{Text: content}}
+				parts = append(parts, geminiToolMediaParts(msg.Content)...)
+				req.Contents = append(req.Contents, GeminiContent{Role: "user", Parts: parts})
+				continue
+			}
+			// Derive from id: strip leading "call_" if present.
+			name = strings.TrimPrefix(cleanID, "call_")
 			if name == "" {
 				name = cleanID
-				if strings.HasPrefix(name, "call_") {
-					rest := strings.TrimPrefix(name, "call_")
-					if lastUnderscore := strings.LastIndex(rest, "_"); lastUnderscore > 0 {
-						name = rest[:lastUnderscore]
-					} else {
-						name = rest
-					}
-				}
 			}
+		}
+
 			// Tool result content may be plain text or JSON.
 			// Gemini requires the result to be valid JSON.
 			var resultValue any
@@ -426,17 +452,6 @@ func extractThoughtSig(id string) string {
 	return ""
 }
 
-// geminiCleanToolCallID drops the "__ts__<sig>" transport suffix from a tool
-// call id, leaving the id the client actually sees. The suffix is a 9router-go
-// encoding for carrying a thought signature back to Gemini, so it must never
-// reach the wire nor appear on one side of a call/response pair only.
-func geminiCleanToolCallID(id string) string {
-	if ts := strings.LastIndex(id, "__ts__"); ts != -1 {
-		return id[:ts]
-	}
-	return id
-}
-
 // effortToBudget converts reasoning_effort string to thinking budget tokens.
 func effortToBudget(effort string) int {
 	switch effort {
@@ -491,12 +506,15 @@ func TranslateGeminiResponseToOpenAI(geminiBody []byte) ([]byte, *OpenAIUsage, e
 					args = []byte("{}")
 				}
 				fnName := UncloakToolName(part.FunctionCall.Name, nil)
-				id := fmt.Sprintf("call_%s_%d", fnName, len(toolCalls))
+				id := part.FunctionCall.ID
+				if id == "" {
+					id = fmt.Sprintf("call_%s_%d", fnName, len(toolCalls))
+				}
 				sig := part.ThoughtSignature
 				if sig == "" {
 					sig = lastSig
 				}
-				if sig != "" {
+				if sig != "" && !strings.Contains(id, "__ts__") {
 					id += "__ts__" + sig
 				}
 				toolCalls = append(toolCalls, OpenAIToolCall{
@@ -646,14 +664,19 @@ func TranslateGeminiChunkToOpenAI(chunk []byte, state *GeminiStreamState) ([]byt
 						args = []byte("{}")
 					}
 					fnName := UncloakToolName(part.FunctionCall.Name, nil)
-					id := fmt.Sprintf("call_%s_%d", fnName, time.Now().UnixNano())
+					id := part.FunctionCall.ID
+					if id == "" {
+						id = fmt.Sprintf("call_%s_%d", fnName, time.Now().UnixNano())
+					}
 					sig := part.ThoughtSignature
 					if sig == "" {
 						sig = state.LastThoughtSignature
 					}
 					if sig != "" {
 						StoreGeminiThoughtSignature(id, sig, state.MessageId, state.Model)
-						id += "__ts__" + sig
+						if !strings.Contains(id, "__ts__") {
+							id += "__ts__" + sig
+						}
 					}
 					delta["tool_calls"] = []map[string]any{
 						{
@@ -666,6 +689,7 @@ func TranslateGeminiChunkToOpenAI(chunk []byte, state *GeminiStreamState) ([]byt
 							},
 						},
 					}
+					state.HasToolCalls = true
 				}
 				if len(delta) > 0 {
 					results = append(results, map[string]any{
@@ -688,6 +712,9 @@ func TranslateGeminiChunkToOpenAI(chunk []byte, state *GeminiStreamState) ([]byt
 		// Finish reason
 		if candidate.FinishReason != "" {
 			openAIStop := geminiFinishToOpenAI(candidate.FinishReason)
+			if state.HasToolCalls && openAIStop != "length" {
+				openAIStop = "tool_calls"
+			}
 
 			inputTokens, outputTokens, cachedTokens := 0, 0, 0
 			if geminiChunk.UsageMetadata != nil {

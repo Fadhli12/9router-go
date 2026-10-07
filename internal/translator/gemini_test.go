@@ -1046,6 +1046,7 @@ func TestGeminiStreamFinishReason_StateIsolatedPerStream(t *testing.T) {
 	if got != "stop" {
 		t.Errorf("fresh state without tool calls must emit %q, got %q", "stop", got)
 	}
+}
 
 func TestTranslateOpenAIToGemini_CarriesToolCallIDs(t *testing.T) {
 	// Antigravity routes Claude through Vertex Anthropic, which rebuilds a
