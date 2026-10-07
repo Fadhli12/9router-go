@@ -174,7 +174,81 @@ func kiroSanitizeMessages(messages []map[string]any) ([]map[string]any, error) {
 	if err := json.Unmarshal(out, &result); err != nil {
 		return nil, fmt.Errorf("kiro: unmarshal sanitized messages: %w", err)
 	}
-	return result, nil
+	return kiroStripThinking(result), nil
+}
+
+// kiroStripThinking removes reasoning/thinking material from assistant turns
+// before kiroConvertMessages sees them. Kiro's CodeWhisperer protocol has no
+// slot for a reasoning block, and a thinking-only assistant turn would
+// otherwise survive as an empty "..." shell that corrupts the strict
+// user/assistant turn alternation upstream ("Invalid tool use format."). Two
+// shapes are stripped, matching what OpenCode/Sisyphus emit:
+//
+//  1. The OpenAI `reasoning_content` string field (and the Claude-style
+//     `reasoning` alias) on assistant messages.
+//  2. Content blocks of type "thinking", "reasoning", or "redacted_thinking"
+//     inside a content array.
+//
+// Text and tool_use/tool_result blocks are left untouched, so a turn that
+// carries both thinking and a real answer/tool call keeps only the latter. An
+// assistant turn left with no text and no tool_calls after stripping is
+// dropped entirely, so it cannot become a dummy "..." shell downstream.
+func kiroStripThinking(messages []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(messages))
+	for _, msg := range messages {
+		if msg == nil {
+			continue
+		}
+		delete(msg, "reasoning_content")
+		delete(msg, "reasoning")
+		if content, ok := msg["content"].([]any); ok {
+			kept := make([]any, 0, len(content))
+			for _, raw := range content {
+				block, ok := raw.(map[string]any)
+				if !ok {
+					kept = append(kept, raw)
+					continue
+				}
+				switch t, _ := block["type"].(string); t {
+				case "thinking", "reasoning", "redacted_thinking":
+					continue
+				}
+				kept = append(kept, raw)
+			}
+			if len(kept) == 0 {
+				delete(msg, "content")
+			} else {
+				msg["content"] = kept
+			}
+		}
+		// Drop an assistant turn left with no visible content and no tool
+		// calls: it was reasoning-only and would otherwise become a dummy
+		// "..." shell that breaks Kiro's strict turn alternation.
+		if role, _ := msg["role"].(string); role == "assistant" && kiroMessageIsEmpty(msg) {
+			continue
+		}
+		out = append(out, msg)
+	}
+	return out
+}
+
+// kiroMessageIsEmpty reports whether a message carries no visible content and
+// no tool calls: no string/array content, and no tool_calls field. It is only
+// used to drop reasoning-only assistant turns after thinking has been stripped.
+func kiroMessageIsEmpty(msg map[string]any) bool {
+	if raw, ok := msg["tool_calls"].([]any); ok && len(raw) > 0 {
+		return false
+	}
+	switch content := msg["content"].(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(content) == ""
+	case []any:
+		return len(content) == 0
+	default:
+		return false
+	}
 }
 
 // kiroConvertMessages maps OpenAI messages onto Kiro turns. system/tool become

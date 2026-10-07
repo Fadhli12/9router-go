@@ -481,3 +481,136 @@ func TestOpenAIToKiro_EmptyAssistantShellBeforeToolCallsIsDropped(t *testing.T) 
 		t.Errorf("matched tool result must still reach toolResults, got %v", ctx)
 	}
 }
+
+// kiroHasDummyShell reports whether any assistantResponseMessage turn in
+// history is a placeholder with NO toolUses — i.e. a genuinely empty assistant
+// turn. Kiro rejects those with "Invalid tool use format". A turn that carries
+// toolUses legitimately has no text (the "..." placeholder fills its content),
+// so it is not a dummy shell.
+func kiroHasDummyShell(hist []any) bool {
+	for _, h := range hist {
+		arm, ok := h.(map[string]any)["assistantResponseMessage"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if c, _ := arm["content"].(string); c != kiroAssistantPlaceholder {
+			continue
+		}
+		if uses, _ := arm["toolUses"].([]any); len(uses) > 0 {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// TestOpenAIToKiro_StripsThinkingBlocks covers the OpenCode/Sisyphus shape: an
+// assistant turn whose content array carries a "thinking" block followed by the
+// model's real answer. The thinking block must be dropped and the real answer
+// must survive — with no dummy "..." shell.
+func TestOpenAIToKiro_StripsThinkingBlocks(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"user","content":"hello"},
+		{"role":"assistant","content":[{"type":"thinking","thinking":"pondering"},{"type":"text","text":"hi there"}]},
+		{"role":"user","content":"go on"}
+	]}`)
+	out, err := OpenAIToKiro(body, KiroTranslateOptions{Model: "m"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := decodeKiro(t, out)
+	cs := m["conversationState"].(map[string]any)
+	hist, _ := cs["history"].([]any)
+
+	texts := kiroHistoryAssistantTexts(hist)
+	if len(texts) == 0 {
+		t.Fatalf("expected an assistant turn in history, got none")
+	}
+	for _, text := range texts {
+		if strings.Contains(text, "pondering") {
+			t.Errorf("thinking content must be stripped, got %q", text)
+		}
+	}
+	if texts[len(texts)-1] != "hi there" {
+		t.Errorf("real assistant text must survive thinking stripping, got %v", texts)
+	}
+	if kiroHasDummyShell(hist) {
+		t.Errorf("history must not contain a dummy %q assistant turn, got turns %v", kiroAssistantPlaceholder, texts)
+	}
+}
+
+// TestOpenAIToKiro_StripsReasoningContentField covers the OpenAI
+// `reasoning_content` string field. A turn with real text plus reasoning must
+// keep only the text, and a reasoning-ONLY turn must be dropped entirely (no
+// dummy "..." shell).
+func TestOpenAIToKiro_StripsReasoningContentField(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"user","content":"hello"},
+		{"role":"assistant","content":"","reasoning_content":"hidden chain of thought"},
+		{"role":"user","content":"go on"}
+	]}`)
+	out, err := OpenAIToKiro(body, KiroTranslateOptions{Model: "m"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := decodeKiro(t, out)
+	cs := m["conversationState"].(map[string]any)
+	hist, _ := cs["history"].([]any)
+
+	for _, text := range kiroHistoryAssistantTexts(hist) {
+		if strings.Contains(text, "hidden chain of thought") {
+			t.Errorf("reasoning_content must be stripped, got %q", text)
+		}
+	}
+	if kiroHasDummyShell(hist) {
+		t.Errorf("reasoning-only assistant turn must be dropped, not left as a dummy %q shell", kiroAssistantPlaceholder)
+	}
+}
+
+// TestOpenAIToKiro_ThinkingOnlyTurnBeforeToolCallStillEmitsToolUses guards the
+// agentic shape: an assistant turn that carries thinking AND tool_calls. The
+// thinking is stripped, but the tool_calls must still surface as toolUses and
+// pair with the following tool result — the exact multi-turn sequence
+// Sisyphus/OpenCode send and where a regression would 400 upstream.
+func TestOpenAIToKiro_ThinkingOnlyTurnBeforeToolCallStillEmitsToolUses(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"user","content":"weather?"},
+		{"role":"assistant","content":[{"type":"thinking","thinking":"should call the tool"}],"tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{}"}}]},
+		{"role":"tool","tool_call_id":"call_1","content":"sunny"}
+	]}`)
+	out, err := OpenAIToKiro(body, KiroTranslateOptions{Model: "m"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := decodeKiro(t, out)
+	cs := m["conversationState"].(map[string]any)
+	hist, _ := cs["history"].([]any)
+
+	found := false
+	for _, h := range hist {
+		arm, ok := h.(map[string]any)["assistantResponseMessage"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if uses, _ := arm["toolUses"].([]any); len(uses) > 0 {
+			found = true
+			u := uses[0].(map[string]any)
+			if u["toolUseId"] != "call_1" || u["name"] != "get_weather" {
+				t.Errorf("unexpected toolUse: %v", u)
+			}
+		}
+	}
+	if !found {
+		t.Error("tool_calls must survive thinking stripping and reach history as toolUses")
+	}
+	if kiroHasDummyShell(hist) {
+		t.Errorf("history must not contain a dummy %q assistant turn", kiroAssistantPlaceholder)
+	}
+
+	cur := cs["currentMessage"].(map[string]any)["userInputMessage"].(map[string]any)
+	ctx, _ := cur["userInputMessageContext"].(map[string]any)
+	results, _ := ctx["toolResults"].([]any)
+	if len(results) != 1 || results[0].(map[string]any)["toolUseId"] != "call_1" {
+		t.Errorf("matched tool result must still reach toolResults, got %v", ctx)
+	}
+}

@@ -263,6 +263,10 @@
 
   function maskKey(key: string): string {
     if (!key) return ''
+    // The backend already masks keys for callers that are not fully
+    // authenticated (maskClientKey returns "***" or "sk-123…abcd"). Re-masking
+    // that value would double-mask and garble the display, so pass it through.
+    if (key.includes('…') || key === '***') return key
     if (key.length <= 10) return key
     return key.slice(0, 6) + '••••••' + key.slice(-4)
   }
