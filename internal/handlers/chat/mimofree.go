@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"9router/proxy/internal/constants"
+	"9router/proxy/internal/middleware"
 	"9router/proxy/internal/proxy/executor"
 	"9router/proxy/internal/providers"
 	"9router/proxy/internal/translator"
@@ -70,6 +71,15 @@ func generateMimoFingerprint() string {
 // It bootstraps a JWT if needed, injects the anti-abuse system message marker,
 // and forwards the request to the MiMo free endpoint.
 func (h *ChatHandler) MimoFreeChat(ctx context.Context, w http.ResponseWriter, body []byte, isStream bool, metrics *streamMetrics) error {
+	// API key provider restriction: the combo loop dials mimo-free
+	// directly, bypassing tryForwardWithConnection, so the seat is
+	// gated here — a restricted key never reaches the free endpoint.
+	if apiKey := middleware.GetAuthenticatedApiKeyFromContext(ctx); !middleware.IsProviderAllowed(apiKey, mimoProviderID) {
+		return &upstreamError{
+			StatusCode: http.StatusForbidden,
+			Body:       providerNotAllowedBody(mimoProviderID),
+		}
+	}
 	jwt, err := getMimoJWT()
 	if err != nil {
 		return fmt.Errorf("mimo bootstrap: %w", err)

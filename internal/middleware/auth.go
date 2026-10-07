@@ -11,6 +11,7 @@ import (
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/models"
 	"9router/proxy/internal/concurrency"
+	"9router/proxy/internal/providers"
 	"fmt"
 )
 
@@ -96,7 +97,17 @@ func RequireApiKey(repo *db.Repo) func(http.Handler) http.Handler {
 
 // GetAuthenticatedApiKey retrieves the authenticated APIKey object from the request context.
 func GetAuthenticatedApiKey(r *http.Request) *models.APIKey {
-	val := r.Context().Value(ApiKeyContextKey)
+	if r == nil {
+		return nil
+	}
+	return GetAuthenticatedApiKeyFromContext(r.Context())
+}
+
+func GetAuthenticatedApiKeyFromContext(ctx context.Context) *models.APIKey {
+	if ctx == nil {
+		return nil
+	}
+	val := ctx.Value(ApiKeyContextKey)
 	if val == nil {
 		return nil
 	}
@@ -105,6 +116,37 @@ func GetAuthenticatedApiKey(r *http.Request) *models.APIKey {
 		return nil
 	}
 	return keyObj
+}
+
+func IsProviderAllowed(apiKey *models.APIKey, provider string) bool {
+	if apiKey == nil || apiKey.AllowedProviders == nil {
+		return true
+	}
+	allowedStr := strings.TrimSpace(*apiKey.AllowedProviders)
+	if allowedStr == "" {
+		return true
+	}
+	target := strings.ToLower(strings.TrimSpace(provider))
+	if target == "" {
+		return false
+	}
+	canonTarget := strings.ToLower(providers.ResolveAlias(target))
+
+	tokens := strings.Split(allowedStr, ",")
+	for _, tok := range tokens {
+		tok = strings.ToLower(strings.TrimSpace(tok))
+		if tok == "" {
+			continue
+		}
+		if tok == target || tok == canonTarget {
+			return true
+		}
+		canonTok := strings.ToLower(providers.ResolveAlias(tok))
+		if canonTok == target || canonTok == canonTarget {
+			return true
+		}
+	}
+	return false
 }
 
 // ExtractApiKey extracts the client API key from the request.

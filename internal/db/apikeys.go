@@ -2,7 +2,9 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 
+	"9router/proxy/internal/apikeycache"
 	"9router/proxy/internal/models"
 )
 
@@ -23,9 +25,9 @@ func (r *Repo) ValidateApiKey(key string) (bool, error) {
 func (r *Repo) GetApiKeyByKey(key string) (*models.APIKey, error) {
 	var apiKey models.APIKey
 	err := r.db.QueryRow(
-		"SELECT id, key, name, machineId, isActive, createdAt FROM apiKeys WHERE key = ? LIMIT 1",
+		"SELECT id, key, name, machineId, isActive, createdAt, maxConcurrent, allowedProviders FROM apiKeys WHERE key = ? LIMIT 1",
 		key,
-	).Scan(&apiKey.ID, &apiKey.Key, &apiKey.Name, &apiKey.MachineID, &apiKey.IsActive, &apiKey.CreatedAt)
+	).Scan(&apiKey.ID, &apiKey.Key, &apiKey.Name, &apiKey.MachineID, &apiKey.IsActive, &apiKey.CreatedAt, &apiKey.MaxConcurrent, &apiKey.AllowedProviders)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -34,4 +36,14 @@ func (r *Repo) GetApiKeyByKey(key string) (*models.APIKey, error) {
 		return nil, err
 	}
 	return &apiKey, nil
+}
+
+// UpdateApiKeyAllowedProviders updates the allowedProviders field for an API key.
+func (r *Repo) UpdateApiKeyAllowedProviders(id string, allowedProviders string) error {
+	_, err := r.db.Exec(`UPDATE apiKeys SET allowedProviders = ? WHERE id = ?`, allowedProviders, id)
+	if err != nil {
+		return fmt.Errorf("update api key allowed providers %s: %w", id, err)
+	}
+	apikeycache.Invalidate()
+	return nil
 }

@@ -95,6 +95,7 @@ func coreSchema() []tableDef {
 				{"isActive", "INTEGER DEFAULT 1"},
 				{"createdAt", "TEXT NOT NULL"},
 				{"maxConcurrent", "INTEGER DEFAULT 0"},
+				{"allowedProviders", "TEXT DEFAULT ''"},
 			},
 			indexes: []string{
 				"CREATE INDEX IF NOT EXISTS idx_ak_key ON apiKeys(key)",
@@ -183,6 +184,7 @@ func coreSchema() []tableDef {
 var goOnlyColumns = [][3]string{
 	{"providerConnections", "lastUsedAt", "TEXT"},
 	{"providerConnections", "consecutiveUseCount", "INTEGER DEFAULT 0"},
+	{"apiKeys", "allowedProviders", "TEXT DEFAULT ''"},
 }
 
 // EnsureCoreSchema creates the upstream core tables/indexes when absent,

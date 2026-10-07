@@ -8,11 +8,13 @@
     Plus,
     Power,
     Shield,
+    ShieldCheck,
     Terminal,
     Trash2,
     Users
   } from 'lucide-svelte'
   import { api, type APIKey } from '../api/client'
+  import { PROVIDER_CATALOG } from '../lib/providers'
   import { copyToClipboard } from '../lib/clipboard'
 
   let {
@@ -34,6 +36,32 @@
   let editingKey = $state<APIKey | null>(null)
   let editLimitVal = $state(0)
   let isUpdatingLimit = $state(false)
+
+  // Edit Allowed Providers modal state
+  let isEditProvidersOpen = $state(false)
+  let editingProvidersKey = $state<APIKey | null>(null)
+  let editProvidersVal = $state('')
+  let isUpdatingProviders = $state(false)
+
+  // Create modal allowed providers (comma-separated)
+  let createProviders = $state('')
+
+  function splitProviders(val: string | undefined | null): string[] {
+    return (val ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+
+  function toggleProviderIn(val: string, id: string): string {
+    const set = new Set(splitProviders(val))
+    if (set.has(id)) {
+      set.delete(id)
+    } else {
+      set.add(id)
+    }
+    return [...set].join(',')
+  }
 
   async function handleCopy(text: string, id: string) {
     const ok = await copyToClipboard(text)
@@ -68,6 +96,28 @@
     isEditLimitOpen = true
   }
 
+  function openEditProviders(k: APIKey) {
+    editingProvidersKey = k
+    editProvidersVal = k.allowedProviders ?? ''
+    isEditProvidersOpen = true
+  }
+
+  async function handleSaveProviders(e: SubmitEvent) {
+    e.preventDefault()
+    if (!editingProvidersKey) return
+    try {
+      isUpdatingProviders = true
+      await api.updateApiKeyAllowedProviders(editingProvidersKey.id, editProvidersVal.trim())
+      isEditProvidersOpen = false
+      editingProvidersKey = null
+      onRefresh()
+    } catch (err) {
+      alert(`Failed to update allowed providers: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      isUpdatingProviders = false
+    }
+  }
+
   async function handleSaveLimit(e: SubmitEvent) {
     e.preventDefault()
     if (!editingKey) return
@@ -88,13 +138,16 @@
     e.preventDefault()
     try {
       isCreating = true
+      const allowed = createProviders.trim()
       await api.createApiKey({
         name: name || 'client-key',
-        maxConcurrent: Number(maxConcurrent) || 0
+        maxConcurrent: Number(maxConcurrent) || 0,
+        ...(allowed ? { allowedProviders: allowed } : {})
       })
       isCreateOpen = false
       name = ''
       maxConcurrent = 0
+      createProviders = ''
       onRefresh()
     } catch (err) {
       alert(`Failed to create key: ${err instanceof Error ? err.message : String(err)}`)
@@ -105,6 +158,24 @@
 
   let primaryKey = $derived(apiKeys[0]?.key || 'sk-9ro…oken')
 </script>
+
+{#snippet providerPicker(value: string, onToggle: (id: string) => void)}
+  <div class="max-h-36 overflow-y-auto rounded-lg border border-border bg-bg p-2 flex flex-wrap gap-1.5">
+    {#each PROVIDER_CATALOG as p (p.id)}
+      {@const active = splitProviders(value).includes(p.id)}
+      <button
+        type="button"
+        onclick={() => onToggle(p.id)}
+        class="px-2 py-0.5 rounded-full text-[10px] font-code border cursor-pointer transition {active
+          ? 'bg-brand-500/15 text-brand-400 border-brand-500/40'
+          : 'bg-surface-2 text-text-subtle border-border hover:text-text-main'}"
+        title={p.name}
+      >
+        {p.id}
+      </button>
+    {/each}
+  </div>
+{/snippet}
 
 <div class="space-y-6">
   <!-- Page header -->
@@ -154,6 +225,7 @@
             <th class="py-2.5 px-4">Label Identity</th>
             <th class="py-2.5 px-4">Bearer Token</th>
             <th class="py-2.5 px-4">Concurrent Limit</th>
+            <th class="py-2.5 px-4">Allowed Providers</th>
             <th class="py-2.5 px-4">Status</th>
             <th class="py-2.5 px-4">Created Date</th>
             <th class="py-2.5 px-4 text-right">Actions</th>
@@ -164,6 +236,7 @@
             {@const isActive = k.isActive === 1}
             {@const limit = k.maxConcurrent ?? 0}
             {@const activeCount = k.activeCount ?? 0}
+            {@const allowedProviders = splitProviders(k.allowedProviders)}
             <tr class="hover:bg-surface-2/40 transition">
               <td class="py-3 px-4 font-body font-bold text-text-main">{k.name || 'Client Token'}</td>
               <td class="py-3 px-4 text-text-muted">
@@ -212,6 +285,22 @@
                 </div>
               </td>
               <td class="py-3 px-4">
+                {#if allowedProviders.length === 0}
+                  <span class="text-text-subtle text-[11px] font-body">All providers</span>
+                {:else}
+                  <div class="flex flex-wrap gap-1">
+                    {#each allowedProviders as prov}
+                      <span
+                        class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-info/10 text-info border border-info/25"
+                        title="Allowed provider"
+                      >
+                        {prov}
+                      </span>
+                    {/each}
+                  </div>
+                {/if}
+              </td>
+              <td class="py-3 px-4">
                 <span
                   class="px-2 py-0.5 rounded text-[10px] font-bold {isActive
                     ? 'bg-success/10 text-success border border-success/20'
@@ -232,6 +321,14 @@
                     title="Edit Concurrent Limit"
                   >
                     <Users class="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onclick={() => openEditProviders(k)}
+                    class="p-1.5 rounded-lg border border-border bg-surface-2 text-text-subtle hover:text-text-main transition cursor-pointer"
+                    title="Edit Allowed Providers"
+                  >
+                    <ShieldCheck class="w-3.5 h-3.5" />
                   </button>
                   <button
                     type="button"

@@ -81,9 +81,11 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Get("/keys", h.HandleGetApiKeys)
 		r.Get("/keys/concurrency", h.HandleKeysConcurrency)
 		r.Post("/keys", h.HandleCreateApiKey)
+		r.Put("/keys/{id}", h.HandleUpdateApiKey)
 		r.Delete("/keys/{id}", h.HandleDeleteApiKey)
 		r.Put("/keys/{id}/toggle", h.HandleToggleApiKey)
 		r.Put("/keys/{id}/limit", h.HandleUpdateApiKeyLimit)
+		r.Put("/keys/{id}/allowed-providers", h.HandleUpdateApiKeyAllowedProviders)
 		r.Post("/keys/{id}/rotate", h.HandleRotateApiKey)
 
 		// Models

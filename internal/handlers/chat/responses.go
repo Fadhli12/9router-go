@@ -95,6 +95,10 @@ func (h *ChatHandler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !enforceProviderPermission(w, r, modelInfo) {
+		return
+	}
+
 	ctx := h.newResponsesContext(r, reqBody.Model, modelInfo, &body)
 
 	var workingBody map[string]any

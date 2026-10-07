@@ -290,6 +290,7 @@ func SetCookie(w http.ResponseWriter, r *http.Request, token string, ttl ...time
 		Secure:   secureCookie(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   CookieMaxAge(duration),
+		Expires:  time.Now().Add(duration),
 	})
 }
 

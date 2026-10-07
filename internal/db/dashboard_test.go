@@ -35,7 +35,8 @@ func setupDashboardTestDB(t *testing.T) (*Repo, func()) {
 			machineId TEXT,
 			isActive INTEGER DEFAULT 1,
 			createdAt TEXT NOT NULL,
-			maxConcurrent INTEGER DEFAULT 0
+			maxConcurrent INTEGER DEFAULT 0,
+			allowedProviders TEXT DEFAULT ''
 		);`,
 		`CREATE TABLE providerConnections (
 			id TEXT PRIMARY KEY,
@@ -265,6 +266,33 @@ func TestApiKeysCRUD(t *testing.T) {
 	}
 	if len(keys) != 1 || keys[0].ID != "key-2" {
 		t.Errorf("expected 1 key (key-2), got %d", len(keys))
+	}
+
+	err = repo.CreateApiKeyWithOptions("key-3", "sk-key-3", "Restricted Key", "", 5, "openai,anthropic")
+	if err != nil {
+		t.Fatalf("CreateApiKeyWithOptions failed: %v", err)
+	}
+	k3, err := repo.GetApiKeyByKey("sk-key-3")
+	if err != nil || k3 == nil {
+		t.Fatalf("GetApiKeyByKey failed: %v", err)
+	}
+	if k3.AllowedProviders == nil || *k3.AllowedProviders != "openai,anthropic" {
+		t.Errorf("expected allowedProviders 'openai,anthropic', got %v", k3.AllowedProviders)
+	}
+	if k3.MaxConcurrent == nil || *k3.MaxConcurrent != 5 {
+		t.Errorf("expected maxConcurrent 5, got %v", k3.MaxConcurrent)
+	}
+
+	err = repo.UpdateApiKeyAllowedProviders("key-3", "deepseek")
+	if err != nil {
+		t.Fatalf("UpdateApiKeyAllowedProviders failed: %v", err)
+	}
+	k3Updated, err := repo.GetApiKeyByKey("sk-key-3")
+	if err != nil || k3Updated == nil {
+		t.Fatalf("GetApiKeyByKey after update failed: %v", err)
+	}
+	if k3Updated.AllowedProviders == nil || *k3Updated.AllowedProviders != "deepseek" {
+		t.Errorf("expected updated allowedProviders 'deepseek', got %v", k3Updated.AllowedProviders)
 	}
 }
 

@@ -212,7 +212,7 @@ func (r *Repo) DeleteCombo(id string) error {
 
 // GetApiKeys retrieves all client API keys ordered by createdAt DESC.
 func (r *Repo) GetApiKeys() ([]*models.APIKey, error) {
-	rows, err := r.db.Query(`SELECT id, key, name, machineId, isActive, createdAt, maxConcurrent FROM apiKeys ORDER BY createdAt DESC`)
+	rows, err := r.db.Query(`SELECT id, key, name, machineId, isActive, createdAt, maxConcurrent, allowedProviders FROM apiKeys ORDER BY createdAt DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("get api keys: %w", err)
 	}
@@ -221,7 +221,7 @@ func (r *Repo) GetApiKeys() ([]*models.APIKey, error) {
 	keys := make([]*models.APIKey, 0)
 	for rows.Next() {
 		var k models.APIKey
-		if err := rows.Scan(&k.ID, &k.Key, &k.Name, &k.MachineID, &k.IsActive, &k.CreatedAt, &k.MaxConcurrent); err != nil {
+		if err := rows.Scan(&k.ID, &k.Key, &k.Name, &k.MachineID, &k.IsActive, &k.CreatedAt, &k.MaxConcurrent, &k.AllowedProviders); err != nil {
 			return nil, fmt.Errorf("scan api key: %w", err)
 		}
 		keys = append(keys, &k)
@@ -234,6 +234,11 @@ func (r *Repo) GetApiKeys() ([]*models.APIKey, error) {
 
 // CreateApiKeyWithLimit inserts a new client API key with isActive set to 1 and specified maxConcurrent limit.
 func (r *Repo) CreateApiKeyWithLimit(id, key, name, machineID string, maxConcurrent int) error {
+	return r.CreateApiKeyWithOptions(id, key, name, machineID, maxConcurrent, "")
+}
+
+// CreateApiKeyWithOptions inserts a new client API key with all configurable fields.
+func (r *Repo) CreateApiKeyWithOptions(id, key, name, machineID string, maxConcurrent int, allowedProviders string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	var nameVal, machineVal any
 	if name != "" {
@@ -243,8 +248,8 @@ func (r *Repo) CreateApiKeyWithLimit(id, key, name, machineID string, maxConcurr
 		machineVal = machineID
 	}
 	_, err := r.db.Exec(
-		`INSERT INTO apiKeys (id, key, name, machineId, isActive, createdAt, maxConcurrent) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		id, key, nameVal, machineVal, now, maxConcurrent,
+		`INSERT INTO apiKeys (id, key, name, machineId, isActive, createdAt, maxConcurrent, allowedProviders) VALUES (?, ?, ?, ?, 1, ?, ?, ?)`,
+		id, key, nameVal, machineVal, now, maxConcurrent, allowedProviders,
 	)
 	if err != nil {
 		return fmt.Errorf("create api key %s: %w", id, err)

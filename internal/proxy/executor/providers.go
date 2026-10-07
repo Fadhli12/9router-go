@@ -205,6 +205,24 @@ func ForwardKiro(w http.ResponseWriter, req *Request) error {
 	return handleKiroNonStream(w, req, resp.Body)
 }
 
+// kiroDefaultProfileArn is the shared gateway profile Kiro requests
+// fall back to when the connection data carries none. Translated
+// requests without it fail upstream with "profileArn is required
+// for this request".
+const kiroDefaultProfileArn = "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK"
+
+// kiroProfileArn extracts the profile ARN for a Kiro request,
+// defaulting to the shared gateway profile when the connection data
+// carries none.
+func kiroProfileArn(psd map[string]any) string {
+	if s, ok := psd["profileArn"].(string); ok {
+		if trimmed := strings.TrimSpace(s); trimmed != "" {
+			return trimmed
+		}
+	}
+	return kiroDefaultProfileArn
+}
+
 // kiroUpstreamBody translates an OpenAI chat body into the Kiro envelope,
 // passing through bodies that already use conversationState.
 func kiroUpstreamBody(req *Request) ([]byte, error) {
@@ -237,12 +255,7 @@ func kiroUpstreamBody(req *Request) ([]byte, error) {
 		model = model[:idx]
 	}
 
-	profileArn := ""
-	if req.ConnData != nil {
-		if s, ok := req.ConnData["profileArn"].(string); ok {
-			profileArn = strings.TrimSpace(s)
-		}
-	}
+	profileArn := kiroProfileArn(req.ConnData)
 
 	out, err := translator.OpenAIToKiro(req.Body, translator.KiroTranslateOptions{
 		Model:      model,

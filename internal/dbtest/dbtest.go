@@ -18,7 +18,8 @@ func SchemaStatements() []string {
 			machineId TEXT,
 			isActive INTEGER DEFAULT 1,
 			createdAt TEXT NOT NULL,
-			maxConcurrent INTEGER DEFAULT 0
+			maxConcurrent INTEGER DEFAULT 0,
+			allowedProviders TEXT DEFAULT ''
 		)`,
 		`CREATE TABLE providerConnections (
 			id TEXT PRIMARY KEY,

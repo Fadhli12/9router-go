@@ -487,7 +487,7 @@ func (h *DashboardHandler) exportDatabase() (*databaseExport, error) {
 	}
 
 	if out.APIKeys, err = selectRows(db,
-		`SELECT id, key, name, machineId, isActive, createdAt, maxConcurrent FROM apiKeys`); err != nil {
+		`SELECT id, key, name, machineId, isActive, createdAt, maxConcurrent, allowedProviders FROM apiKeys`); err != nil {
 		return nil, err
 	}
 	for _, row := range out.APIKeys {
@@ -628,10 +628,14 @@ func (h *DashboardHandler) importDatabase(payload map[string]any) error {
 		} else if mc, ok := k["maxConcurrent"].(int); ok {
 			maxConc = mc
 		}
+		allowedProviders := ""
+		if ap, ok := k["allowedProviders"].(string); ok {
+			allowedProviders = ap
+		}
 		if _, err := tx.Exec(
-			`INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, createdAt, maxConcurrent) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, createdAt, maxConcurrent, allowedProviders) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
 			k["id"], k["key"], stringDefault(k["name"], nil), stringDefault(k["machineId"], nil),
-			boolToInt(k["isActive"]), stringDefault(k["createdAt"], nowISO()), maxConc,
+			boolToInt(k["isActive"]), stringDefault(k["createdAt"], nowISO()), maxConc, allowedProviders,
 		); err != nil {
 			return err
 		}

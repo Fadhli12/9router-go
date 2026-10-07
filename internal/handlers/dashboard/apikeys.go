@@ -46,10 +46,15 @@ func (h *DashboardHandler) HandleGetApiKeys(w http.ResponseWriter, r *http.Reque
 		if !reveal {
 			key = maskClientKey(key)
 		}
+		allowedProviders := ""
+		if k.AllowedProviders != nil {
+			allowedProviders = *k.AllowedProviders
+		}
 		sanitized = append(sanitized, map[string]any{
 			"id": k.ID, "key": key, "name": k.Name,
 			"machineId": k.MachineID, "isActive": k.IsActive, "createdAt": k.CreatedAt,
 			"maxConcurrent": k.MaxConcurrent, "activeCount": activeCount,
+			"allowedProviders": allowedProviders,
 		})
 	}
 	handlerutil.WriteJSON(w, http.StatusOK, sanitized)
@@ -83,11 +88,12 @@ func (h *DashboardHandler) HandleCreateApiKey(w http.ResponseWriter, r *http.Req
 	defer r.Body.Close()
 
 	var req struct {
-		ID            string `json:"id"`
-		Key           string `json:"key"`
-		Name          string `json:"name"`
-		MachineID     string `json:"machineId"`
-		MaxConcurrent int    `json:"maxConcurrent"`
+		ID               string `json:"id"`
+		Key              string `json:"key"`
+		Name             string `json:"name"`
+		MachineID        string `json:"machineId"`
+		MaxConcurrent    int    `json:"maxConcurrent"`
+		AllowedProviders string `json:"allowedProviders"`
 	}
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &req); err != nil {
@@ -103,7 +109,7 @@ func (h *DashboardHandler) HandleCreateApiKey(w http.ResponseWriter, r *http.Req
 		req.Key = "sk-" + strings.ReplaceAll(uuid.New().String(), "-", "")
 	}
 
-	if err := h.Repo.CreateApiKeyWithLimit(req.ID, req.Key, req.Name, req.MachineID, req.MaxConcurrent); err != nil {
+	if err := h.Repo.CreateApiKeyWithOptions(req.ID, req.Key, req.Name, req.MachineID, req.MaxConcurrent, strings.TrimSpace(req.AllowedProviders)); err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -248,5 +254,90 @@ func (h *DashboardHandler) HandleRotateApiKey(w http.ResponseWriter, r *http.Req
 		"status": "ok",
 		"id":     id,
 		"key":    newKey,
+	})
+}
+
+func (h *DashboardHandler) HandleUpdateApiKeyAllowedProviders(w http.ResponseWriter, r *http.Request) {
+	id := getURLParam(r, "id")
+	if id == "" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing apiKey id")
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	defer r.Body.Close()
+
+	var req struct {
+		AllowedProviders string `json:"allowedProviders"`
+	}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			handlerutil.WriteJSONError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+	}
+
+	if err := h.Repo.UpdateApiKeyAllowedProviders(id, strings.TrimSpace(req.AllowedProviders)); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"status":           "ok",
+		"id":               id,
+		"allowedProviders": strings.TrimSpace(req.AllowedProviders),
+	})
+}
+
+func (h *DashboardHandler) HandleUpdateApiKey(w http.ResponseWriter, r *http.Request) {
+	id := getURLParam(r, "id")
+	if id == "" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing apiKey id")
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	defer r.Body.Close()
+
+	var req struct {
+		Name             *string `json:"name"`
+		MaxConcurrent    *int    `json:"maxConcurrent"`
+		AllowedProviders *string `json:"allowedProviders"`
+	}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			handlerutil.WriteJSONError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+	}
+
+	if req.AllowedProviders != nil {
+		if err := h.Repo.UpdateApiKeyAllowedProviders(id, strings.TrimSpace(*req.AllowedProviders)); err != nil {
+			handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if req.MaxConcurrent != nil {
+		limit := *req.MaxConcurrent
+		if limit < 0 {
+			limit = 0
+		}
+		if err := h.Repo.UpdateApiKeyMaxConcurrent(id, limit); err != nil {
+			handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"id":     id,
 	})
 }

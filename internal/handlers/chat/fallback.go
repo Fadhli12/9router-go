@@ -15,6 +15,7 @@ import (
 
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
+	"9router/proxy/internal/middleware"
 	"9router/proxy/internal/providers"
 	internalproxy "9router/proxy/internal/proxy"
 	"9router/proxy/internal/proxy/executor"
@@ -157,8 +158,10 @@ func (h *ChatHandler) handleAccountFallback(
 			// selector can skip this account before spending a request
 			// (upstream applyErrorState).
 			until := time.Now().UTC().Add(time.Duration(cooldownSec) * time.Second)
-			if lockErr := h.Repo.LockConnectionRateLimit(connObj.ID, until, classification.NewBackoffLevel, ue.StatusCode, errorText); lockErr != nil {
-				log.Warn("fallback", "rate limit lock failed", "conn", connObj.ID, "error", lockErr)
+			if provider != "antigravity" {
+				if lockErr := h.Repo.LockConnectionRateLimit(connObj.ID, until, classification.NewBackoffLevel, ue.StatusCode, errorText); lockErr != nil {
+					log.Warn("fallback", "rate limit lock failed", "conn", connObj.ID, "error", lockErr)
+				}
 			}
 			log.Warn("fallback", "connection locked", append([]any{
 				"conn", connObj.ID, "provider", provider, "model", model,
@@ -233,6 +236,16 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	body, isStream := f.Body, f.IsStream
 	translateResponse, endpoint := f.TranslateResponse, f.Endpoint
 	prefixHash := f.PrefixHash
+	// API key provider restriction: a restricted key must never dial a
+	// provider outside its allowedProviders list. Combos resolve this
+	// per seat — the seat fails and rotation moves on — so the 403
+	// only surfaces when every seat is restricted away.
+	if apiKey := middleware.GetAuthenticatedApiKeyFromContext(ctx); !middleware.IsProviderAllowed(apiKey, provider) {
+		return &upstreamError{
+			StatusCode: http.StatusForbidden,
+			Body:       providerNotAllowedBody(provider),
+		}
+	}
 	ctx = translator.WithUsageCapture(ctx)
 
 	providerCfg, err := h.getProviderConfig(provider, connData)

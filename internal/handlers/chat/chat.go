@@ -53,6 +53,10 @@ func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if !enforceProviderPermission(w, r, modelInfo) {
+		return
+	}
+
 	ctx := handlerutil.WithSessionID(r.Context(), handlerutil.ExtractSessionID(r))
 	ctx = handlerutil.WithClientAnthropicBeta(ctx, r.Header.Get("anthropic-beta"))
 	requiredCaps := DetectRequiredCapabilities(body)
@@ -175,6 +179,10 @@ func (h *ChatHandler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Error("chat", "resolve model failed", "error", err, "model", reqBody.Model)
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if !enforceProviderPermission(w, r, modelInfo) {
 		return
 	}
 
@@ -439,7 +447,8 @@ func queryFlagEnabled(v string) bool {
 func (h *ChatHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	mode := modelsListModeFromQuery(r)
 	result := h.modelsListResultCached(r.Context(), mode)
-	modelsJSON, err := json.Marshal(result.Models)
+	filteredModels := filterModelsForAPIKey(r, result.Models)
+	modelsJSON, err := json.Marshal(filteredModels)
 	if err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, "failed to encode models")
 		return

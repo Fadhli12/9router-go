@@ -69,6 +69,8 @@ export interface APIKey {
   createdAt: string
   maxConcurrent?: number | null
   activeCount?: number
+  /** Comma-separated provider ids this key may use; empty = all providers. */
+  allowedProviders?: string
 }
 
 export interface ProviderStrategyConfig {
@@ -762,7 +764,7 @@ return conns.map(normalizeConnection)
   // API Keys
   getApiKeys: () => request<APIKey[]>('/api/keys'),
   getApiKeysConcurrency: () => request<{ active: Record<string, number> }>('/api/keys/concurrency'),
-  createApiKey: (payload: { name?: string; machineId?: string; key?: string; maxConcurrent?: number }) =>
+  createApiKey: (payload: { name?: string; machineId?: string; key?: string; maxConcurrent?: number; allowedProviders?: string }) =>
     request<{ success: boolean; id: string; key: string }>('/api/keys', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -776,6 +778,14 @@ return conns.map(normalizeConnection)
       method: 'PUT',
       body: JSON.stringify({ maxConcurrent })
     }),
+  updateApiKeyAllowedProviders: (id: string, allowedProviders: string) =>
+    request<{ status: string; id: string; allowedProviders: string }>(
+      `/api/keys/${encodeURIComponent(id)}/allowed-providers`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ allowedProviders }),
+      }
+    ),
   deleteApiKey: (id: string) =>
     request<{ success: boolean }>(`/api/keys/${encodeURIComponent(id)}`, {
       method: 'DELETE',
