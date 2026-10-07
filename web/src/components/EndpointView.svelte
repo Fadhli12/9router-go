@@ -271,6 +271,45 @@
     return key.slice(0, 6) + '••••••' + key.slice(-4)
   }
 
+  function splitProviders(val: string | undefined | null): string[] {
+    return (val ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+
+  function toggleProviderIn(val: string, id: string): string {
+    const set = new Set(splitProviders(val))
+    if (set.has(id)) {
+      set.delete(id)
+    } else {
+      set.add(id)
+    }
+    return [...set].join(',')
+  }
+
+  function openEditProviders(key: APIKey) {
+    editingProvidersKey = key
+    editProvidersVal = key.allowedProviders ?? ''
+    isEditProvidersOpen = true
+  }
+
+  async function handleSaveProviders(e: SubmitEvent) {
+    e.preventDefault()
+    if (!editingProvidersKey) return
+    try {
+      isSavingProviders = true
+      await api.updateApiKeyAllowedProviders(editingProvidersKey.id, editProvidersVal.trim())
+      isEditProvidersOpen = false
+      editingProvidersKey = null
+      onRefresh?.()
+    } catch (err) {
+      alert(`Failed to update allowed providers: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      isSavingProviders = false
+    }
+  }
+
   // Toggle Require API Key
   async function toggleRequireApiKey(value: boolean) {
     requireApiKey = value
@@ -540,6 +579,24 @@
     { icon: 'lock', title: 'Encrypted', desc: 'End-to-end TLS via Cloudflare' },
   ]
 </script>
+
+{#snippet providerPicker(value: string, onToggle: (id: string) => void)}
+  <div class="max-h-36 overflow-y-auto rounded-lg border border-border bg-bg p-2 flex flex-wrap gap-1.5">
+    {#each PROVIDER_CATALOG as p (p.id)}
+      {@const active = splitProviders(value).includes(p.id)}
+      <button
+        type="button"
+        onclick={() => onToggle(p.id)}
+        class="px-2 py-0.5 rounded-full text-[10px] font-code border cursor-pointer transition {active
+          ? 'bg-brand-500/15 text-brand-400 border-brand-500/40'
+          : 'bg-surface-2 text-text-subtle border-border hover:text-text-main'}"
+        title={p.name}
+      >
+        {p.id}
+      </button>
+    {/each}
+  </div>
+{/snippet}
 
 <div class="flex flex-col gap-6">
   <!-- TOP SECTION: API Endpoint Card -->

@@ -790,9 +790,11 @@ return conns.map(normalizeConnection)
     request<{ success: boolean }>(`/api/keys/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     }),
-  toggleApiKey: (id: string) =>
+  toggleApiKey: (id: string, isActive?: boolean) =>
     request<{ success: boolean; isActive: boolean }>(`/api/keys/${encodeURIComponent(id)}/toggle`, {
       method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: isActive === undefined ? undefined : JSON.stringify({ isActive }),
     }),
 
   // Models — upstream parity: GET /api/models/custom -> { models: [...] },
