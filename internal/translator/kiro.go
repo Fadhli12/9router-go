@@ -65,7 +65,23 @@ func OpenAIToKiro(body []byte, opts KiroTranslateOptions) ([]byte, error) {
 		return nil, err
 	}
 
-	history, current, err := kiroConvertMessages(sanitized, opts.Model)
+	// Tool specs and the source-name → sanitized-name map are computed once so
+	// kiroConvertMessages can canonicalize tool-call names to match the specs
+	// AWS received, and drop tool calls that have no matching spec (otherwise
+	// CodeWhisperer rejects the turn with "Invalid tool use format.").
+	specs, nameMap := kiroNormalizeToolSpecs(in.Tools)
+	specNames := make(map[string]bool, len(specs))
+	for _, s := range specs {
+		if spec, ok := s.(map[string]any); ok {
+			if ts, ok := spec["toolSpecification"].(map[string]any); ok {
+				if n, ok := ts["name"].(string); ok && n != "" {
+					specNames[n] = true
+				}
+			}
+		}
+	}
+
+	history, current, err := kiroConvertMessages(sanitized, opts.Model, nameMap, specNames)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +112,7 @@ func OpenAIToKiro(body []byte, opts KiroTranslateOptions) ([]byte, error) {
 	// Kiro has no top-level `tools` array: the catalogue travels on the last
 	// user turn. Without it the model invents tools in plain text instead of
 	// emitting toolUseEvent, and clients never get tool_calls.
-	if specs, _ := kiroNormalizeToolSpecs(in.Tools); len(specs) > 0 {
+	if len(specs) > 0 {
 		userCtx, _ := userInput["userInputMessageContext"].(map[string]any)
 		if userCtx == nil {
 			userCtx = map[string]any{}
@@ -261,7 +277,7 @@ func kiroMessageIsEmpty(msg map[string]any) bool {
 // tool-role message has no id at all. validToolUseIDs tracks the IDs the last
 // assistant turn actually emitted; it is consumed (reset) once a user/tool
 // turn uses it, so a result can only pair with the toolUses that produced it.
-func kiroConvertMessages(messages []map[string]any, model string) ([]map[string]any, map[string]any, error) {
+func kiroConvertMessages(messages []map[string]any, model string, nameMap map[string]string, specNames map[string]bool) ([]map[string]any, map[string]any, error) {
 	var history []map[string]any
 	currentRole := ""
 	var pendingUser, pendingAssistant []string
@@ -340,7 +356,7 @@ func kiroConvertMessages(messages []map[string]any, model string) ([]map[string]
 			}
 		case "assistant":
 			text := kiroAssistantText(msg)
-			toolUses := kiroAssistantToolUses(msg)
+			toolUses := kiroAssistantToolUses(msg, nameMap, specNames)
 			if text != "" {
 				pendingAssistant = append(pendingAssistant, text)
 			}
@@ -498,10 +514,19 @@ func kiroAssistantText(msg map[string]any) string {
 
 // kiroAssistantToolUses normalizes OpenAI tool_calls (and Claude tool_use
 // blocks) into Kiro toolUses.
-func kiroAssistantToolUses(msg map[string]any) []any {
+func kiroAssistantToolUses(msg map[string]any, nameMap map[string]string, specNames map[string]bool) []any {
 	var out []any
 	add := func(id, name string, input any) {
 		if name == "" {
+			return
+		}
+		// Canonicalize the tool name to the sanitized spec name AWS saw. A tool
+		// call whose (mapped) name has no matching spec would otherwise be
+		// rejected upstream with "Invalid tool use format.".
+		if mapped, ok := nameMap[name]; ok {
+			name = mapped
+		}
+		if len(specNames) > 0 && !specNames[name] {
 			return
 		}
 		if id == "" {

@@ -614,3 +614,51 @@ func TestOpenAIToKiro_ThinkingOnlyTurnBeforeToolCallStillEmitsToolUses(t *testin
 		t.Errorf("matched tool result must still reach toolResults, got %v", ctx)
 	}
 }
+
+// TestOpenAIToKiro_CanonicalizesToolCallName covers the Sisyphus shape where a
+// tool name contains characters Kiro's tool-name sanitizer rewrites (dots →
+// underscores). The tool-call name must be canonicalized to the same sanitized
+// name the spec carries, or CodeWhisperer rejects the turn with "Invalid tool
+// use format.".
+func TestOpenAIToKiro_CanonicalizesToolCallName(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"user","content":"do it"},
+		{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"mcp.server.tool","arguments":"{}"}}]},
+		{"role":"tool","tool_call_id":"call_1","content":"done"}
+	],"tools":[
+		{"type":"function","function":{"name":"mcp.server.tool","description":"a tool","parameters":{"type":"object","properties":{}}}}
+	]}`)
+	out, err := OpenAIToKiro(body, KiroTranslateOptions{Model: "m"})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, `"name":"mcp_server_tool"`) {
+		t.Errorf("tool call name must be canonicalized to mcp_server_tool:\n%s", s)
+	}
+	if strings.Contains(s, `"name":"mcp.server.tool"`) {
+		t.Errorf("raw un-canonicalized tool call name leaked:\n%s", s)
+	}
+}
+
+// TestOpenAIToKiro_DropsToolCallWithoutSpec covers a tool call whose name has
+// no matching tool spec. It must not be emitted as a toolUse (CodeWhisperer
+// rejects an undeclared tool with "Invalid tool use format."), so the assistant
+// turn must carry no toolUses at all.
+func TestOpenAIToKiro_DropsToolCallWithoutSpec(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"user","content":"do it"},
+		{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"ghost_tool","arguments":"{}"}}]},
+		{"role":"tool","tool_call_id":"call_1","content":"done"}
+	],"tools":[
+		{"type":"function","function":{"name":"known_tool","description":"a tool","parameters":{"type":"object","properties":{}}}}
+	]}`)
+	out, err := OpenAIToKiro(body, KiroTranslateOptions{Model: "m"})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	s := string(out)
+	if strings.Contains(s, `"name":"ghost_tool"`) {
+		t.Errorf("tool call with no matching spec must be dropped:\n%s", s)
+	}
+}
