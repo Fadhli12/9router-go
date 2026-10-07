@@ -1,7 +1,10 @@
 package executor
 
 import (
+	"context"
 	json "encoding/json/v2"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -222,5 +225,66 @@ func TestSSEToOpenAIJSON_NotSSE(t *testing.T) {
 	// A plain JSON error body must pass through untouched.
 	if _, ok := sseToOpenAIJSON([]byte(`{"error":{"message":"boom","code":400}}`)); ok {
 		t.Error("plain JSON should not be treated as SSE")
+	}
+}
+
+func TestExecCodebuddySSEStream_ReasoningBatched(t *testing.T) {
+	// Simulate CodeBuddy upstream emitting one reasoning token per SSE event.
+	upstream := "data: {\"id\":\"chatcmpl-1\",\"created\":123,\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"The\"}}]}\n\n" +
+		"data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\" user\"}}]}\n\n" +
+		"data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\" wants\"}}]}\n\n" +
+		"data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\" to\"}}]}\n\n" +
+		"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"}}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	rec := httptest.NewRecorder()
+	req := &Request{
+		Ctx: context.Background(),
+	}
+	err := execCodebuddySSEStream(rec, strings.NewReader(upstream), req)
+	if err != nil {
+		t.Fatalf("execCodebuddySSEStream: %v", err)
+	}
+
+	body := rec.Body.String()
+	// Count how many SSE data events carry reasoning_content.
+	reasoningEvents := strings.Count(body, `"reasoning_content"`)
+	if reasoningEvents != 1 {
+		t.Errorf("expected 1 batched reasoning event, got %d\nbody: %s", reasoningEvents, body)
+	}
+	// The batched reasoning must contain the full text.
+	if !strings.Contains(body, `"reasoning_content":"The user wants to"`) {
+		t.Errorf("batched reasoning content mismatch\nbody: %s", body)
+	}
+	// The non-reasoning delta must still be forwarded.
+	if !strings.Contains(body, `"content":"Hello"`) {
+		t.Errorf("non-reasoning delta missing\nbody: %s", body)
+	}
+	if !strings.Contains(body, "data: [DONE]") {
+		t.Errorf("terminal DONE missing\nbody: %s", body)
+	}
+}
+
+func TestExecCodebuddySSEStream_NoReasoningPassthrough(t *testing.T) {
+	// When no reasoning_content is present, events pass through unchanged.
+	upstream := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"}}]}\n\n" +
+		"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"}}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	rec := httptest.NewRecorder()
+	req := &Request{
+		Ctx: context.Background(),
+	}
+	err := execCodebuddySSEStream(rec, strings.NewReader(upstream), req)
+	if err != nil {
+		t.Fatalf("execCodebuddySSEStream: %v", err)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"content":"Hello"`) {
+		t.Errorf("first content missing\nbody: %s", body)
+	}
+	if !strings.Contains(body, `"content":" world"`) {
+		t.Errorf("second content missing\nbody: %s", body)
 	}
 }

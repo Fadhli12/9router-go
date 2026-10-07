@@ -1,7 +1,9 @@
 package executor
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	json "encoding/json/v2"
 	"fmt"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"9router/proxy/internal/constants"
+	"9router/proxy/internal/log"
 	"9router/proxy/internal/proxy"
 )
 
@@ -42,7 +45,7 @@ func ForwardCodebuddyCN(w http.ResponseWriter, req *Request) error {
 	if req.IsStream {
 		stallReader := proxy.NewStallReaderWithContext(req.Ctx, resp.Body, 0, "codebuddy-cn")
 		defer stallReader.Close() // stops the shutdown watcher + stall timer
-		return execSSEStream(w, stallReader, req)
+		return execCodebuddySSEStream(w, stallReader, req)
 	}
 	// Client asked for non-stream, but we sent stream=true upstream, so the
 	// upstream body is OpenAI-chat SSE. Re-aggregate the chunks into a single
@@ -114,6 +117,153 @@ func transformCodebuddyBody(body []byte) ([]byte, error) {
 	}
 
 	return json.Marshal(reqMap)
+}
+
+// execCodebuddySSEStream streams SSE from upstream to client while buffering
+// reasoning_content tokens into larger chunks. CodeBuddy emits one SSE event
+// per reasoning token, which floods the client with hundreds of tiny events
+// and hangs the UI. We accumulate consecutive reasoning_content deltas and
+// flush them as a single event when either (a) a non-reasoning delta arrives,
+// (b) the buffer reaches a size threshold, or (c) a time threshold elapses.
+func execCodebuddySSEStream(w http.ResponseWriter, upstream io.Reader, req *Request) error {
+	ctx := req.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	hw := proxy.NewHeartbeatWriter(ctx, w, 0)
+	defer hw.Close()
+	flusher := proxy.WriteSSEHeaders(hw)
+
+	var (
+		reasoningBuf strings.Builder
+		reasoningID  string
+		reasoningCreated float64
+		lastFlush    = time.Now()
+		bufSize      = 0
+	)
+
+	flushReasoning := func() {
+		if reasoningBuf.Len() == 0 {
+			return
+		}
+		chunk := map[string]any{
+			"id":      reasoningID,
+			"object":  "chat.completion.chunk",
+			"created": reasoningCreated,
+			"choices": []map[string]any{{
+				"index": 0,
+				"delta": map[string]any{"reasoning_content": reasoningBuf.String()},
+			}},
+		}
+		b, err := json.Marshal(chunk)
+		if err != nil {
+			log.Error("executor", "codebuddy reasoning marshal", "error", err)
+			return
+		}
+		line := fmt.Appendf(nil, "data: %s\n\n", string(b))
+		if _, werr := hw.Write(line); werr != nil {
+			return
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		reasoningBuf.Reset()
+		bufSize = 0
+		lastFlush = time.Now()
+	}
+
+	scanner := bufio.NewScanner(upstream)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			// Forward non-data lines as-is (comments, event types, etc.)
+			if _, err := hw.Write(fmt.Appendf(nil, "%s\n", line)); err != nil {
+				return err
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+			continue
+		}
+
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" {
+			flushReasoning()
+			if _, err := hw.Write(fmt.Appendf(nil, "data: %s\n\n", payload)); err != nil {
+				return err
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+			continue
+		}
+
+		var chunk map[string]any
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			// Not JSON — forward as-is.
+			flushReasoning()
+			if _, err := hw.Write(fmt.Appendf(nil, "data: %s\n\n", payload)); err != nil {
+				return err
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+			continue
+		}
+
+		choices, _ := chunk["choices"].([]any)
+		if len(choices) == 0 {
+			flushReasoning()
+			if _, err := hw.Write(fmt.Appendf(nil, "data: %s\n\n", payload)); err != nil {
+				return err
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+			continue
+		}
+
+		choice, _ := choices[0].(map[string]any)
+		delta, _ := choice["delta"].(map[string]any)
+		reasoningDelta, _ := delta["reasoning_content"].(string)
+
+		if reasoningDelta != "" {
+			// Accumulate reasoning tokens.
+			if reasoningBuf.Len() == 0 {
+				reasoningID, _ = chunk["id"].(string)
+				reasoningCreated, _ = chunk["created"].(float64)
+			}
+			reasoningBuf.WriteString(reasoningDelta)
+			bufSize += len(reasoningDelta)
+
+			// Flush when buffer is large enough or enough time has passed.
+			if bufSize >= 64 || time.Since(lastFlush) >= 50*time.Millisecond {
+				flushReasoning()
+			}
+			continue
+		}
+
+		// Non-reasoning delta — flush any pending reasoning first, then forward.
+		flushReasoning()
+		if _, err := hw.Write(fmt.Appendf(nil, "data: %s\n\n", payload)); err != nil {
+			return err
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	flushReasoning()
+
+	if err := scanner.Err(); err != nil {
+		code, message := proxy.ClassifyStreamAbort(err)
+		_, _ = hw.Write(proxy.BuildStreamErrorBytes(code, message, proxy.SSEFormatOpenAI))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return err
+	}
+	return nil
 }
 
 // sseToOpenAIJSON re-aggregates OpenAI chat-completions SSE chunks into a
