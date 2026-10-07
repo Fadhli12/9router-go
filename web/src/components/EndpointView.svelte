@@ -55,6 +55,7 @@
     if (typeof window !== 'undefined') {
       localOrigin = window.location.origin
     }
+    loadStatus()
   })
   // Tunnel state
   let tunnelEnabled = $state(false)
