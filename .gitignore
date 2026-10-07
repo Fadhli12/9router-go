@@ -18,6 +18,7 @@ web/.dist-stamp
 # Data directory
 .9router/
 data/
+*.sqlite
 
 # Local overrides
 docker-compose.local.yml
