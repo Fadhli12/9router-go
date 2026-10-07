@@ -1,6 +1,29 @@
 # Changelog
 
 ## [Unreleased]
+### 🐛 DeepSeek: body request di-serialize acak — prompt cache miss di tiap request (semua lane)
+
+Semua lane DeepSeek melewati unmarshal → mutasi → marshal pada map generik
+saat me-rewrite request, dan `encoding/json/v2` mengacak urutan member map
+di setiap marshal. Request yang logikanya identik menghasilkan byte body
+berbeda tiap kali, sehingga cache prompt DeepSeek (berbasis prefix byte)
+miss di hampir semua request meski sesi percakapan berjalan sama.
+
+Titik yang terukur (distinct body dari 200 request identik): lane zen
+`opencode_zen.go` ~195→1, lane `ForwardOpencode` (free tier) ~175→1,
+`ForwardOpencodeGo` ~81→1, dan `DedupeToolsDeepSeek`
+(`translator/tool_dedupe.go`, intermittent — hanya jalan saat ada tool
+duplikat) ~76→1.
+
+Perbaikan: setiap marshal pada rantai rewrite DeepSeek memakai
+`json.Deterministic(true)` — helper `marshalStable` di package executor,
+opsi inline yang sama di `translator` (tidak bisa import executor) untuk
+`ConcealFingerprintTools` dan `DedupeToolsDeepSeek`. Urutan member map
+jadi sorted dan stabil, prefix antar-turn konsisten, cache upstream bisa
+hit. Diverifikasi lewat unit test per-lane (200 request identik → tepat 1
+body), tanpa token API.
+
+### 🐛 `internal/fetchgate` flaky di `go test -p 16` — gap diukur salah
 
 ### 💀 A retired model fails the request instead of the combo — HTTP 410 now fails over and is badged
 
