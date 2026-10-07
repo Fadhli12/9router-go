@@ -66,6 +66,19 @@ type APIKey struct {
 	// allowed. When non-empty, requests targeting a provider not in the list
 	// are rejected with 403 Forbidden.
 	AllowedProviders *string `json:"allowedProviders,omitempty"`
+	// F-1 Rate Limiting
+	RateLimitRPM         *int `json:"rateLimitRpm,omitempty"`
+	RateLimitTPM         *int `json:"rateLimitTpm,omitempty"`
+	RateLimitConcurrency *int `json:"rateLimitConcurrency,omitempty"`
+	// F-6 Argon2id hashing
+	KeyHash    *string `json:"keyHash,omitempty"`
+	LookupHash *string `json:"lookupHash,omitempty"`
+	KeyDisplay *string `json:"keyDisplay,omitempty"`
+	// F-14 Time-limit + resale metadata
+	ExpiresAt  *string `json:"expiresAt,omitempty"`
+	LastUsedAt *string `json:"lastUsedAt,omitempty"`
+	UsedCount  *int    `json:"usedCount,omitempty"`
+	Metadata   *string `json:"metadata,omitempty"`
 }
 
 // Combo represents a multi-model routing combinated alias.

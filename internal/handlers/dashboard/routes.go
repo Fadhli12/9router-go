@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"9router/proxy/internal/db"
+	"9router/proxy/internal/observ"
 )
 
 // Default probe URLs for proxy pool health checks.
@@ -88,6 +89,18 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Put("/keys/{id}/allowed-providers", h.HandleUpdateApiKeyAllowedProviders)
 		r.Post("/keys/{id}/rotate", h.HandleRotateApiKey)
 
+		// F-5 Credential vault: status and master-key rotation.
+		r.Get("/vault/status", h.HandleGetVaultStatus)
+		r.Post("/vault/rotate", h.HandleRotateVault)
+		r.Get("/metrics", observ.Handler().ServeHTTP)
+
+		// Guardrails: policy CRUD and the audit log.
+		r.Get("/guardrails/policies", h.HandleGetGuardrailPolicies)
+		r.Post("/guardrails/policies", h.HandleCreateGuardrailPolicy)
+		r.Put("/guardrails/policies/{id}", h.HandleUpdateGuardrailPolicy)
+		r.Delete("/guardrails/policies/{id}", h.HandleDeleteGuardrailPolicy)
+		r.Get("/guardrails/logs", h.HandleListGuardrailLogs)
+
 		// Models
 		r.Get("/models/custom", h.HandleGetCustomModels)
 		r.Get("/models/caps", h.HandleGetModelCaps)
@@ -102,7 +115,6 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Get("/settings/database", h.HandleExportDatabase)
 		r.Post("/settings/database", h.HandleImportDatabase)
 		r.Post("/settings/proxy-test", h.HandleProxyTest)
-		r.Post("/sync/omniroute", h.HandleSyncFromOmniRoute)
 
 		// Tunnel & Tailscale
 		r.Get("/tunnel/status", h.HandleTunnelStatus)

@@ -41,12 +41,19 @@ func (r *Repo) UpdateProviderConnection(id string, name string, priority *int, i
 // a full-row update writes back the name/isActive/priority they read before the
 // write, which reverts a reorder or a toggle the user just performed.
 func (r *Repo) UpdateConnectionData(id string, data string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := r.db.Exec(
-		`UPDATE providerConnections SET data = ?, updatedAt = ? WHERE id = ?`,
-		data, now, id,
-	)
+	// Seal before the data write so a credential is never briefly readable in
+	// `data` after this call returns. A payload with no whitelisted credential
+	// (a background writer touching only expiresAt) is stored verbatim and the
+	// existing sealed slots are left alone.
+	sealed, err := r.sealOnWrite(id, data)
 	if err != nil {
+		return err
+	}
+	now := nowUTC()
+	if _, err = r.db.Exec(
+		`UPDATE providerConnections SET data = ?, updatedAt = ? WHERE id = ?`,
+		sealed, now, id,
+	); err != nil {
 		return fmt.Errorf("update connection data %s: %w", id, err)
 	}
 	return nil
@@ -212,7 +219,12 @@ func (r *Repo) DeleteCombo(id string) error {
 
 // GetApiKeys retrieves all client API keys ordered by createdAt DESC.
 func (r *Repo) GetApiKeys() ([]*models.APIKey, error) {
-	rows, err := r.db.Query(`SELECT id, key, name, machineId, isActive, createdAt, maxConcurrent, allowedProviders FROM apiKeys ORDER BY createdAt DESC`)
+	rows, err := r.db.Query(`SELECT id, key, name, machineId, isActive, createdAt,
+		rateLimitRPM, rateLimitTPM, rateLimitConcurrency,
+		keyHash, lookupHash, keyDisplay,
+		expiresAt, lastUsedAt, usedCount, metadata,
+		maxConcurrent, allowedProviders
+		FROM apiKeys ORDER BY createdAt DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("get api keys: %w", err)
 	}
@@ -221,8 +233,66 @@ func (r *Repo) GetApiKeys() ([]*models.APIKey, error) {
 	keys := make([]*models.APIKey, 0)
 	for rows.Next() {
 		var k models.APIKey
-		if err := rows.Scan(&k.ID, &k.Key, &k.Name, &k.MachineID, &k.IsActive, &k.CreatedAt, &k.MaxConcurrent, &k.AllowedProviders); err != nil {
+		var nameVal, machineVal sql.NullString
+		var rateRPM, rateTPM, rateConc sql.NullInt64
+		var keyHash, lookupHash, keyDisplay sql.NullString
+		var expiresAt, lastUsedAt, metadata sql.NullString
+		var usedCount sql.NullInt64
+		var maxConcurrent sql.NullInt64
+		var allowedProviders sql.NullString
+		if err := rows.Scan(&k.ID, &k.Key, &nameVal, &machineVal, &k.IsActive, &k.CreatedAt,
+			&rateRPM, &rateTPM, &rateConc,
+			&keyHash, &lookupHash, &keyDisplay,
+			&expiresAt, &lastUsedAt, &usedCount, &metadata,
+			&maxConcurrent, &allowedProviders); err != nil {
 			return nil, fmt.Errorf("scan api key: %w", err)
+		}
+		if nameVal.Valid {
+			k.Name = &nameVal.String
+		}
+		if machineVal.Valid {
+			k.MachineID = &machineVal.String
+		}
+		if rateRPM.Valid {
+			v := int(rateRPM.Int64)
+			k.RateLimitRPM = &v
+		}
+		if rateTPM.Valid {
+			v := int(rateTPM.Int64)
+			k.RateLimitTPM = &v
+		}
+		if rateConc.Valid {
+			v := int(rateConc.Int64)
+			k.RateLimitConcurrency = &v
+		}
+		if keyHash.Valid {
+			k.KeyHash = &keyHash.String
+		}
+		if lookupHash.Valid {
+			k.LookupHash = &lookupHash.String
+		}
+		if keyDisplay.Valid {
+			k.KeyDisplay = &keyDisplay.String
+		}
+		if expiresAt.Valid {
+			k.ExpiresAt = &expiresAt.String
+		}
+		if lastUsedAt.Valid {
+			k.LastUsedAt = &lastUsedAt.String
+		}
+		if usedCount.Valid {
+			v := int(usedCount.Int64)
+			k.UsedCount = &v
+		}
+		if metadata.Valid {
+			k.Metadata = &metadata.String
+		}
+		if maxConcurrent.Valid {
+			v := int(maxConcurrent.Int64)
+			k.MaxConcurrent = &v
+		}
+		if allowedProviders.Valid {
+			k.AllowedProviders = &allowedProviders.String
 		}
 		keys = append(keys, &k)
 	}
@@ -308,6 +378,55 @@ func (r *Repo) SetApiKeyStatus(id string, isActive bool) error {
 	// A warm cache holds the pre-toggle snapshot and would keep accepting a
 	// revoked key (or rejecting a reactivated one) for up to the TTL.
 	apikeycache.Invalidate()
+	return nil
+}
+
+// UpdateApiKeyUsage increments usedCount and sets lastUsedAt.
+func (r *Repo) UpdateApiKeyUsage(keyID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.Exec(
+		`UPDATE apiKeys SET lastUsedAt = ?, usedCount = usedCount + 1 WHERE id = ?`,
+		now, keyID,
+	)
+	if err != nil {
+		return fmt.Errorf("update api key usage %s: %w", keyID, err)
+	}
+	return nil
+}
+
+// SetApiKeyRateLimit updates rate limit columns for an API key.
+func (r *Repo) SetApiKeyRateLimit(keyID string, rpm, tpm, concurrency int) error {
+	_, err := r.db.Exec(
+		`UPDATE apiKeys SET rateLimitRPM = ?, rateLimitTPM = ?, rateLimitConcurrency = ? WHERE id = ?`,
+		rpm, tpm, concurrency, keyID,
+	)
+	if err != nil {
+		return fmt.Errorf("set api key rate limit %s: %w", keyID, err)
+	}
+	return nil
+}
+
+// SetApiKeyExpiry sets expiresAt for an API key.
+func (r *Repo) SetApiKeyExpiry(keyID, expiresAt string) error {
+	_, err := r.db.Exec(
+		`UPDATE apiKeys SET expiresAt = ? WHERE id = ?`,
+		expiresAt, keyID,
+	)
+	if err != nil {
+		return fmt.Errorf("set api key expiry %s: %w", keyID, err)
+	}
+	return nil
+}
+
+// SetApiKeyMetadata sets metadata JSON for an API key.
+func (r *Repo) SetApiKeyMetadata(keyID, metadata string) error {
+	_, err := r.db.Exec(
+		`UPDATE apiKeys SET metadata = ? WHERE id = ?`,
+		metadata, keyID,
+	)
+	if err != nil {
+		return fmt.Errorf("set api key metadata %s: %w", keyID, err)
+	}
 	return nil
 }
 

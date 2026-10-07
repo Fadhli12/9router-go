@@ -8,28 +8,23 @@ import (
 
 	"github.com/google/uuid"
 
-	"9router/proxy/internal/auth"
 	"9router/proxy/internal/concurrency"
 	"9router/proxy/internal/handlerutil"
+	"9router/proxy/internal/keikey"
+	"9router/proxy/internal/log"
+	"9router/proxy/internal/models"
 )
 
 // HandleGetApiKeys handles GET /api/keys.
-// Upstream parity: the Next dashboard returns full key values here and the
-// media example cards use them directly as Bearer credentials for Run.
-// Full secrets are returned only to fully authenticated dashboard callers
-// (login session cookie, local CLI token, or requireLogin=false which
-// upstream treats as authenticated). Callers presenting only a low-privilege
-// client API key get masked display values: unlike upstream (which rejects
-// them at the guard), this router lets API keys through dashboard auth for
-// CLI compat, so listing full secrets there would let one leaked key dump
-// them all. Creation still returns the full value once.
+//
+// F-6: client keys are stored as argon2id verifiers, so this read path can
+// only ever return the masked display value — not even a fully authenticated
+// dashboard caller (session cookie, CLI token, or requireLogin=false) gets
+// the secret back. The full value is returned once, by HandleCreateApiKey.
 //
 // Each key also carries `activeCount`, its current in-flight request count
 // from the process-local concurrency limiter (0 when unlimited or idle).
 func (h *DashboardHandler) HandleGetApiKeys(w http.ResponseWriter, r *http.Request) {
-	reveal := auth.SessionValid(r) ||
-		auth.ValidCLIToken(r.Header.Get(auth.CLITokenHeader)) ||
-		!auth.RequireLogin(h.Repo)
 	keys, err := h.Repo.GetApiKeys()
 	if err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
@@ -41,20 +36,33 @@ func (h *DashboardHandler) HandleGetApiKeys(w http.ResponseWriter, r *http.Reque
 		if k == nil {
 			continue
 		}
-		activeCount := active[concurrency.HashKey(k.Key)]
-		key := k.Key
-		if !reveal {
-			key = maskClientKey(key)
+		activeCount := 0
+		if k.LookupHash != nil && *k.LookupHash != "" {
+			activeCount = active[*k.LookupHash]
+		} else {
+			activeCount = active[concurrency.HashKey(k.Key)]
 		}
 		allowedProviders := ""
 		if k.AllowedProviders != nil {
 			allowedProviders = *k.AllowedProviders
 		}
 		sanitized = append(sanitized, map[string]any{
-			"id": k.ID, "key": key, "name": k.Name,
+			"id": k.ID, "key": apiKeyDisplay(k), "keyDisplay": apiKeyDisplay(k), "name": k.Name,
 			"machineId": k.MachineID, "isActive": k.IsActive, "createdAt": k.CreatedAt,
-			"maxConcurrent": k.MaxConcurrent, "activeCount": activeCount,
+			"maxConcurrent":    k.MaxConcurrent,
+			"activeCount":      activeCount,
 			"allowedProviders": allowedProviders,
+			// The governance columns belong in the list, not only behind a
+			// per-key fetch: the dashboard has to tell a constrained key from
+			// an unconstrained one at a glance, and omitting them here made
+			// every row read as "unrestricted" no matter what was set.
+			"rateLimitRpm":         intOrZero(k.RateLimitRPM),
+			"rateLimitTpm":         intOrZero(k.RateLimitTPM),
+			"rateLimitConcurrency": intOrZero(k.RateLimitConcurrency),
+			"expiresAt":            stringOrEmpty(k.ExpiresAt),
+			"lastUsedAt":           stringOrEmpty(k.LastUsedAt),
+			"usedCount":            intOrZero(k.UsedCount),
+			"metadata":             stringOrEmpty(k.Metadata),
 		})
 	}
 	handlerutil.WriteJSON(w, http.StatusOK, sanitized)
@@ -68,6 +76,15 @@ func (h *DashboardHandler) HandleKeysConcurrency(w http.ResponseWriter, r *http.
 	})
 }
 
+// apiKeyDisplay returns the masked value for a key. Hashed rows keep it in
+// keyDisplay; legacy rows that have not been hashed yet are masked on the fly.
+func apiKeyDisplay(k *models.APIKey) string {
+	if k.KeyDisplay != nil && *k.KeyDisplay != "" {
+		return *k.KeyDisplay
+	}
+	return maskClientKey(k.Key)
+}
+
 // maskClientKey shows the first/last few chars of a client key (dashboard
 // display only); the full value is returned once at creation.
 func maskClientKey(key string) string {
@@ -75,6 +92,23 @@ func maskClientKey(key string) string {
 		return "***"
 	}
 	return key[:6] + "…" + key[len(key)-4:]
+}
+
+// intOrZero unwraps an optional int column, treating NULL and 0 alike: both
+// mean "no limit configured".
+func intOrZero(v *int) int {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+// stringOrEmpty unwraps an optional text column, normalizing NULL to "".
+func stringOrEmpty(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 // HandleCreateApiKey handles POST /api/keys.
@@ -114,10 +148,72 @@ func (h *DashboardHandler) HandleCreateApiKey(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// F-6: derive the argon2id verifier and blank the plaintext column before
+	// responding. The full value is still returned here, exactly once — the
+	// dashboard's media example cards use it as a Bearer credential right
+	// after creation.
+	hash, err := keikey.Hash(req.Key)
+	if err != nil {
+		log.Error("apikeys", "hash api key failed", "error", err)
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, "failed to secure api key")
+		return
+	}
+	if err := h.Repo.HashApiKeyRow(req.ID, hash, keikey.LookupHash(req.Key), keikey.Mask(req.Key)); err != nil {
+		log.Error("apikeys", "store api key hash failed", "error", err)
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
 		"status": "ok",
 		"id":     req.ID,
 		"key":    req.Key,
+	})
+}
+
+// HandleRotateApiKey handles POST /api/keys/{id}/rotate.
+//
+// F-6 removes "reveal", so rotation is the only way an operator can replace a
+// leaked key: the old secret is invalidated at once and the new one is
+// returned exactly once, the same contract as creation. Without it a key that
+// leaks can only be deleted, which is the wrong tool when the caller still
+// needs the row — its policy, its usage history, its allowlist.
+func (h *DashboardHandler) HandleRotateApiKey(w http.ResponseWriter, r *http.Request) {
+	id := getURLParam(r, "id")
+	if id == "" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing apiKey id")
+		return
+	}
+	existing, err := h.Repo.GetApiKeyByID(id)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if existing == nil {
+		handlerutil.WriteJSONError(w, http.StatusNotFound, "api key not found")
+		return
+	}
+
+	plaintext := "sk-" + strings.ReplaceAll(uuid.New().String(), "-", "")
+	hash, err := keikey.Hash(plaintext)
+	if err != nil {
+		log.Error("apikeys", "rotate: hash failed", "error", err)
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, "failed to secure api key")
+		return
+	}
+	if err := h.Repo.HashApiKeyRow(id, hash, keikey.LookupHash(plaintext), keikey.Mask(plaintext)); err != nil {
+		log.Error("apikeys", "rotate: store hash failed", "error", err)
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// The old key is live in the auth cache for its TTL; without this the
+	// leaked secret keeps working after the operator rotated it away.
+	keikey.DefaultAuthCache().InvalidateByID(id)
+
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"id":     id,
+		"key":    plaintext,
 	})
 }
 
@@ -134,6 +230,10 @@ func (h *DashboardHandler) HandleDeleteApiKey(w http.ResponseWriter, r *http.Req
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// The auth cache holds the verified row for its TTL, so without this a key
+	// deleted here keeps authenticating until the entry expires.
+	keikey.DefaultAuthCache().InvalidateByID(id)
 
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": id})
 }
@@ -186,6 +286,11 @@ func (h *DashboardHandler) HandleToggleApiKey(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Same reason as the delete path: the cached row would otherwise keep the
+	// key authenticating after it was deactivated, and deactivating is exactly
+	// what an operator does when they believe a key has leaked.
+	keikey.DefaultAuthCache().InvalidateByID(id)
+
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
 		"status":   "ok",
 		"id":       id,
@@ -235,28 +340,6 @@ func (h *DashboardHandler) HandleUpdateApiKeyLimit(w http.ResponseWriter, r *htt
 	})
 }
 
-// HandleRotateApiKey handles POST /api/keys/{id}/rotate.
-// Generates a new secret key for an existing API key row, keeping its name, id, and limit intact.
-func (h *DashboardHandler) HandleRotateApiKey(w http.ResponseWriter, r *http.Request) {
-	id := getURLParam(r, "id")
-	if id == "" {
-		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing apiKey id")
-		return
-	}
-
-	newKey := "sk-" + strings.ReplaceAll(uuid.New().String(), "-", "")
-	if err := h.Repo.RotateApiKey(id, newKey); err != nil {
-		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
-		"status": "ok",
-		"id":     id,
-		"key":    newKey,
-	})
-}
-
 func (h *DashboardHandler) HandleUpdateApiKeyAllowedProviders(w http.ResponseWriter, r *http.Request) {
 	id := getURLParam(r, "id")
 	if id == "" {
@@ -290,54 +373,5 @@ func (h *DashboardHandler) HandleUpdateApiKeyAllowedProviders(w http.ResponseWri
 		"status":           "ok",
 		"id":               id,
 		"allowedProviders": strings.TrimSpace(req.AllowedProviders),
-	})
-}
-
-func (h *DashboardHandler) HandleUpdateApiKey(w http.ResponseWriter, r *http.Request) {
-	id := getURLParam(r, "id")
-	if id == "" {
-		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing apiKey id")
-		return
-	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		handlerutil.WriteJSONError(w, http.StatusBadRequest, "failed to read body")
-		return
-	}
-	defer r.Body.Close()
-
-	var req struct {
-		Name             *string `json:"name"`
-		MaxConcurrent    *int    `json:"maxConcurrent"`
-		AllowedProviders *string `json:"allowedProviders"`
-	}
-	if len(body) > 0 {
-		if err := json.Unmarshal(body, &req); err != nil {
-			handlerutil.WriteJSONError(w, http.StatusBadRequest, "invalid JSON")
-			return
-		}
-	}
-
-	if req.AllowedProviders != nil {
-		if err := h.Repo.UpdateApiKeyAllowedProviders(id, strings.TrimSpace(*req.AllowedProviders)); err != nil {
-			handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-	}
-	if req.MaxConcurrent != nil {
-		limit := *req.MaxConcurrent
-		if limit < 0 {
-			limit = 0
-		}
-		if err := h.Repo.UpdateApiKeyMaxConcurrent(id, limit); err != nil {
-			handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-	}
-
-	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
-		"status": "ok",
-		"id":     id,
 	})
 }
