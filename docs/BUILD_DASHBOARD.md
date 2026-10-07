@@ -2,6 +2,8 @@
 
 This document describes the current native Go gateway and its embedded Svelte/Vite dashboard. It is a build and operations guide, not a feature-compatibility checklist. The current release metadata is `v1.9.1`; the repository manifest tracks upstream `v0.5.85`, while the changelog separately lists `v0.5.86` parity items. Do not treat those statements as a complete upstream-parity guarantee.
 
+> **Pengembangan berikutnya**: Lihat [`docs/keirouter-port-plan.md`](keirouter-port-plan.md) untuk rencana port fitur KeiRouter → 9router-go (governance, security, resale).
+
 ## Architecture
 
 The Go process owns the HTTP server, SQLite repository, authentication, proxy handlers, and lifecycle. The dashboard is a Svelte 5 + TypeScript + Vite SPA. During a build, Vite writes optimized static files to `web/dist`; `web/embed.go` embeds `dist/*` into the Go executable. At runtime the browser receives the embedded files and calls the Go HTTP API.

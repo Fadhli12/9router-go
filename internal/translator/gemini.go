@@ -206,10 +206,7 @@ func TranslateOpenAIToGemini(openaiBody []byte) ([]byte, error) {
 			if tc.ID == "" || tc.Function.Name == "" {
 				continue
 			}
-			cleanID := tc.ID
-			if ts := strings.LastIndex(cleanID, "__ts__"); ts != -1 {
-				cleanID = cleanID[:ts]
-			}
+			cleanID := geminiCleanToolCallID(tc.ID)
 			tcID2Names[tc.ID] = append(tcID2Names[tc.ID], tc.Function.Name)
 			if cleanID != tc.ID {
 				tcID2Names[cleanID] = append(tcID2Names[cleanID], tc.Function.Name)
@@ -281,18 +278,16 @@ func TranslateOpenAIToGemini(openaiBody []byte) ([]byte, error) {
 					ts = DefaultThinkingSignature
 				}
 				firstFunctionCallSeen = true
-				cleanTCID := tc.ID
-				if idx := strings.LastIndex(cleanTCID, "__ts__"); idx != -1 {
-					cleanTCID = cleanTCID[:idx]
-				}
-				gp := GeminiPart{
-					FunctionCall: &GeminiFunctionCall{
-						Name: tc.Function.Name,
-						Args: args,
-						ID:   cleanTCID,
-					},
-					ThoughtSignature: ts,
-				}
+				// The id pairs this call with its functionResponse. Antigravity
+				// forwards the Gemini body to Claude through Vertex Anthropic,
+				// which rebuilds a tool_use block per functionCall and rejects
+				// the request with "tool_use.id: Field required" when it has
+				// none. Parity with openai-to-gemini.js (id: tc.id).
+				gp := GeminiPart{FunctionCall: &GeminiFunctionCall{
+					Name: tc.Function.Name,
+					Args: args,
+					ID:   geminiCleanToolCallID(tc.ID),
+				}, ThoughtSignature: ts}
 				parts = append(parts, gp)
 			}
 
@@ -302,30 +297,35 @@ func TranslateOpenAIToGemini(openaiBody []byte) ([]byte, error) {
 
 		case "tool":
 			content := extractContentString(msg.Content)
-			cleanID := msg.ToolCallID
-			if ts := strings.LastIndex(cleanID, "__ts__"); ts != -1 {
-				cleanID = cleanID[:ts]
-			}
-		name := nextToolNameForID(tcID2Names, tcID2Name, tcNameCursor, msg.ToolCallID, cleanID)
+			cleanID := geminiCleanToolCallID(msg.ToolCallID)
+			name := nextToolNameForID(tcID2Names, tcID2Name, tcNameCursor, msg.ToolCallID, cleanID)
 
-		// If the name lookup returned "" we have two cases:
-		//   1. cleanID is non-empty but unknown — derive the name from the id by
-		//      stripping the conventional "call_" prefix (parity with upstream #4589).
-		//   2. cleanID is empty — a genuine orphan (e.g. background task notification
-		//      injected as role:"tool" with no tool_call_id). Converting that into a
-		//      functionResponse causes upstream (Antigravity Claude / Vertex AI) to
-		//      synthesize a phantom tool_use and reject the request with HTTP 400
-		//      ("messages.1.content.1.tool_use.id: Field required").
-		//      Treat it as plain user text instead.
-		if name == "" {
-			if cleanID == "" {
-				parts := []GeminiPart{{Text: content}}
-				parts = append(parts, geminiToolMediaParts(msg.Content)...)
-				req.Contents = append(req.Contents, GeminiContent{Role: "user", Parts: parts})
-				continue
+			// If the name lookup returned "" we have two cases:
+			//   1. cleanID is non-empty but unknown — derive the name from the id by
+			//      stripping the conventional "call_" prefix (parity with upstream #4589).
+			//   2. cleanID is empty — a genuine orphan (e.g. background task notification
+			//      injected as role:"tool" with no tool_call_id). Converting that into a
+			//      functionResponse causes upstream (Antigravity Claude / Vertex AI) to
+			//      synthesize a phantom tool_use and reject the request with HTTP 400
+			//      ("messages.1.content.1.tool_use.id: Field required").
+			//      Treat it as plain user text instead.
+			if name == "" {
+				if cleanID == "" {
+					parts := []GeminiPart{{Text: content}}
+					parts = append(parts, geminiToolMediaParts(msg.Content)...)
+					req.Contents = append(req.Contents, GeminiContent{Role: "user", Parts: parts})
+					continue
+				}
+				name = cleanID
+				if strings.HasPrefix(name, "call_") {
+					rest := strings.TrimPrefix(name, "call_")
+					if lastUnderscore := strings.LastIndex(rest, "_"); lastUnderscore > 0 {
+						name = rest[:lastUnderscore]
+					} else {
+						name = rest
+					}
+				}
 			}
-			// Derive from id: strip leading "call_" if present.
-			name = strings.TrimPrefix(cleanID, "call_")
 			if name == "" {
 				name = cleanID
 			}
@@ -450,6 +450,17 @@ func extractThoughtSig(id string) string {
 		return after
 	}
 	return ""
+}
+
+// geminiCleanToolCallID drops the "__ts__<sig>" transport suffix from a tool
+// call id, leaving the id the client actually sees. The suffix is a 9router-go
+// encoding for carrying a thought signature back to Gemini, so it must never
+// reach the wire nor appear on one side of a call/response pair only.
+func geminiCleanToolCallID(id string) string {
+	if ts := strings.LastIndex(id, "__ts__"); ts != -1 {
+		return id[:ts]
+	}
+	return id
 }
 
 // effortToBudget converts reasoning_effort string to thinking budget tokens.
