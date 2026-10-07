@@ -16,6 +16,7 @@
     Power,
     Radio,
     Shield,
+    ShieldCheck,
     Trash2,
     Users,
     X
@@ -24,6 +25,7 @@
   import Toggle from '../lib/ui/Toggle.svelte'
   import { copyToClipboard } from '../lib/clipboard'
   import { api, type APIKey, type Settings, type TunnelStatusResponse } from '../api/client'
+  import { PROVIDER_CATALOG } from '../lib/providers'
 
   interface Props {
     apiKeys?: APIKey[]
@@ -87,6 +89,7 @@
   let isCreateKeyOpen = $state(false)
   let newKeyName = $state('')
   let newKeyMaxConcurrent = $state(0)
+  let newKeyAllowedProviders = $state('')
   let isSubmittingKey = $state(false)
   let newlyCreatedKey = $state<string | null>(null)
 
@@ -95,6 +98,10 @@
   let editingKey = $state<APIKey | null>(null)
   let editLimitVal = $state(0)
   let isSavingLimit = $state(false)
+  let editProvidersVal = $state('')
+  let isSavingProviders = $state(false)
+  let isEditProvidersOpen = $state(false)
+  let editingProvidersKey = $state<APIKey | null>(null)
   let rotatingKeyId = $state<string | null>(null)
 
   // Confirmation modal
@@ -408,15 +415,18 @@
 
     isSubmittingKey = true
     try {
+      const allowed = newKeyAllowedProviders.trim()
       const res = await api.createApiKey({
         name: newKeyName.trim(),
-        maxConcurrent: Number(newKeyMaxConcurrent) || 0
+        maxConcurrent: Number(newKeyMaxConcurrent) || 0,
+        ...(allowed ? { allowedProviders: allowed } : {})
       })
       if (res.key) {
         newlyCreatedKey = res.key
         localStorage.setItem('9router_key', res.key)
         newKeyName = ''
         newKeyMaxConcurrent = 0
+        newKeyAllowedProviders = ''
         isCreateKeyOpen = false
         await loadStatus()
         onRefresh?.()
@@ -946,11 +956,23 @@
                 </button>
               </div>
 
-              <div class="flex items-center gap-2 mt-1.5 text-xs text-text-subtle">
+              <div class="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-text-subtle">
                 <span>Created {key.createdAt ? new Date(key.createdAt).toLocaleDateString() : '—'}</span>
                 {#if !isActive}
                   <span>•</span>
                   <span class="text-amber-500 font-medium">Paused</span>
+                {/if}
+                <span>•</span>
+                {#if splitProviders(key.allowedProviders).length === 0}
+                  <span class="text-text-subtle text-[11px]">All providers</span>
+                {:else}
+                  <div class="inline-flex flex-wrap gap-1 items-center">
+                    {#each splitProviders(key.allowedProviders) as prov}
+                      <span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-info/10 text-info border border-info/25">
+                        {prov}
+                      </span>
+                    {/each}
+                  </div>
                 {/if}
               </div>
             </div>
@@ -978,6 +1000,17 @@
               >
                 <Users class="w-3.5 h-3.5" />
                 <span>{limit > 0 ? `Max ${limit}` : 'Unlimited'}</span>
+              </button>
+
+              <!-- Edit Allowed Providers Button -->
+              <button
+                type="button"
+                onclick={() => openEditProviders(key)}
+                class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold border transition cursor-pointer bg-surface-2 text-text-subtle border-border hover:text-text-main hover:bg-surface-3"
+                title="Restrict Allowed Providers"
+              >
+                <ShieldCheck class="w-3.5 h-3.5" />
+                <span>Providers</span>
               </button>
 
               <!-- Active Switch -->
@@ -1052,6 +1085,23 @@
           />
           <span class="text-[10px] text-text-subtle block">
             0 or leave empty for unlimited concurrent requests.
+          </span>
+        </div>
+
+        <div class="space-y-1">
+          <label for="key-providers-input" class="block text-xs font-semibold text-text-muted">
+            Allowed Providers (optional)
+          </label>
+          <input
+            id="key-providers-input"
+            type="text"
+            placeholder="e.g. openai,anthropic,gemini (empty for all)"
+            bind:value={newKeyAllowedProviders}
+            class="w-full px-3 py-2 rounded-lg bg-bg border border-border text-sm text-text-main focus:outline-none focus:border-brand-500 mb-2"
+          />
+          {@render providerPicker(newKeyAllowedProviders, (id) => { newKeyAllowedProviders = toggleProviderIn(newKeyAllowedProviders, id) })}
+          <span class="text-[10px] text-text-subtle block">
+            Click provider chips to toggle, or type comma-separated provider IDs. Empty allows all providers.
           </span>
         </div>
 
@@ -1363,6 +1413,74 @@
           Cancel
         </button>
       </div>
+    </div>
+  </div>
+{/if}
+
+<!-- MODAL: Edit Allowed Providers -->
+{#if isEditProvidersOpen && editingProvidersKey}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+    <div class="w-full max-w-md p-6 rounded-2xl bg-surface border border-border shadow-2xl space-y-4">
+      <div class="flex items-center justify-between pb-3 border-b border-border">
+        <h3 class="text-base font-bold text-text-main">Restrict Allowed Providers</h3>
+        <button
+          type="button"
+          onclick={() => {
+            isEditProvidersOpen = false
+            editingProvidersKey = null
+          }}
+          class="text-text-muted hover:text-text-main cursor-pointer"
+        >
+          <X class="w-4 h-4" />
+        </button>
+      </div>
+
+      <form onsubmit={handleSaveProviders} class="space-y-4">
+        <div>
+          <span class="block text-text-subtle text-xs mb-1">Token Label:</span>
+          <div class="font-bold text-text-main text-sm mb-2">{editingProvidersKey.name || 'API Key'}</div>
+          <label for="edit-key-providers" class="block text-xs font-semibold text-text-muted mb-1">
+            Allowed Providers
+          </label>
+          <input
+            id="edit-key-providers"
+            type="text"
+            placeholder="e.g. openai,anthropic,gemini (empty for all)"
+            bind:value={editProvidersVal}
+            class="w-full px-3 py-2 rounded-lg bg-bg border border-border text-sm text-text-main focus:outline-none focus:border-brand-500 mb-2"
+          />
+          {@render providerPicker(editProvidersVal, (id) => { editProvidersVal = toggleProviderIn(editProvidersVal, id) })}
+          <span class="text-[10px] text-text-subtle block mt-1">
+            Click provider chips to toggle. Leave empty to allow access to all providers.
+          </span>
+        </div>
+
+        <div class="flex gap-2 pt-2">
+          <button
+            type="submit"
+            disabled={isSavingProviders}
+            class="flex-1 py-2 px-4 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-white font-semibold text-xs transition cursor-pointer flex items-center justify-center gap-1.5"
+          >
+            {#if isSavingProviders}
+              <Loader2 class="w-3.5 h-3.5 animate-spin" />
+              <span>Saving...</span>
+            {:else}
+              <Check class="w-3.5 h-3.5" />
+              <span>Save Providers</span>
+            {/if}
+          </button>
+          <button
+            type="button"
+            onclick={() => {
+              isEditProvidersOpen = false
+              editingProvidersKey = null
+            }}
+            class="flex-1 py-2 px-4 rounded-lg bg-surface-2 hover:bg-surface-3 text-text-main font-semibold text-xs transition cursor-pointer border border-border"
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
     </div>
   </div>
 {/if}
