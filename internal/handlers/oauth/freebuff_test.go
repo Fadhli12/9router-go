@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"9router/proxy/internal/db"
+	"9router/proxy/internal/dbtest"
 )
 
 func setupTestDB(t *testing.T) (*sql.DB, func()) {
@@ -25,28 +26,10 @@ func setupTestDB(t *testing.T) (*sql.DB, func()) {
 		t.Fatalf("OpenDatabase failed: %v", err)
 	}
 
-	schema := `
-	CREATE TABLE IF NOT EXISTS providerConnections (
-		id TEXT PRIMARY KEY,
-		provider TEXT NOT NULL,
-		authType TEXT NOT NULL,
-		name TEXT,
-		email TEXT,
-		priority INTEGER,
-		isActive INTEGER DEFAULT 1,
-		data TEXT NOT NULL,
-		createdAt TEXT,
-		updatedAt TEXT
-	);`
-	if _, err := database.Exec(schema); err != nil {
+	if err := dbtest.CreateTables(database); err != nil {
 		database.Close()
 		os.Remove(tmpFile.Name())
-		t.Fatalf("exec schema failed: %v", err)
-	}
-	if err := db.EnsureAdditiveColumns(database); err != nil {
-		database.Close()
-		os.Remove(tmpFile.Name())
-		t.Fatalf("additive columns: %v", err)
+		t.Fatalf("CreateTables failed: %v", err)
 	}
 
 	cleanup := func() {

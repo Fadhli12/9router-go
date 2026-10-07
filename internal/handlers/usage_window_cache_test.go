@@ -233,9 +233,11 @@ func TestUsageWindowCache_DistinctWindowsDoNotShareTotals(t *testing.T) {
 	resetUsageWindowCache()
 	t.Cleanup(resetUsageWindowCache)
 
-	now := time.Now().UTC()
-	// Midnight is 8 hours ago, so this row is inside 24h but outside today.
-	seedHistoryAt(t, repo, now.Add(-20*time.Hour), "openai", "gpt-5.5", "conn-1", "sk-a", 100, 10, 0.01, 0)
+	now := time.Now()
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	// The pre-midnight row is inside the rolling 24h window but outside the
+	// calendar "today" window; the second row is inside both.
+	seedHistoryAt(t, repo, midnight.Add(-time.Minute), "openai", "gpt-5.5", "conn-1", "sk-a", 100, 10, 0.01, 0)
 	seedHistoryAt(t, repo, now.Add(-time.Hour), "openai", "gpt-5.5", "conn-1", "sk-a", 100, 10, 0.01, 0)
 
 	today := usageStatsBody(t, repo, "today")

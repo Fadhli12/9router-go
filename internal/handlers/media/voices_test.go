@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"9router/proxy/internal/db"
+	"9router/proxy/internal/dbtest"
 )
 
 func TestHandleAudioVoices_EdgeTTS(t *testing.T) {
@@ -98,22 +99,8 @@ func newVoicesTestRepo(t *testing.T) *db.Repo {
 		database.Close()
 		os.Remove(tmpFile.Name())
 	})
-	if _, err := database.Exec(`CREATE TABLE providerConnections (
-		id TEXT PRIMARY KEY,
-		provider TEXT NOT NULL,
-		authType TEXT NOT NULL,
-		name TEXT,
-		email TEXT,
-		priority INTEGER,
-		isActive INTEGER DEFAULT 1,
-		data TEXT NOT NULL,
-		createdAt TEXT NOT NULL,
-		updatedAt TEXT NOT NULL
-	)`); err != nil {
-		t.Fatalf("create table: %v", err)
-	}
-	if err := db.EnsureAdditiveColumns(database); err != nil {
-		t.Fatalf("additive columns: %v", err)
+	if err := dbtest.CreateTables(database); err != nil {
+		t.Fatalf("CreateTables failed: %v", err)
 	}
 	return db.NewRepo(database)
 }
