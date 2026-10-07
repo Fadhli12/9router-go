@@ -25,6 +25,10 @@ body), tanpa token API.
 
 ### 🐛 `internal/fetchgate` flaky di `go test -p 16` — gap diukur salah
 
+### 🐛 Bug Fixes
+
+- fix(web): preserve providerSpecificData in normalizeConnection so proxy pool badges, selections, and connection-specific settings render accurately (#188)
+
 ### 💀 A retired model fails the request instead of the combo — HTTP 410 now fails over and is badged
 
 When a provider retires a model it answers `HTTP 410 Gone` (`ModelDeprecated`).
