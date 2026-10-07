@@ -120,7 +120,13 @@ describe('dashboard API authentication and errors', () => {
       resolve()
     })
 
-    globalThis.fetch = async () => {
+    globalThis.fetch = async (input) => {
+      // The status endpoint is public and reports the authoritative answer;
+      // `authenticated: false` is the explicit "session is gone" signal that
+      // should actually log the user out.
+      if (String(input) === '/api/auth/status') {
+        return Response.json({ requireLogin: true, authenticated: false })
+      }
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
         status: 401,
         headers: { 'Content-Type': 'application/json' },
@@ -187,6 +193,43 @@ describe('dashboard API authentication and errors', () => {
     globalThis.fetch = async (input) => {
       if (String(input) === '/api/auth/status') {
         return Response.json({ requireLogin: false, authenticated: false })
+      }
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    try {
+      await expect(api.getConnections()).rejects.toThrow()
+      await new Promise((resolve) => setTimeout(resolve, 80))
+
+      expect(unauthorizedCalls).toBe(0)
+      expect(localStorage.getItem('9router_auth')).toBe('true')
+      expect(localStorage.getItem('9router_key')).toBe('sk-test')
+    } finally {
+      unsub()
+      globalThis.fetch = originalFetch
+      localStorage.removeItem('9router_auth')
+      localStorage.removeItem('9router_key')
+    }
+  })
+
+  it('keeps stored auth when the session recheck fails transiently', async () => {
+    const originalFetch = globalThis.fetch
+    localStorage.setItem('9router_auth', 'true')
+    localStorage.setItem('9router_key', 'sk-test')
+
+    let unauthorizedCalls = 0
+    const unsub = onUnauthorized(() => {
+      unauthorizedCalls++
+    })
+
+    globalThis.fetch = async (input) => {
+      // The status endpoint is unreachable (network blip), which proves
+      // nothing about the session, so the dashboard must not log the user out.
+      if (String(input) === '/api/auth/status') {
+        throw new Error('network down')
       }
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
         status: 401,

@@ -815,6 +815,16 @@ func (h *DashboardHandler) HandleDeleteConnection(w http.ResponseWriter, r *http
 // node baseUrl is probed for GET /models (upstream parity: OpenAI uses
 // Bearer, Anthropic strips a /messages suffix and sends x-api-key +
 // anthropic-version plus Bearer). Other providers answer 400.
+// modelsFetchStatus normalizes an upstream /models status so an auth rejection
+// (401/403) from a provider never reaches the dashboard as 401 — the API client
+// treats any 401 as an expired dashboard session and logs the user out.
+func modelsFetchStatus(status int) int {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return http.StatusBadGateway
+	}
+	return status
+}
+
 func (h *DashboardHandler) HandleGetConnectionModels(w http.ResponseWriter, r *http.Request) {
 	id := getURLParam(r, "id")
 	if id == "" {
@@ -857,7 +867,10 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 			token = connData.APIKey
 		}
 		if token == "" {
-			handlerutil.WriteJSONError(w, http.StatusUnauthorized, "no valid token found")
+			// A missing provider token is a domain error, not an expired
+			// dashboard session. 401 here would make the API client treat it as
+			// a logged-out session and bounce the dashboard to /login.
+			handlerutil.WriteJSONError(w, http.StatusBadRequest, "no valid token found")
 			return
 		}
 		projectID := "antigravity"
@@ -878,7 +891,7 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 			return
 		}
 		if status != http.StatusOK {
-			handlerutil.WriteJSONError(w, status, fmt.Sprintf("failed to fetch models: %d", status))
+			handlerutil.WriteJSONError(w, modelsFetchStatus(status), fmt.Sprintf("failed to fetch models: %d", status))
 			return
 		}
 		var agResp struct {
@@ -928,7 +941,7 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 			token = connData.APIKey
 		}
 		if token == "" {
-			handlerutil.WriteJSONError(w, http.StatusUnauthorized, "no valid token found")
+			handlerutil.WriteJSONError(w, http.StatusBadRequest, "no valid token found")
 			return
 		}
 		projectID := ""
@@ -948,7 +961,7 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 			return
 		}
 		if status != http.StatusOK {
-			handlerutil.WriteJSONError(w, status, fmt.Sprintf("failed to fetch models: %d", status))
+			handlerutil.WriteJSONError(w, modelsFetchStatus(status), fmt.Sprintf("failed to fetch models: %d", status))
 			return
 		}
 		var resp struct {
@@ -998,7 +1011,7 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 			token = connData.APIKey
 		}
 		if token == "" {
-			handlerutil.WriteJSONError(w, http.StatusUnauthorized, "no valid token found")
+			handlerutil.WriteJSONError(w, http.StatusBadRequest, "no valid token found")
 			return
 		}
 		headers := map[string]string{
@@ -1047,7 +1060,7 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 			}
 		}
 		if status != http.StatusOK {
-			handlerutil.WriteJSONError(w, status, fmt.Sprintf("failed to fetch models: %d", status))
+			handlerutil.WriteJSONError(w, modelsFetchStatus(status), fmt.Sprintf("failed to fetch models: %d", status))
 			return
 		}
 		var grokResp struct {
@@ -1073,7 +1086,7 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 			token = connData.APIKey
 		}
 		if token == "" {
-			handlerutil.WriteJSONError(w, http.StatusUnauthorized, "no valid token found")
+			handlerutil.WriteJSONError(w, http.StatusBadRequest, "no valid token found")
 			return
 		}
 		authHeaderVal := token
@@ -1090,7 +1103,7 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 			return
 		}
 		if status != http.StatusOK {
-			handlerutil.WriteJSONError(w, status, fmt.Sprintf("failed to fetch models: %d", status))
+			handlerutil.WriteJSONError(w, modelsFetchStatus(status), fmt.Sprintf("failed to fetch models: %d", status))
 			return
 		}
 		var clineResp struct {
@@ -1143,7 +1156,7 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 			token = connData.AccessToken
 		}
 		if token == "" {
-			handlerutil.WriteJSONError(w, http.StatusUnauthorized, "no API key configured")
+			handlerutil.WriteJSONError(w, http.StatusBadRequest, "no API key configured")
 			return
 		}
 		headers := map[string]string{"Authorization": "Bearer " + token}
@@ -1156,7 +1169,7 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 			return
 		}
 		if status != http.StatusOK {
-			handlerutil.WriteJSONError(w, status, fmt.Sprintf("failed to fetch models: %d", status))
+			handlerutil.WriteJSONError(w, modelsFetchStatus(status), fmt.Sprintf("failed to fetch models: %d", status))
 			return
 		}
 		var listResp struct {
@@ -1213,7 +1226,7 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 		return
 	}
 	if status != http.StatusOK {
-		handlerutil.WriteJSONError(w, status, "failed to fetch models: "+http.StatusText(status))
+		handlerutil.WriteJSONError(w, modelsFetchStatus(status), "failed to fetch models: "+http.StatusText(status))
 		return
 	}
 	var parsed struct {

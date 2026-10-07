@@ -71,7 +71,10 @@ func (h *DashboardHandler) resolveCodexResetCreditTarget(w http.ResponseWriter, 
 	}
 
 	if accessToken == "" {
-		writePlainError(w, http.StatusUnauthorized, "Codex OAuth access token is missing.")
+		// A missing Codex token is a domain error, not an expired dashboard
+		// session. 401 here would make the API client treat it as a logged-out
+		// session (web/src/api/client.ts) and bounce the dashboard to /login.
+		writePlainError(w, http.StatusBadGateway, "Codex OAuth access token is missing.")
 		return codexResetCreditTarget{}, false
 	}
 

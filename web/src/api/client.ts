@@ -473,25 +473,27 @@ export function onUnauthorized(listener: UnauthorizedListener): () => void {
 }
 
 let unauthorizedTimer: number | null = null
-let unauthorizedStatusCheck: Promise<boolean> | null = null
 
-async function hasLiveDashboardSession(): Promise<boolean> {
-  if (unauthorizedStatusCheck !== null) return unauthorizedStatusCheck
-  unauthorizedStatusCheck = (async () => {
-    try {
-      const res = await fetch('/api/auth/status', {
-        headers: getAuthHeaders(),
-      })
-      if (!res.ok) return false
-      const data = await res.json()
-      return data?.requireLogin === false || data?.authenticated === true
-    } catch {
-      return false
-    } finally {
-      unauthorizedStatusCheck = null
-    }
-  })()
-  return unauthorizedStatusCheck
+// SessionStatus describes the authoritative server answer about whether a
+// dashboard session is live, distinguishing "no session" from "unknown".
+type SessionStatus = { live: boolean; known: boolean }
+
+async function checkDashboardSession(): Promise<SessionStatus> {
+  try {
+    const res = await fetch('/api/auth/status', {
+      headers: getAuthHeaders(),
+    })
+    if (!res.ok) return { live: false, known: false }
+    const data = await res.json()
+    // requireLogin=false means auth is off entirely, so there is nothing to
+    // expire. Otherwise the server's `authenticated` flag is authoritative.
+    if (data?.requireLogin === false) return { live: true, known: true }
+    return { live: data?.authenticated === true, known: true }
+  } catch {
+    // A network error proves nothing about the session — treat as unknown so a
+    // transient blip never logs the user out.
+    return { live: false, known: false }
+  }
 }
 
 export async function handleUnauthorized(path?: string) {
@@ -509,7 +511,11 @@ export async function handleUnauthorized(path?: string) {
     return
   }
 
-  if (await hasLiveDashboardSession()) {
+  const session = await checkDashboardSession()
+  // Only log out when the server explicitly reports the session is gone. A
+  // transient network failure (`known: false`) must not clear auth, otherwise a
+  // single blip while any endpoint returns 401 bounces the dashboard to /login.
+  if (session.live || !session.known) {
     return
   }
 
