@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+
+## [v1.9.10-exp.3] - 2026-10-07
+
 ### 🐛 DeepSeek: body request di-serialize acak — prompt cache miss di tiap request (semua lane)
 
 Semua lane DeepSeek melewati unmarshal → mutasi → marshal pada map generik
@@ -23,11 +26,18 @@ jadi sorted dan stabil, prefix antar-turn konsisten, cache upstream bisa
 hit. Diverifikasi lewat unit test per-lane (200 request identik → tepat 1
 body), tanpa token API.
 
-### 🐛 `internal/fetchgate` flaky di `go test -p 16` — gap diukur salah
+### 🐛 `normalizeConnection` buang `providerSpecificData` — badge dan pilihan proxy pool salah render
 
-### 🐛 Bug Fixes
+Client hanya membaca `providerSpecificData` dari body yang sudah di-decode,
+dan object yang dipakai sebagai fallback adalah seluruh baris hasil parse,
+sehingga field yang dipakai dashboard untuk badge proxy pool, pool yang
+terpilih, dan pengaturan per-koneksi isinya apa pun yang lolos dari
+round-trip itu (#188).
 
-- fix(web): preserve providerSpecificData in normalizeConnection so proxy pool badges, selections, and connection-specific settings render accurately (#188)
+Nilai wire sekarang dibaca terpisah dari nilai hasil parse lalu di-merge di
+atasnya, dan fallback ke baris parse tidak lagi jalan saat object hasil parse
+kosong — itulah yang menghasilkan object non-kosong tanpa satu pun key yang
+diharapkan. Ditutup assertion `client.test.ts` atas bentuk hasil merge.
 
 ### 💀 A retired model fails the request instead of the combo — HTTP 410 now fails over and is badged
 
