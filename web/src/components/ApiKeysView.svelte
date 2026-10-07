@@ -446,6 +446,23 @@
             </span>
           </div>
 
+          <div>
+            <label for="new-key-providers" class="block font-semibold text-text-muted mb-1">
+              Allowed Providers (optional)
+            </label>
+            <input
+              id="new-key-providers"
+              type="text"
+              placeholder="e.g. openai,anthropic,gemini (empty for all)"
+              bind:value={createProviders}
+              class="w-full bg-surface-2 border border-border rounded-lg px-3 py-2 font-code text-xs text-text-main focus:outline-none focus:border-brand-500 mb-2"
+            />
+            {@render providerPicker(createProviders, (id) => { createProviders = toggleProviderIn(createProviders, id) })}
+            <span class="text-[10px] text-text-subtle mt-1 block">
+              Click provider chips to toggle, or type comma-separated provider IDs. Empty allows all providers.
+            </span>
+          </div>
+
           <div class="flex justify-end gap-2 pt-3 border-t border-border">
             <button
               type="button"
@@ -465,6 +482,72 @@
                 <Check class="w-3.5 h-3.5" />
               {/if}
               <span>Generate Key</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Edit Allowed Providers Modal -->
+  {#if isEditProvidersOpen && editingProvidersKey}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+      <div class="w-full max-w-md p-6 rounded-2xl bg-surface-2 border border-border shadow-2xl space-y-4">
+        <div class="flex items-center justify-between pb-2 border-b border-border">
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              aria-label="Close dialog"
+              onclick={() => (isEditProvidersOpen = false)}
+              class="w-3 h-3 rounded-full bg-[#ff5f56] cursor-pointer"
+            ></button>
+            <div class="w-3 h-3 rounded-full bg-[#ffbd2e]"></div>
+            <div class="w-3 h-3 rounded-full bg-[#27c93f]"></div>
+            <span class="ml-2 font-headline text-sm font-bold text-text-main">
+              Restrict Allowed Providers
+            </span>
+          </div>
+        </div>
+
+        <form onsubmit={handleSaveProviders} class="space-y-3 font-body text-xs">
+          <div>
+            <span class="block text-text-subtle text-[11px] mb-1 font-body">Token Label:</span>
+            <div class="font-bold text-text-main mb-2 font-headline">{editingProvidersKey.name || 'Client Token'}</div>
+            <label for="edit-key-providers" class="block font-semibold text-text-muted mb-1">
+              Allowed Providers
+            </label>
+            <input
+              id="edit-key-providers"
+              type="text"
+              placeholder="e.g. openai,anthropic,gemini (empty for all)"
+              bind:value={editProvidersVal}
+              class="w-full bg-surface-2 border border-border rounded-lg px-3 py-2 font-code text-xs text-text-main focus:outline-none focus:border-brand-500 mb-2"
+            />
+            {@render providerPicker(editProvidersVal, (id) => { editProvidersVal = toggleProviderIn(editProvidersVal, id) })}
+            <span class="text-[10px] text-text-subtle mt-1 block">
+              Click provider chips to toggle. Leave empty to allow access to all providers.
+            </span>
+          </div>
+
+          <div class="flex justify-end gap-2 pt-3 border-t border-border">
+            <button
+              type="button"
+              onclick={() => (isEditProvidersOpen = false)}
+              class="px-4 py-2 rounded-lg text-text-muted hover:text-text-main cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isUpdatingProviders}
+              class="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 text-white font-bold shadow-md shadow-brand-500/25 cursor-pointer"
+            >
+              {#if isUpdatingProviders}
+                <Loader2 class="w-3.5 h-3.5 animate-spin" />
+              {:else}
+                <Check class="w-3.5 h-3.5" />
+              {/if}
+              <span>Save Providers</span>
             </button>
           </div>
         </form>
