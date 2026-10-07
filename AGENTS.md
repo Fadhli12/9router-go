@@ -2,6 +2,15 @@
 
 This repository (`9router-go`) is the high-performance, native Golang implementation and companion of [**decolua/9router**](https://github.com/decolua/9router).
 
+> **Subdirectory guides** (focused, local guidance — always read the relevant one before editing in that area):
+> - [`internal/handlers/AGENTS.md`](internal/handlers/AGENTS.md) — HTTP routing, `/v1/*` + `/api/*` handlers
+> - [`internal/proxy/AGENTS.md`](internal/proxy/AGENTS.md) — upstream forwarding, SSE streaming, provider executors
+> - [`internal/translator/AGENTS.md`](internal/translator/AGENTS.md) — protocol format converters (pure, no I/O)
+> - [`internal/providers/AGENTS.md`](internal/providers/AGENTS.md) — provider catalog & model metadata
+> - [`internal/db/AGENTS.md`](internal/db/AGENTS.md) — SQLite persistence layer
+> - [`internal/integration/AGENTS.md`](internal/integration/AGENTS.md) — feature integration test harness
+> - [`web/AGENTS.md`](web/AGENTS.md) — Svelte 5 dashboard frontend
+
 ---
 
 ## 1. Upstream Source of Truth & Local Reference
