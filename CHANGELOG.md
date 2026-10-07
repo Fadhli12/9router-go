@@ -2,818 +2,822 @@
 
 ## [Unreleased]
 
-## [v1.9.10-exp.2] - 2026-10-06
+## [v1.9.10] - 2026-10-07
 
-### 🩺 `text-danger` gagal bar kontras di tema gelap — teks error nyaris tak terbaca
+### 🩺 `text-danger` fails the contrast bar in dark theme — error text is nearly unreadable
 
-Tracing dari #168 menemukan bahwa perbaikannya sendiri belum lolos ukur.
-`text-danger` (#cf222e) menghasilkan **2.83:1** terhadap `bg-surface` di tema
-gelap pada 12px/400 — di bawah bar 4.5:1 untuk teks normal. Di tema terang ia
-**5.36:1** dan benar, jadi membaca nama token atau memeriksa satu tema sama
-sajanya tidak cukup.
+Tracing from #168 found that the fix itself had not passed the measure.
+`text-danger` (#cf222e) yields **2.83:1** against `bg-surface` in the dark
+theme at 12px/400 — below the 4.5:1 bar for normal text. In the light theme it
+is **5.36:1** and correct, so reading the token name or checking one theme
+alone is not enough.
 
-Sembilan site teks: `TokenSaverView` (link Uninstall, pesan error uninstall),
+Nine text sites: `TokenSaverView` (Uninstall link, uninstall error messages),
 `CreateComboModal` (`saveError`), `Badge.svelte` variant `danger`,
-`EndpointView` (tombol Tunnel/Tailscale ×6, pesan error ×2, hover Delete key),
-`ProfileSettingsView` (pesan error password), dan `ApiKeysView` (hover Delete).
-`ApiKeysView` juga punya class rusak: `hover:text-hover:text-danger`.
+`EndpointView` (Tunnel/Tailscale buttons ×6, error messages ×2, Delete key
+hover), `ProfileSettingsView` (password error message), and `ApiKeysView` (Delete
+hover). `ApiKeysView` also has a broken class: `hover:text-hover:text-danger`.
 
-Semuanya kini memakai pasangan `text-red-600 dark:text-red-400` yang sudah jadi
-konvensi dominan repo (16 pemakaian, termasuk yang dipakai `ProviderDetailView`
-dan `Toasts`). Diukur dari piksel nyata setelah perbaikan:
+They all now use the `text-red-600 dark:text-red-400` pair, which is already
+the dominant repo convention (16 usages, including those used by
+`ProviderDetailView` and `Toasts`). Measured from real pixels after the fix:
 
 | | dark | light |
 |---|---|---|
 | `saveError` | **5.24:1** | **4.77:1** |
 
-Tombol `bg-danger` **tidak** disentuh: teks putih di atasnya 5.36:1, sudah
-lolos. `bg-danger` memang benar untuk fill dan salah untuk teks — dua
-fungsi yang satu token tidak bisa layani. Dihitung dari luminansi terukur:
-teks di permukaan gelap butuh L ≥ 0.258, teks putih di atas fill butuh
-L ≤ 0.183, jadi keduanya saling bertentakan.
+`bg-danger` buttons are **not** touched: white text on top of it is 5.36:1,
+already passing. `bg-danger` really is correct for fill and wrong for text — two
+roles a single token cannot serve. Computed from measured luminance: text on a
+dark surface needs L ≥ 0.258, white text over a fill needs L ≤ 0.183, so the
+two contradict each other.
 
-**Verifikasi:** `bun run build` bersih; `bun test` 219/219; `bun run
-ratchet:svelte` 0 unresolved identifier, 89 error (baseline 89, tidak naik).
-Bukti piksel di binary asli dengan `DATA_DIR` terisolasi, pada elemen yang
-sama yang tadinya 2.83:1 — `CreateComboModal` `saveError` dipaksa gagal lewat
-POST 409 ke `/api/combos`, lalu kontras diukur di kedua tema dari piksel
-yang di-resolve browser (bukan dari nilai token).
+**Verification:** `bun run build` clean; `bun test` 219/219; `bun run
+ratchet:svelte` 0 unresolved identifiers, 89 errors (baseline 89, not rising).
+Pixel evidence in the real binary with an isolated `DATA_DIR`, on the very same
+element that used to be 2.83:1 — `CreateComboModal` `saveError` was forced to
+fail via a 409 POST to `/api/combos`, then contrast was measured in both themes
+from pixels resolved by the browser (not from token values).
 
-**Guard contrast tidak jadi.** Skrip yang mengecek kelas warna mati dari CSS
-hasil build ditulis lebih dulu, tapi ia menghasilkan 28 → 59 → 666 false
-positive (termasuk `text-brand-500` dan `text-xs` yang jelas ada) karena
-mencocokkan `divide-y`, `border-b-2`, dan awalan varian sebagai warna. Guard
-yang berbohong lebih berbahaya dari tidak ada, karena ia terbaca sebagai
-bukti — jadi dihapus, bukan diperbaiki berulang. Kelas warna mati dicegah
-lewat `bun run build` + review, dan kontras diukur di browser.
+**The contrast guard was not worth keeping.** A script that checks dead color
+classes out of the built CSS was written first, but it produced 28 → 59 → 666
+false positives (including `text-brand-500` and `text-xs`, which plainly exist)
+because it matched `divide-y`, `border-b-2`, and variant prefixes as colors. A
+guard that lies is more dangerous than no guard, because it reads as
+evidence — so it was deleted, not repeatedly patched. Dead color classes are
+prevented via `bun run build` + review, and contrast is measured in the browser.
 
-### ⚡ `GET /v1/models` lebih cepat saat provider & model banyak
+### ⚡ `GET /v1/models` is faster when there are many providers & models
 
-Build daftar model di endpoint ini CPU-bound per model, bukan DB-bound. Empat hal diubah, tanpa mengubah perilaku:
+The model list build on this endpoint is CPU-bound per model, not DB-bound. Four things were changed, without changing behavior:
 
-- `isLLMModelID` (3 regex per model tak dikenal) dan `GetModelTokenLimits` (switch `strings.Contains` raksasa) kini di-cache per id. Keduanya punya batas ukuran (20k entri, di-reset saat penuh) dan ikut dibersihkan `InvalidateCapabilitiesCache`.
-- 113 pola kapabilitas diindeks: fragmen literal tiap glob dihitung sekali di `initPatternIndex`, lalu pencocokan disaring dengan `strings.Contains` dan hanya kandidat yang diverifikasi `path.Match`. Urutan first-match-wins tetap.
-- `aggregateComboCapabilities` memakai row combo yang sudah dimuat `GetCombos()`, bukan query ulang per combo.
-- `HandleModels` men-marshal daftar model sekali dan menulis envelope-nya langsung lewat `WriteModelsList`, jadi list besar tidak di-encode dua kali untuk key `data` dan `models`. Envelope meta tetap memakai `deterministicJSON` sehingga urutan key stabil antar-request.
+- `isLLMModelID` (3 regexes per unknown model) and `GetModelTokenLimits` (a giant `strings.Contains` switch) are now cached per id. Both have a size cap (20k entries, reset when full) and are also cleared by `InvalidateCapabilitiesCache`.
+- 113 capability patterns are indexed: the literal fragment of each glob is computed once in `initPatternIndex`, then matching is filtered with `strings.Contains` and only candidates verified with `path.Match`. The first-match-wins order stays.
+- `aggregateComboCapabilities` uses the combo row already loaded by `GetCombos()`, instead of re-querying per combo.
+- `HandleModels` marshals the model list once and writes its envelope directly through `WriteModelsList`, so large lists are not encoded twice for the `data` and `models` keys. The meta envelope still uses `deterministicJSON` so key order is stable across requests.
 
-**Verifikasi (host sama, id sintetik worst-case):** build warm 28→6 ms (20 koneksi × 75 model) dan 64→15 ms (50 × 75); build cold 512→76 ms dan 1254→175 ms; end-to-end 46→16 ms dan 105→39 ms. Suite: test baru untuk identitas `data`/`models`, stabilitas urutan key, reuse row combo, guard tabel pola, dan ekuivalensi indeks pola atas seluruh id registry; benchmark untuk `HandleModels` dan jalur pola.
+**Verification (same host, worst-case synthetic ids):** warm build 28→6 ms (20 connections × 75 models) and 64→15 ms (50 × 75); cold build 512→76 ms and 1254→175 ms; end-to-end 46→16 ms and 105→39 ms. Suite: new tests for `data`/`models` identity, key-order stability, combo row reuse, pattern-table guard, and pattern-index equivalence over all registry ids; benchmarks for `HandleModels` and the pattern path.
 
-## [v1.9.10-exp.1] - 2026-10-06
+### 🐛 Test Button on provider media page probes wrong — System One models always 500
 
-### 🐛 Tombol Test di halaman media provider salah probe — model System One selalu 500
-
-Gejalanya persis seperti yang dilaporkan: di
-`/dashboard/media-providers/systemone/opencode-zen`, tombol labu (Test) pada
-`jev-1.13` dan `jev-1.13-free` selalu gagal dengan
+The symptom is exactly as reported: on
+`/dashboard/media-providers/systemone/opencode-zen`, the flask button (Test) on
+`jev-1.13` and `jev-1.13-free` always fails with
 `ForwardOpencodeZen: forward to https://opencode.ai/zen/v1/chat/completions:
-upstream returned 500`, padahal tombol **Run** di halaman yang sama langsung
-berhasil.
+upstream returned 500`, even though the **Run** button on the same page
+succeeds immediately.
 
-**Penyebabnya bukan lane Zen.** Dua tombol itu memang memanggil dua endpoint
-berbeda: **Run** mem-post ke `/v1/systemone`, sedangkan **Test** memanggil
-`POST /api/models/test` — dan handler lama (`chat.HandleTestModel`) selalu
-membentuk payload Chat Completions apa pun jenis modelnya. Diverifikasi langsung
-ke upstream: `POST /zen/v1/chat/completions` dengan `jev-1.13-free` memang
-membalas `500 {"type":"error",…,"message":"Internal server error"}`, sementara
-`POST /zen/v1/systemone` pada model yang sama membalas `200` beserta `answers`.
-Jadi gateway memang benar meneruskan ke lane yang salah — dan model yang sehat
-ditandai rusak. Berlaku juga untuk model media lain di provider yang sama.
+**The cause is not the Zen lane.** Those two buttons do indeed call two
+different endpoints: **Run** posts to `/v1/systemone`, while **Test** calls
+`POST /api/models/test` — and the old handler (`chat.HandleTestModel`) always
+built a Chat Completions payload regardless of the model kind. Verified
+directly against upstream: `POST /zen/v1/chat/completions` with
+`jev-1.13-free` really does reply
+`500 {"type":"error",…,"message":"Internal server error"}`, while
+`POST /zen/v1/systemone` on the same model replies `200` along with
+`answers`. So the gateway really is correctly forwarding to the wrong lane —
+and healthy models are marked broken. This also applies to other media models
+on the same provider.
 
-**Perbaikan (parity upstream `decolua/9router#20014b31`, "probe System One models
-through /v1/systemone"):**
+**The fix (upstream parity with `decolua/9router#20014b31`, "probe System One
+models through /v1/systemone"):**
 
-- **Probe sekarang mengikuti `kind`, bukan asumsi chat.** File baru
-  `internal/handlers/media/model_test_ping.go` menerima `{model, kind}` lalu
-  meneruskan probe ke handler yang memiliki kind tersebut:
+- **The probe now follows `kind`, not a chat assumption.** The new file
+  `internal/handlers/media/model_test_ping.go` takes `{model, kind}` and then
+  forwards the probe to the handler that owns that kind:
   `/embeddings`, `/images/generations`, `/audio/speech`,
-  `/audio/transcriptions`, `/videos/generations`, `/systemone`, atau
-  `/chat/completions` bila `kind` kosong (halaman provider biasa, yang modelnya
-  memang chat). `chat.HandleTestModel` dihapus — tidak ada jalur tanpa shim.
-- **Verdict dibaca dari payload, bukan dari status.** Semua endpoint di atas
-  menyalin status upstream apa adanya, jadi HTTP 200 tidak otomatis berarti
-  lulus: `answers` non-kosong untuk System One, `data[].embedding` untuk
-  embedding, `data[]` untuk image, teks untuk STT, job yang ter-create untuk
-  video, dan bytes/base64 untuk TTS. File yang sama juga membaca
-  `{"error":…}` di balik 200, `status`/`msg` yang bukan sukses, dan membongkar
-  amplop `{"success":true,"data":…}` milik Cline — ketiganya akan melaporkan
-  "provider baik-baik saja" untuk upstream yang sedang rusak. Balasan
-  reasoning-only yang habis token tetap lulus (parity issue #3010).
-- **Timeout 15 detik per probe**, turunannya mengikuti konteks request, jadi
-  tombol tidak menggantung pada provider yang tidak menjawab.
-- **Frontend mengirim `kind`.** `api.testModel(model, kind?)` +
-  `MediaProviderDetail.handleTestModel` mengirim kind halaman ini, jadi jenis
-  model dibaca dari halaman yang menampilkannya — bukan dari tebakan nama id.
-- **Hasil test akhirnya tampil.** `modelTestResults` sudah diisi sejak lama tapi
-  tidak pernah dirender; baris model sekarang menampilkan ikon
-  `check_circle`/`cancel`, border hijau/merah, latensi dari pengukuran server,
-  dan pesan error sebagai tooltip — sesuai `ModelsRow` upstream.
+  `/audio/transcriptions`, `/videos/generations`, `/systemone`, or
+  `/chat/completions` if `kind` is empty (the regular provider page, whose
+  models really are chat). `chat.HandleTestModel` was deleted — there is no
+  path without a shim.
+- **The verdict is read from the payload, not from the status.** All the
+  endpoints above pass through the upstream status as-is, so HTTP 200 does not
+  automatically mean pass: non-empty `answers` for System One,
+  `data[].embedding` for embeddings, `data[]` for images, text for STT, a
+  created job for video, and bytes/base64 for TTS. The same file also reads
+  `{"error":…}` behind a 200, non-success `status`/`msg`, and unwraps Cline's
+  `{"success":true,"data":…}` envelope — all three of which would report
+  "provider is fine" for an upstream that is currently broken. Token-exhausted
+  reasoning-only replies still pass (parity with issue #3010).
+- **15-second timeout per probe**, with its deadline following the request
+  context, so the button does not hang on providers that never answer.
+- **The frontend sends `kind`.** `api.testModel(model, kind?)` +
+  `MediaProviderDetail.handleTestModel` send this page's kind, so the model
+  kind is read from the page that displays it — not guessed from the id name.
+- **The test result is finally shown.** `modelTestResults` has long been
+  populated but never rendered; model rows now display a
+  `check_circle`/`cancel` icon, a green/red border, latency from the server
+  measurement, and the error message as a tooltip — matching upstream
+  `ModelsRow`.
 
-**Verifikasi:**
+**Verification:**
 
-- `internal/integration/model_test_ping_test.go` (baru) mengetes lewat router
-  produksi dengan upstream palsu: probe System One harus mendarat di
-  `/zen/v1/systemone` (dan gagal dengan jalur chat — hasilnya persis string 500
-  dari laporan user), default tanpa `kind` tetap di lane chat dengan
-  `max_tokens:1024`, dan `kind` tak dikenal ditolak 400. Suite `integration`
-  penuh hijau (70 dtk).
-- Smoke run di binary asli dengan DB terisolasi: keenam kind lewat `smokec/`
-  (node `openai-compatible` → upstream palsu) semuanya `ok:true`; yang paling
-  menentukan, `{"model":"oc/jev-1.13-free","kind":"systemone"}` membalas
-  `{"ok":true,"latencyMs":955,"status":200}` ke model yang chat lane-nya
-  terbukti 500, sementara `POST /v1/systemone` yang sama juga 200.
-  `{"model":"ocz/jev-1.13","kind":"systemone"}` kini melaporkan apa adanya
-  `HTTP 401: … Rate-limited Zen models require a workspace` — kredensial yang
-  memang belum siap, bukan model rusak.
-- `go build ./...`, `go vet ./...`, `go test ./...`, suite `integration`,
-  `bun test` 219/219, `bun run build`, dan `bun run ratchet:svelte`
-  (0 unresolved, 89 error = baseline) semuanya hijau.
+- `internal/integration/model_test_ping_test.go` (new) tests through the
+  production router with a fake upstream: a System One probe must land on
+  `/zen/v1/systemone` (and fail via the chat path — the result is exactly the
+  500 string from the user report), the no-`kind` default stays on the chat
+  lane with `max_tokens:1024`, and an unknown `kind` is rejected with 400. The
+  full `integration` suite is green (70 s).
+- Smoke run in the real binary with an isolated DB: all six kinds via `smokec/`
+  (node `openai-compatible` → fake upstream) all return `ok:true`; most
+  decisively, `{"model":"oc/jev-1.13-free","kind":"systemone"}` replies
+  `{"ok":true,"latencyMs":955,"status":200}` for a model whose chat lane is
+  proven to 500, while the same `POST /v1/systemone` also returns 200.
+  `{"model":"ocz/jev-1.13","kind":"systemone"}` now reports verbatim
+  `HTTP 401: … Rate-limited Zen models require a workspace` — credentials that
+  genuinely aren't ready yet, not a broken model.
+- `go build ./...`, `go vet ./...`, `go test ./...`, the `integration` suite,
+  `bun test` 219/219, `bun run build`, and `bun run ratchet:svelte`
+  (0 unresolved, 89 errors = baseline) are all green.
 
-### 🧪 Rilis split dua channel: stabil & experimental — dipilah dari tag
+### 🧪 Release split into two channels: stable & experimental — derived from the tag
 
-Selama ini `release.yml` memperlakukan semua tag `v*` sama: tag
-`v1.10.0-exp.1` akan terbit sebagai GitHub Release **non-prerelease**, jadi
-`releases/latest` — endpoint fallback yang dipakai `internal/updater` —
-menunjuk ke build experimental dan menawarkannya ke setiap user stabil. Tag
-Docker `1.10` juga ditimpa binary yang sama.
+Until now `release.yml` treated all `v*` tags the same: the tag
+`v1.10.0-exp.1` would be published as a GitHub Release **non-prerelease**, so
+`releases/latest` — the fallback endpoint used by `internal/updater` — would
+point at an experimental build and offer it to every stable user. The `1.10`
+Docker tags would also be overwritten with the same binary.
 
-Channel sekarang diturunkan dari tag itu sendiri — bukan dari branch, bukan
-dari commit, bukan dari input manual — sehingga apa yang di-tag itulah yang
-diterbitkan, dan bisa diaudit.
+The channel is now derived from the tag itself — not from the branch, not
+from the commit, not from manual input — so what is tagged is what is
+published, and it can be audited.
 
 | Tag | Channel | GitHub Release | Docker |
 |---|---|---|---|
 | `v1.10.0` | stable | final | `latest`, `1.10`, `1.10.0` |
 | `v1.10.0-exp.1` | experimental | **Pre-release** | `exp`, `1.10-exp`, `1.10.0-exp.1` |
 
-Second guard tetap `autoApplyAllowed` (#73): build experimental tidak akan
-dipasang otomatis di atas rilis final yang sedang berjalan, meski dicek manual.
+The second guard remains `autoApplyAllowed` (#73): experimental builds will not
+be installed automatically on top of a running final release, even if checked
+manually.
 
-**Job `channel` baru gagal cepat pada ketidaksesuaian sumber versi.** Ketiga
-kasus ini sebelumnya lolos diam-diam:
+**The new `channel` job fails fast on version-source mismatches.** All three of
+these cases previously slipped through silently:
 
-- `VERSION` tidak sama dengan tag → binary terbit melaporkan versi dirinya
-  sebagai versi lama, karena `make cross` dan Dockerfile sama-sama meng-embed
-  file `VERSION`.
-- Rilis stable tanpa bump `version.json` → rilis terbit tapi **tidak sampai ke
-  siapa pun**; semua install tetap melaporkan "up to date" versi sebelumnya.
-- Versi experimental bocor ke `version.json` → build experimental diblodir ke
-  seluruh install. Manifest itu dipoll `9router-go update` di channel stabil,
-  jadi ini harus menggagalkan rilis, bukan sekadar peringatan.
+- `VERSION` not equal to the tag → the published binary reports its own version
+  as the old version, because `make cross` and the Dockerfile both embed the
+  `VERSION` file.
+- A stable release without a `version.json` bump → the release is published but
+  **never reaches anyone**; every install keeps reporting the previous version
+  as "up to date".
+- An experimental version leaking into `version.json` → experimental builds are
+  blocked for every install. That manifest is polled by `9router-go update` on
+  the stable channel, so this must fail the release, not merely warn.
 
-`scripts/bump-version.sh` menulis `version.json` hanya untuk bump stabil, dan
-menyentuh `updater.CurrentVersion` untuk keduanya. Channel graduate = bump
-stabil menyusul; itulah yang memindahkan `version.json`, tag Docker `:latest`,
-dan penawaran update.
+`scripts/bump-version.sh` writes `version.json` only for stable bumps, and
+touches `updater.CurrentVersion` for both. Channel graduation = a stable bump
+following it; that's what moves `version.json`, the `:latest` Docker tag, and
+the update offer.
 
-**Bonus yang ketemu di tengah:** cabang `python3` pada `bump-version.sh` rusak
-dari sebelum channel ini ada. Di Windows, `command -v python3` **berhasil** untuk
-stub Microsoft Store, yang lalu keluar non-zero tanpa menjalankan apa pun — dan
-karena `set -e`, skrip **mati setelah `VERSION` ditulis**. `version.json` tetap
-di versi lama, gate versi di atas akan menolaknya, dan tidak ada yang tahu
-kenapa. Jalur `sed` sekarang dipakai langsung, jadi tanpa `python3` pun, dan
-hasilnya diverifikasi ulang dengan `grep` sebelum lanjut.
+**A bonus found along the way:** the `python3` branch in `bump-version.sh` has
+been broken since before this channel existed. On Windows, `command -v python3`
+**succeeds** for the Microsoft Store stub, which then exits non-zero without
+running anything — and because of `set -e`, the script **dies after `VERSION`
+is written**. `version.json` stays on the old version, the version gate above
+will reject it, and nobody knows why. The `sed` path is now used directly, so
+no `python3` is needed, and the result is re-verified with `grep` before
+continuing.
 
-**Verifikasi:** kedua skrip dieksekusi sungguhan terhadap salinan repo di
-`%TEMP%` — 10 kasus channel (7 lulus, 3 ditolak; termasuk manual dispatch dan
-prerelease multi-dash) dan 19 pemeriksaan `bump-version.sh` (stable,
-experimental, graduate setelah experimental, input tidak valid, dan jalur
-tanpa `python3`). YAML workflow diparse `js-yaml`; banner release note
-experimental juga dicek tidak punya indentasi yang akan merendernya jadi code
-block.
-
-
-### 🩺 Test throttle quota mengukur sesuatu yang tidak dijamin scheduler
-
-`TestHandleGetConnectionUsage_SpacesBurstAcrossConnections` dan
-`...SpacesAntigravityBurst` gagal kadang-kadang di mesin penuh: gap antar-read
-terukur 33ms terhadap lantai 40ms. Gate-nya sendiri benar.
-
-**Akar masalahnya bukan gate, tapi cara test mengukurnya.** `assertSpaced`
-menuntut setiap pasangan `time.Now()` di handler HTTP berjarak >= 40ms.
-Tapi jaraknya hanya dijamin di *reservation* — `fetchgate.reserve` menetapkan
-`start` lalu tidur sampai ke sana, jadi yang dijamin adalah durasi tidurnya,
-bukan wake-up tepat waktu. Selisih latensi bangun goroutine sebelumnya
-dibebankan ke gap berikutnya. `internal/fetchgate/gate_test.go` sudah
-mendokumentasikan ini dan menyelesaikan masalahnya di sisi sana: **bandingkan
-promised starts, bukan stopwatch**. Test di sana mencatat kasus yang sama —
-gate berperilaku benar tapi terbaca 39.43ms terhadap lantai 40ms, dan
-29.77ms terhadap 30ms, pada indeks yang tidak berpola. Solusinya menghapus
-suku itu, bukan membeli margin.
-
-**Perbaikannya mengukur hal yang sama dengan cara yang tidak bisa kalah.**
-Sekarang `assertSpaced` memakai **jarak rata-rata** (`span / (n-1)`), bukan
-tiap gap satu per satu. Noise latensi bangun yang tumpang tindih saling
-meniadakan, dan ini memang properti yang gate janjikan: N read harus berjarak
-sedikitnya N-1 reservation.
-
-Lantainya diletakkan **di antara** dua hasil, bukan di gap yang dikonfigurasi.
-Terukur di mesin ini dengan gate 40ms: read berpacing rata-rata ~39.8ms, yang
-tak berpacing ~4.3ms. Lantai 20ms memberi jarak ~5x dari yang tak berpacing
-dan ~2x dari yang berpacing, jadi assertion bertahan baik di bawah scheduler
-berbeban maupun di atasnya. Meminta tepat 40ms akan menguji ketepatan timer
-yang tidak pernah dijanjikan.
-
-Diverifikasi menangkap regresi: dengan gate dimatikan sementara (`New(0,0)`),
-kedua test gagal dengan jarak rata-rata 9.46ms dan 3.91ms — jauh di bawah
-lantai. Dengan gate dipulihkan, keduanya hijau berulang: 6x sendirian, 3x di
-bawah 5 suite penuh yang berjalan bersamaan.
+**Verification:** both scripts were actually executed against a copy of the repo
+in `%TEMP%` — 10 channel cases (7 passing, 3 rejected; including manual dispatch
+and multi-dash prereleases) and 19 `bump-version.sh` checks (stable,
+experimental, graduation after experimental, invalid input, and the path without
+`python3`). The workflow YAML was parsed with `js-yaml`; the experimental
+release-note banner was also checked to have no indentation that would render it
+as a code block.
 
 
-### 🩹 `text-error` / `bg-error` adalah utility mati — enam elemen diam-diam kehilangan warna error
+### 🩺 Quota throttle test measures something the scheduler doesn't guarantee
 
-Mengganti `text-error` di banner Usage & Analytics (#167) membuat warna
-keluar putih, bukan merah. Ternyata memang begitu: **tidak ada
-`--color-error` di CSS hasil build**, jadi `text-error`, `bg-error`, dan
-`border-error/40` adalah kelas yang tidak pernah menghasilkan deklarasi.
-Browser diam-diam jatuh ke warna teks yang diwarisi — putih di tema gelap.
-Enam elemen menulis "error" tapi tampil tanpanya.
+`TestHandleGetConnectionUsage_SpacesBurstAcrossConnections` and
+`...SpacesAntigravityBurst` fail intermittently on a loaded machine: the
+measured gap between reads is 33ms against a 40ms floor. The gate itself is
+correct.
 
-Lokasinya: link **Uninstall** dan pesan error uninstall di `TokenSaverView`,
-tombol konfirmasi `bg-error` di modal yang sama, pesan `saveError` di
-`CreateComboModal`, serta tiga titik status `bg-error` di Usage & Analytics
-(Recent Requests, tabel Details, dan header detail).
+**The root cause isn't the gate, but how the test measures it.** `assertSpaced`
+demands that every pair of `time.Now()` calls in the HTTP handler be >= 40ms
+apart. But the spacing is only guaranteed at *reservation* time —
+`fetchgate.reserve` sets `start` and then sleeps until it, so what is
+guaranteed is the sleep duration, not waking up exactly on time. The latency
+difference of the previous goroutine's wake-up is charged to the next gap.
+`internal/fetchgate/gate_test.go` already documents this and solves the problem
+on its side: **compare promised starts, not the stopwatch**. The tests there
+record the same case — the gate behaving correctly but reading 39.43ms against
+a 40ms floor, and 29.77ms against 30ms, at unpatterned indices. The solution is
+to remove that term, not to buy margin.
 
-**Cakupannya jauh lebih sempit dari dugaan awal.** Audit seluruh utility
-warna di CSS hasil build menunjukkan hanya `error` yang mati — `success`,
-`info`, `warning`, dan `danger` semuanya ada dan dipakai benar di banyak
-tempat. Hanya `error` yang tidak punya token.
+**The fix measures the same thing in a way that cannot lose.**
+Now `assertSpaced` uses the **average spacing** (`span / (n-1)`), rather than
+each gap individually. Overlapping wake-up latency noise cancels itself out,
+and that is indeed the property the gate promises: N reads must be at least
+N-1 reservations apart.
 
-Penggantian memakai token yang sudah ada, bukan konvensi `red-600`:
+The floor is placed **between** two results, not at the configured gap.
+Measured on this machine with a 40ms gate: paced reads average ~39.8ms, unpaced
+~4.3ms. A 20ms floor gives ~5x the unpaced spacing and ~2x the paced spacing,
+so the assertion holds well both under a loaded scheduler and above it.
+Demanding exactly 40ms would test timer precision that was never promised.
 
-| Site | classes | Alasan |
+Verified to catch the regression: with the gate temporarily disabled
+(`New(0,0)`), both tests fail with average spacings of 9.46ms and 3.91ms —
+far below the floor. With the gate restored, both are green repeatedly: 6x
+alone, 3x under 5 full suites running concurrently.
+
+### 🩹 `text-error` / `bg-error` are dead utilities — six elements silently losing their error color
+
+Replacing `text-error` in the Usage & Analytics banner (#167) made the color
+come out white, not red. Turns out that's just how it is: **there is no
+`--color-error` in the built CSS**, so `text-error`, `bg-error`, and
+`border-error/40` are classes that never produce a declaration. The browser
+silently falls back to the inherited text color — white in the dark theme.
+Six elements write "error" but display none of it.
+
+Where they are: the **Uninstall** link and uninstall error messages in
+`TokenSaverView`, the `bg-error` confirm button in that same modal, the
+`saveError` message in `CreateComboModal`, and the three `bg-error` status
+dots in Usage & Analytics (Recent Requests, the Details table, and the detail
+header).
+
+**The scope is far narrower than first suspected.** An audit of all color
+utilities in the built CSS shows only `error` is dead — `success`, `info`,
+`warning`, and `danger` are all present and correctly used in many places.
+Only `error` has no token.
+
+The replacement uses an existing token, not the `red-600` convention:
+
+| Site | classes | Reason |
 |---|---|---|
-| teks error (`TokenSaverView`, `CreateComboModal`) | `text-danger` | token repo, sudah dipakai variant `danger` di `Badge`/`Button` |
-| tombol konfirmasi | `bg-danger hover:bg-danger/80` | teks putih di atasnya 4.77:1 |
-| titik status | `bg-red-500` | lihat paragraf berikut |
+| error text (`TokenSaverView`, `CreateComboModal`) | `text-danger` | repo token, already used by the `danger` variant in `Badge`/`Button` |
+| confirm button | `bg-danger hover:bg-danger/80` | white text on top of it is 4.77:1 |
+| status dots | `bg-red-500` | see the following paragraph |
 
-Titik status tidak memakai `bg-danger` karena **gagal bar non-teks 3:1**.
-Diukur dari piksel nyata terhadap `bg-surface` yang benar-benar ada di
-belakangnya: `bg-danger` (#cf222e) hanya **2.83:1** — di bawah ambang.
-`bg-red-500` (251,44,54) memberi **3.97:1** dan lolos. Titik sukses
-`bg-success` (16,185,129) memberi 5.97:1, jadi kedua cabang benar-benar
-terpisah dan keduanya terbaca sebagai non-teks.
+The status dots don't use `bg-danger` because it **fails the 3:1 non-text bar**.
+Measured from real pixels against the `bg-surface` that actually exists behind
+them: `bg-danger` (#cf222e) is only **2.83:1** — below the threshold.
+`bg-red-500` (251,44,54) gives **3.97:1** and passes. The success dot
+`bg-success` (16,185,129) gives 5.97:1, so the two branches really are separate
+and both read as non-text.
 
-**Verifikasi:** `bun run build` bersih; `bun test` 219/219; `bun run
-ratchet:svelte` 0 unresolved identifier, 89 error (baseline 89, tidak naik).
-Bukti piksel di binary asli dengan `DATA_DIR` terisolasi: tabel Details dengan
-satu baris `success` dan satu baris `error` menghasilkan titik hijau
-(16,185,129) dan titik merah (251,44,54) — dua cabang benar-benar terpisah.
+**Verification:** `bun run build` clean; `bun test` 219/219; `bun runratchet:svelte` 0 unresolved identifier, 89 errors (baseline 89, not rising).
+Pixel evidence in the real binary with an isolated `DATA_DIR`: a Details table with
+one `success` row and one `error` row produces a green dot
+(16,185,129) and a red dot (251,44,54) — the two branches are truly separate.
 
-Catatan: audit pertama sempat menyimpulkan semua titik merah. Seed-nya
-meletakkan `status` di kolom, padahal `chat/usage.go` menyimpannya **di
-dalam blob `data`** — sehingga semua baris jatuh ke cabang gagal. Bukti baru
-memakai bentuk payload yang sama dengan penulis aslinya.
+Note: the first audit initially concluded that all dots were red. The seed
+put `status` in the column, whereas `chat/usage.go` stores it **inside the
+`data` blob** — so all rows fell into the failing branch. The new evidence
+uses the same payload shape as the original author.
 
-### 🩹 Kegagalan baca usage akhirnya terlihat di Usage & Analytics — bukan hanya di console
+### 🩹 The usage read failure finally shows up in Usage & Analytics — not just in the console
 
-Sejak #148 backend menjawab **500** alih-alih body berisi nol, tapi
-`AnalyticsView` masih menangkap kegagalan itu dengan `console.error` saja.
-Akibatnya user melihat angka periode lalu lalu tetap membacanya sebagai angka
-sekarang — persis masalah yang #148 perbaiki di server, belum sampai ke layar.
+Since #148 the backend answers **500** instead of a body containing zeros, but
+`AnalyticsView` still only caught that failure with `console.error`.
+As a result, users see last period's figures and still read them as this
+period's — exactly the problem #148 fixed on the server, which hadn't reached the screen.
 
-Kegagalan kini disimpan (`statsError`, `detailsError`) lewat `normalizeLastError`
-yang sudah dipakai `ProviderDetailView`, lalu ditampilkan sebagai `role="alert"`:
+The failure is now stored (`statsError`, `detailsError`) via `normalizeLastError`
+which `ProviderDetailView` already uses, then shown as `role="alert"`:
 
-- **Overview** — banner di bawah pemilih periode: "Usage could not be loaded. The
-  figures below are from the last successful read." plus pesan asli dari server
+- **Overview** — banner below the period selector: "Usage could not be loaded. The
+  figures below are from the last successful read." plus the original message from the server
   (`query recent usageDaily: SQL logic error: no such table: usageDaily (1)`),
-  dengan tombol **Retry** yang memanggil `loadStats` yang sama.
-- **Details** — banner di dalam card, tanpa tombol kedua karena **Refresh** di
-  header sudah aksi pemulihannya. Empty state juga berubah: "Nothing to show:
-  the read failed, so the request history is unknown" — bukan "No request logs
-  found", yang menyiratkan database memang kosong.
+  with a **Retry** button that calls the same `loadStats`.
+- **Details** — banner inside the card, without a second button because **Refresh** in
+  the header is already its recovery action. The empty state also changed: "Nothing to show:
+  the read failed, so the request history is unknown" — instead of "No request logs
+  found", which implied the database was actually empty.
 
-Pesan sengaja ditampilkan apa adanya: operatorlah yang tahu apa arti "no such
-table: usageDaily", dan menyembunyikannya di balik "Something went wrong" hanya
-membuat #148 mustahir ditelusuri ulang.
+The message is deliberately shown as-is: it's the operator who knows what "no such
+table: usageDaily" means, and hiding it behind "Something went wrong" only makes
+#148 harder to trace back.
 
-**Warna error:** `text-error` / `border-error/40` ternyata **utility mati** —
-tidak ada `--color-error` di CSS hasil build, jadi kelas itu diam-diam jatuh ke
-warna teks yang diwarisi (putih). `TokenSaverView` dan `CreateComboModal` punya
-latent bug yang sama. Warna di banner ini sekarang memakai `red-500/600` yang
-memang terdefinisi, mengikuti konvensi `ProviderDetailView` dan `UpdateModal`.
+**Error color:** `text-error` / `border-error/40` turned out to be a **dead utility** —
+there's no `--color-error` in the built CSS, so the class silently fell back to
+the inherited text color (white). `TokenSaverView` and `CreateComboModal` have the
+same latent bug. The colors in this banner now use `red-500/600` which is
+actually defined, following the `ProviderDetailView` and `UpdateModal` convention.
 
-**Verifikasi:** `bun run build` bersih; `bun test` 219/219; `bun run
-ratchet:svelte` 0 unresolved identifier, 89 error (baseline 89, tidak naik).
-Bukti visual di binary asli dengan DB terisolasi (`DATA_DIR` terpisah, tabel
-di-drop saat server jalan): periode sehat merender TOTAL REQUESTS 7 / $6.50
-tanpa banner; `period=7d` setelah `usageDaily` di-drop menampilkan banner
-dengan pesan server dan tombol Retry; `period=today` tetap 200 dan tidak
-menampilkan banner — jadi error hanya muncul di jalur yang benar-benar rusak.
-Details tab setelah `requestDetails` di-drop menampilkan banner + empty state
-yang benar. Setelah DB dipulihkan, Retry dan Refresh mengembalikan angka dan
-alert hilang.
+**Verification:** `bun run build` clean; `bun test` 219/219; `bun run
+ratchet:svelte` 0 unresolved identifier, 89 errors (baseline 89, not rising).
+Visual evidence in the real binary with an isolated DB (separate `DATA_DIR`, tables
+dropped while the server runs): a healthy period renders TOTAL REQUESTS 7 / $6.50
+with no banner; `period=7d` after dropping `usageDaily` shows the banner
+with the server message and a Retry button; `period=today` stays 200 and does not
+show the banner — so the error only appears on the path that is genuinely broken.
+The Details tab after dropping `requestDetails` shows the banner + correct empty state.
+After the DB is restored, Retry and Refresh bring back the figures and the
+alert disappears.
 
-Kontras diukur dari piksel nyata (CSS di-resolve ke sRGB lewat canvas), bukan
-dari nama token: ikon 5.24:1, heading 12.93:1, pesan 5.96:1 — semua di atas
-AA 4.5:1 untuk teks normal. Tombol Retry adalah `<button type="button">` asli
-yang terjangkau Tab dan punya `focus-visible` 2px; `role="alert"` dibaca
-screen reader saat banner muncul.
+Contrast was measured from real pixels (CSS resolved to sRGB via canvas), not
+from token names: icon 5.24:1, heading 12.93:1, message 5.96:1 — all above
+AA 4.5:1 for normal text. The Retry button is a real `<button type="button">`
+reachable via Tab and has a 2px `focus-visible`; `role="alert"` is read by
+screen readers when the banner appears.
 
 
-### 📝 Template issue & PR — pelapor dan kontributor punya guidenya
+### 📝 Issue & PR templates — reporters and contributors both have their guide
 
-Latar: repo ini belum punya `.github/ISSUE_TEMPLATE` maupun
-`.github/PULL_REQUEST_TEMPLATE`. Issue yang ada sekarang (#154, #155, #160,
-#165) kosong dari reproduksi, versi, dan OS, jadi triase dimulai dari "¿ini
-bug atau feature?" — dan PR squash-merge tanpa bukti bahwa gerbang yang
-dipakai CI pernah dijalankan lokal.
+Background: this repo didn't yet have `.github/ISSUE_TEMPLATE` nor
+`.github/PULL_REQUEST_TEMPLATE`. The existing issues (#154, #155, #160,
+#165) are empty of reproduction, version, and OS, so triage started from "is this
+a bug or a feature?" — and PRs are squash-merged without evidence that the gates
+used by CI were ever run locally.
 
-Perubahan:
-1. Empat template issue berbasis form (`.github/ISSUE_TEMPLATE/`):
+Changes:
+1. Four form-based issue templates (`.github/ISSUE_TEMPLATE/`):
    `bug_report.yml`, `feature_request.yml`, `parity_issue.yml`,
-   `question.yml`. Tiap field yang menentukan tetap punya default berbahasa
-   Inggris (`bug: `, `feat: `, `parity: `, `question: `) dan label yang
-   sudah ada di repo — `bug`, `enhancement`, `parity`, `question`.
-2. `parity_issue.yml` memuat tabel pemetaan upstream → `internal/...`
+   `question.yml`. Each decisive field still has an English default
+   (`bug: `, `feat: `, `parity: `, `question: `) and the labels
+   already present in the repo — `bug`, `enhancement`, `parity`, `question`.
+2. `parity_issue.yml` contains an upstream → `internal/...` mapping table
    (`open-sse/translator/` → `internal/translator/`, `src/app/api/` →
-   `internal/handlers/dashboard/`, dan seterusnya) plus field khusus
-   OmniRoute, karena keduanya adalah jalur-PR yang berbeda: parity wajib
-   menyertakan tautan commit/PR upstream, sedangkan request orisinal tidak.
-3. `bug_report.yml` meminta `9router-go version`, OS, dan potongan
-   `9router-go logs` / tab Translator → Console Logs, karena ketiganya
-   hampir selalu dibutuhkan untuk reproduksi.
-4. `PULL_REQUEST_TEMPLATE.md` memuat daftar gerbang yang *persis* sama
-   dengan job `test`, `integration`, dan `docker` di `.github/workflows/ci.yml`
+   `internal/handlers/dashboard/`, and so on) plus a field specific to
+   OmniRoute, because both are different PR paths: parity must
+   include an upstream commit/PR link, whereas an original request does not.
+3. `bug_report.yml` asks for `9router-go version`, OS, and a snippet of
+   `9router-go logs` / Translator tab → Console Logs, because all three
+   are almost always needed for reproduction.
+4. `PULL_REQUEST_TEMPLATE.md` contains a list of gates *exactly* the same
+   as the `test`, `integration`, and `docker` jobs in `.github/workflows/ci.yml`
    (`go vet`, `go test -count=1`, `make test-integration`, `bun test`,
-   `make vet-svelte`), ditambah checklist provider-isolation dari
-   `AGENTS.md` §3 dan kewajiban `Closes #<n>` di judul.
-5. `config.yml` mematikan issue kosong (`blank_issues_enabled: false`) dan
-   mengarahkan pertanyaan ke template question serta laporan keamanan ke
-   Security Advisories, bukan issue publik.
-6. Bagian **Contributing** di `README.md` meringkas keempat template dan
-   perintah verifikasinya.
+   `make vet-svelte`), plus a provider-isolation checklist from
+   `AGENTS.md` §3 and the requirement of `Closes #<n>` in the title.
+5. `config.yml` disables blank issues (`blank_issues_enabled: false`) and
+   routes questions to the question template and security reports to
+   Security Advisories, not public issues.
+6. The **Contributing** section in `README.md` summarizes the four templates and
+   their verification commands.
 
-Riset upstream: `decolua/9router` tidak punya template issue maupun PR
-(`gh api repos/decolua/9router/contents/.github` → hanya `dependabot.yml`;
-`contents/CONTRIBUTING.md` → 404), jadi ini tambahan lokal, bukan parity.
+Upstream research: `decolua/9router` has no issue or PR templates
+(`gh api repos/decolua/9router/contents/.github` → only `dependabot.yml`;
+`contents/CONTRIBUTING.md` → 404), so this is a local addition, not parity.
 
-### 🔄 Tujuh perbaikan parity dari PR upstream yang masih terbuka
+### 🔄 Seven parity fixes from still-open upstream PRs
 
-Tujuh perubahan independen, masing-masing menutup satu PR open di
-`decolua/9router` yang audit 2026-10-05 masih menyisakan gap di gateway ini.
-Semuanya data/kapabilitas/batas-API/UI — tidak ada perubahan kontrak yang
-belum dijanjikan ke klien.
+Seven independent changes, each closing one open PR in
+`decolua/9router` that the 2026-10-05 audit still left a gap in this gateway.
+All are data/capabilities/API-limits/UI — no contract change
+not yet promised to the client.
 
-**1. #4587 — Agnes 3.0 Pro + kapabilitas vision yang hilang.** `agnes-3.0-flash`
-sudah dilayani, tapi **keempat id Agnes tidak punya satu pun baris** di
-`modelCapabilities`, sehingga jatuh ke `DefaultCapabilities` dengan
-`Vision:false`. Akibatnya router mengganti gambar dengan placeholder **sebelum
-request dikirim** — input multimodal Agnes hilang diam-diam. Dua baris persis
-ditambahkan untuk id 3.0 (`Vision`, `Reasoning`, `openai`, 512k/65536) plus
-entri katalog `agnes-3.0-pro` (bentuk **bertitik** sesuai dokumen vendor —
-`agnes-30-pro` hanya slug URL) dan harga 0.45/0.90/0.045. Baris 2.5 sengaja
-tidak diberi angka: dokumen vendor yang upstream rujuk tidak memuatnya, dan
-menebaknya berarti mengarang limit (`AGENTS.md` §3 — tanpa glob `agnes*`,
-karena pola akan memegang seluruh keluarga termasuk id tak berdokumen).
+**1. #4587 — Agnes 3.0 Pro + the missing vision capability.** `agnes-3.0-flash`
+was already served, but **none of the four Agnes ids have a single row**
+in `modelCapabilities`, so they fall back to `DefaultCapabilities` with
+`Vision:false`. As a result the router replaces images with a placeholder **before
+the request is sent** — Agnes's multimodal input disappears silently. Two exact
+rows were added for the 3.0 ids (`Vision`, `Reasoning`, `openai`, 512k/65536) plus
+the `agnes-3.0-pro` catalog entry (the **dotted** form per vendor documentation —
+`agnes-30-pro` is only the URL slug) and prices 0.45/0.90/0.045. The 2.5 rows
+deliberately got no figures: the vendor doc that upstream references doesn't contain
+them, and guessing would mean inventing limits (`AGENTS.md` §3 — without a glob `agnes*`,
+because that pattern would capture the whole family including undocumented ids).
 
-**2. #4575 — model probe Anthropik yang sudah pension.**
-`claude-3-haiku-20240307` masih dipatok di dua tempat
-(`connection_probe.go`, `validate.go`). Diganti satu konstanta
-`AnthropicValidationModel` = `claude-haiku-4-5-20251001`, id yang sudah dipakai
-registry dan tabel harga — tidak ada id baru yang dikarang. Precedence
-`assignedModel` di kedua jalur tidak berubah.
+**2. #4575 — the retired Anthropic probe model.**
+`claude-3-haiku-20240307` is still pinned in two places
+(`connection_probe.go`, `validate.go`). Replaced by a single constant
+`AnthropicValidationModel` = `claude-haiku-4-5-20251001`, an id already used by the
+registry and price table — no new id invented. The `assignedModel` precedence
+in both paths is unchanged.
 
-**3. #4615 — node topologi free baru muncul setelah dipakai.** Peta Usage
-menyorot `FREE_DEFAULTS` tanpa syarat, jadi `opencode`/`nvidia`/`clinepass`
-tampil padahal tidak pernah meneruskan request. Sekarang loop itu di-gate
-`stats.byProvider[id].requests > 0`. `ProviderTopologyCard` juga kehilangan
-roster fallback hardcoded-nya dan memakai empty state — roster itu akan
-membangkitkan bug yang sama tepat di layar saat tidak ada yang dipakai.
+**3. #4615 — free topology nodes only appear after being used.** The Usage map
+highlights `FREE_DEFAULTS` unconditionally, so `opencode`/`nvidia`/`clinepass`
+showed even though they never forwarded a request. Now the loop is gated
+by `stats.byProvider[id].requests > 0`. `ProviderTopologyCard` also lost its
+hardcoded fallback roster and uses the empty state — that roster would
+reproduce the same bug right on screen when none is used.
 
-**4. #4614 — bayangan glob pada tabel thinking level.** `GetThinkingLevels`
-first-match-wins, dan baris `*deepseek-v4.*` yang tidak dikualifikasi berada
-**di atas** baris `codebuddy-cn`. Untuk id bertitik seperti
-`deepseek-v4.1-flash` glob generik menang lebih dulu, sehingga baris
-codebuddy-cn **mati** — picker menampilkan set effort yang salah untuk model
-codebuddy-cn. Dua baris persis codebuddy-cn dipindahkan ke atas glob generik
-sesuai koreksi upstream, bersama sisa sinkronisasi katalog codebuddy-cn ke
-snapshot server 2026-09-30 (glm-5.2/5.3, hy3, hy4-preview, kimi-k2.8-preview,
-maxOutput). *Residual:* baris `codebuddy-intl` yang mengalami bayangan glob
-yang sama tidak diubah upstream, jadi tidak diubah di sini juga — dicatat
-agar tidak dikira terlupakan.
+**4. #4614 — glob shadowing on the thinking level table.** `GetThinkingLevels`
+is first-match-wins, and the unqualified `*deepseek-v4.*` rows sit
+**above** the `codebuddy-cn` rows. For dotted ids like
+`deepseek-v4.1-flash` the generic glob wins first, so the
+codebuddy-cn rows are **dead** — the picker shows the wrong effort set for
+codebuddy-cn models. The exact two codebuddy-cn rows were moved above the generic glob
+per upstream's correction, along with the rest of the codebuddy-cn catalog sync to the
+2026-09-30 server snapshot (glm-5.2/5.3, hy3, hy4-preview, kimi-k2.8-preview,
+maxOutput). *Residual:* the `codebuddy-intl` rows hit by the same glob
+shadowing were not changed upstream, so they're not changed here either — noted
+so it isn't mistaken for being forgotten.
 
-**5. #4584 — normalisasi identifier model di batas API.** `models` pada combo
-create/update dibaca sebagai `any` lalu ditulis ulang apa adanya, sehingga
-objek legacy `{provider,model}` atau `{fullModel}` tersimpan utuh — dan
-`comboModels` hanya bisa membaca `[]string`, jadi baris itu tidak terbaca dan
-halaman Combos rusak. Sekarang dikoerensi jadi string `provider/model` dan
-entri cacat dijawab **400** `models must contain valid model IDs` lewat
-`handlerutil.WriteJSONError` yang sudah jadi konvensi 400 di paket itu. Baris
-lama **tidak** dimigrasi — sama seperti upstream.
+**5. #4584 — model identifier normalization at the API boundary.** `models` on the create/update
+combo is read as `any` then written back as-is, so
+legacy `{provider,model}` or `{fullModel}` objects are stored intact — and
+`comboModels` can only read `[]string`, so those rows weren't readable and the
+Combos page broke. It's now coerced into `provider/model` strings and malformed
+entries are answered **400** `models must contain valid model IDs` via
+`handlerutil.WriteJSONError`, which is already the 400 convention in that package. Old
+rows are **not** migrated — same as upstream.
 
-**6. #4564 — seed model free-tier tokenharbor.** Empat id gratis baru
+**6. #4564 — free-tier tokenharbor model seeds.** Four new free ids
 (`mimo-v2.6-flash:free`, `mimo-v2.5:free`, `qwen3.8-flash:free`,
-`deepseek-v4-flash:free`) ditambahkan. Dua di antaranya akan jatuh ke lantai
-128000/4096 tanpa baris limit, jadi `GetModelTokenLimits` dapat case
-1048576/131072 untuk keluarga `mimo-v2.5`/`v2.6` — angka itu milik upstream
-bukan karangan. Tidak ada baris harga yang ditambahkan: `tables.go` tidak
-kena, sama seperti upstream.
+`deepseek-v4-flash:free`) were added. Two of them would fall to the 128000/4096
+floor without limit rows, so `GetModelTokenLimits` gained the
+1048576/131072 case for the `mimo-v2.5`/`v2.6` families — those figures belong to
+upstream, not invented. No price rows were added: `tables.go` is
+untouched, same as upstream.
 
-**7. #4576 — strategi fallback eksplisit pada combo.** UI menghapus entri
-`settings.comboStrategies` setiap kali strategi terpilih dianggap "default",
-jadi memilih "Fallback" pada combo yang global-nya round-robin terlihat
-tersimpan padahal tidak — combo diam-diam mewarisi round-robin lagi. Ditambah
-nilai `inherit` sebagai **satu-satunya** cara menghapus override, dan
-`ComboCard` kini menampilkan nilai `inherit` apa adanya. Konsekuensinya di
-`ComboCard`: `isFusion` sengaja memakai strategi **efektif**
-(`effectiveComboStrategy`) agar combo yang mewarisi fusion tetap menampilkan
-ikon fusion, sementara nilai select tetap menampilkan `inherit`.
+**7. #4576 — explicit fallback strategy on combos.** The UI removed
+`settings.comboStrategies` entries every time a chosen strategy was considered "default",
+so picking "Fallback" on a combo whose global is round-robin looked
+stored when it wasn't — the combo silently inherited round-robin again. Added
+the `inherit` value as the **only** way to remove an override, and
+`ComboCard` now displays the `inherit` value as-is. The consequence in
+`ComboCard`: `isFusion` deliberately uses the **effective** strategy
+(`effectiveComboStrategy`) so combos that inherit fusion still show the
+fusion icon, while the select value still shows `inherit`.
 
-**Utang svelte-check juga berkurang dua.** `ComboCard` belum pernah punya
-entri baseline, jadi saat file itu disentuh tiga error lamanya ikut terhitung:
-`{#each}` yang mengadeklarasikan indeks tak terpakai, dan `title` pada dua
-ikon lucide yang bukan props-nya. Ketiganya diperbaiki (`aria-label` +
-`role="img"` sebagai pengganti `title`), bukan dilewati dengan menaikkan
-baseline — sesuai `AGENTS.md` §6.E. Baseline `svelte-check` turun dari **91 ke
+**The svelte-check debt also dropped by two.** `ComboCard` never had a
+baseline entry, so when that file was touched its three old errors were also counted:
+`{#each}` declaring an unused index, and `title` on two
+lucide icons that aren't its props. All three were fixed (`aria-label` +
+`role="img"` as a replacement for `title`), not bypassed by raising
+the baseline — per `AGENTS.md` §6.E. The `svelte-check` baseline dropped from **91 to
 89**.
 
-**Verifikasi:** `go vet ./internal/...` bersih · `go test -count=1 ./...`
-hijau · `bun run build` + `bun run ratchet:svelte` (0 unresolved identifier,
-89 error, baseline diturunkan) · `bun test` 219 pass. Smoke ke binary asli di
-`DATA_DIR` terisolasi: routing `bai/probe` dijawab upstream, dan
-`agnes/agnes-3.0-flash` dengan `image_url` meneruskan URL gambar utuh ke
-upstream — perilaku yang sebelumnya mustahil karena `Vision:false`.
+**Verification:** `go vet ./internal/...` clean · `go test -count=1 ./...`
+green · `bun run build` + `bun run ratchet:svelte` (0 unresolved identifier,
+89 errors, baseline lowered) · `bun test` 219 pass. Smoke test against the real binary in
+an isolated `DATA_DIR`: `bai/probe` routing is answered upstream, and
+`agnes/agnes-3.0-flash` with `image_url` forwards the full image URL to
+upstream — behavior that was previously impossible because of `Vision:false`.
 
-### 🔧 Semantik deklarasi tool & token reasoning — lima PR upstream digabung
+### 🔧 Tool declaration semantics & reasoning tokens — five upstream PRs merged
 
-Lima PR open yang semuanya menyentuh jalur yang sama: bagaimana gateway
-menerjemahkan deklarasi tool, pilihan tool, dan mengukur usage. Digabung
-karena memang satu change set yang saling menyentuh, bukan lima.
+Five open PRs that all touch the same path: how the gateway
+translates tool declarations, tool choice, and measures usage. Merged
+because it's genuinely one change set that touches each other, not five.
 
-**1. `strict` pada tool tidak pernah selamat (#4607, #4543, #4573).** Tidak ada
-field `strict` di tipe tool, dan tiga konverter membangun ulang objek tool dari
-nol — flag yang disetel klien hilang diam-diam. Sekarang `strict` diteruskan
-di kedua arah Claude <-> OpenAI dan di pembangun body Responses (dibaca datar
-dan bersarang). `strict:false` yang eksplisit **tetap dikirim**, karena itu
-Instruksi klien; absen berarti absen, bukan `false`.
+**1. `strict` on tools never survived (#4607, #4543, #4573).** There was no
+`strict` field on the tool type, and three converters rebuilt the tool object from
+scratch — a flag set by the client was lost silently. Now `strict` is passed through
+in both directions Claude <-> OpenAI and in the Responses body builder (read flat
+and nested). Explicit `strict:false` **is still sent**, because it is a
+client instruction; absence means absence, not `false`.
 
-Satu penyimpangan dari bentuk paling sederhana: `strict` non-boolean
-(`"strict":"yes"`) **tidak** menggagalkan request. Upstream membacanya di balik
-jaring pengaman `typeof === "boolean"`, jadi nilai lain diabaikan diam-diam;
-`*bool` biasa akan menolak seluruh body. `ClaudeTool.UnmarshalJSON` karena itu
-memakai decoder dua tahap yang membuang nilai non-boolean.
+One deviation from the simplest form: non-boolean `strict`
+(`"strict":"yes"`) does **not** fail the request. Upstream reads it behind a
+`typeof === "boolean"` safety net, so other values are silently ignored;
+a plain `*bool` would reject the whole body. `ClaudeTool.UnmarshalJSON` therefore
+uses a two-stage decoder that discards non-boolean values.
 
-**2. Kebijakan satu panggilan tool (#4581).** `parallel_tool_calls:false`
-dipetakan ke `tool_choice.disable_parallel_tool_use` dan sebaliknya, tanpa
-menimpa pilihan tool bernama yang eksplisit (`{"type":"tool",name}` harus tetap
-utuh), dan tanpa efek sama sekali bila tidak ada tool. Field
-`parallel_tool_calls` yang OpenAI-only dihapus sebelum body dikirim ke Claude.
+**2. Single tool-call policy (#4581).** `parallel_tool_calls:false`
+is mapped to `tool_choice.disable_parallel_tool_use` and vice versa, without
+overwriting an explicit named tool choice (`{"type":"tool",name}` must remain
+intact), and with no effect at all when there are no tools. The OpenAI-only
+`parallel_tool_calls` field is removed before the body is sent to Claude.
 
-**3. `tool_choice:"none"` berarti "bolos", bukan "auto" (#4577).** Arah
-OpenAI -> Claude menghapus field-nya, sehingga model bebas memanggil tool
-padahal klien melarangnya; arah lain mengembalikan `"auto"`. Dua arah kini
-menjadi `{type:"none"}` <-> `"none"`.
+**3. `tool_choice:"none"` means "skip", not "auto" (#4577).** The
+OpenAI -> Claude direction dropped the field, so the model was free to call tools
+even though the client forbade it; the other direction returned `"auto"`. Both directions
+now become `{type:"none"}` <-> `"none"`.
 
-**4. `response_format` hilang diam-diam (#4547, issue #2896).** Saat membuat
-body Responses, `response_format` tidak dipetakan ke `text.format`, dan
-allowlist Codex membuangnya — jadi klien yang meminta keluaran terstruktur
-mendapat teks bebas. Sekarang `json_schema` dipetakan dengan nama, skema, dan
-`strict` yang **default true** (`strict !== false`), `json_object` tetap
-`json_object`, dan kasus tanpa `response_format` tidak menambahkan field
-`text` sama sekali. `json_schema` tanpa `schema` sengaja dibuang — persis
-penjaga upstream.
+**4. `response_format` lost silently (#4547, issue #2896).** When building
+Responses bodies, `response_format` wasn't mapped to `text.format`, and the
+Codex allowlist dropped it — so a client requesting structured output
+got free text. Now `json_schema` is mapped with name, schema, and
+`strict` that **defaults to true** (`strict !== false`), `json_object` stays
+`json_object`, and a case without `response_format` adds no `text`
+field at all. `json_schema` without a `schema` is deliberately dropped — exactly
+the upstream guard.
 
-*Tambahan yang ditemukan saat verifikasi:* jalur tool berbentuk datar di
-builder Responses tidak pernah menyalin `parameters`, sehingga skema tool
-hilang. Diperbaiki di sisi yang sama.
+*Addition found during verification:* the flat tool path in the Responses
+builder never copied `parameters`, so the tool schema
+was lost. Fixed on the same side.
 
-**5. `reasoning_tokens` hilang di tiga titik (#4574, sisa #4551/#4536).**
-Pembaca usage Responses-native tak pernah membaca `OutputTokensDetails` —
-padahal struct-nya sudah ada dan sudah dipancarkan di sisi outbound;
-`ProcessCodexEvent` membangun usage tanpa `completion_tokens_details`; dan
-`tokensJSON` yang ditulis ke `usageHistory` tidak menyertakan token reasoning
-meski sudah ditagih dan sudah ditulis ke `requestDetails`. Ketiga diperbaiki,
-dan build `chunkUsage` diekstrak jadi `codexUsageMap` supaya cabangnya tetap
-ringkas. Sisi cache yang sudah benar tidak disentuh.
+**5. `reasoning_tokens` lost at three points (#4574, remainder of #4551/#4536).**
+The Responses-native usage reader never read `OutputTokensDetails` —
+even though the struct already existed and was already emitted on the outbound side;
+`ProcessCodexEvent` built usage without `completion_tokens_details`; and
+the `tokensJSON` written to `usageHistory` didn't include reasoning tokens
+even though they were already billed and already written to `requestDetails`. All three fixed,
+and the `chunkUsage` build was extracted into `codexUsageMap` so its branch stays
+concise. The already-correct cache side was untouched.
 
-Samping itu dua perbaikan yang ikut terbawa:
-- **Nama tool untuk Gemini** (#4589) kini diambil dari panggilan yang
-  dijawabnya sendiri, bukan peta id->nama lintas percakapan. `tool_call_id`
-  hanya unik dalam satu giliran, jadi id yang diulang membuat hasil tool
-  giliran awal membawa nama tool giliran akhir.
-- **Finish reason Gemini** (#4571) dipetakan lewat satu fungsi bersama, jadi
-  `MAX_TOKENS` -> `length` dan `SAFETY`/`RECITATION` -> `content_filter` di
-  jalur streaming maupun non-streaming. Sebelumnya keduanya memetakan
-  `SAFETY` ke `"stop"`.
+Alongside that, two fixes carried along:
+- **Gemini tool names** (#4589) are now taken from the call
+  it answers, not from a cross-conversation id->name map. `tool_call_id`
+  is only unique within one turn, so a repeated id made an earlier turn's
+  tool result carry the later turn's tool name.
+- **Gemini finish reason** (#4571) is mapped through one shared function, so
+  `MAX_TOKENS` -> `length` and `SAFETY`/`RECITATION` -> `content_filter` on
+  both streaming and non-streaming paths. Previously both mapped
+  `SAFETY` to `"stop"`.
 
-**Tiga jalur ini dikunci di level integrasi.** Unit test
-`ensureMessagesMaxTokens` membuktikan konverternya benar, tapi tidak
-menyelubungi apa yang terjadi di sekitarnya: pemilihan koneksi,
-`isAnthropicUpstream` (yang hanya true untuk base URL `api.anthropic.com`
-asli atau relay edge), token saver, dan pembentukan URL. Di situlah
-instruksi klien bisa hilang sementara setiap test konverter tetap hijau.
+**These three paths are locked at the integration level.** The unit test
+`ensureMessagesMaxTokens` proves the converter is right, but it doesn't
+cover what happens around it: connection selection,
+`isAnthropicUpstream` (which is only true for a real `api.anthropic.com`
+base URL or an edge relay), token saver, and URL construction. That's where
+client instructions can be lost while every converter test stays green.
 
-`internal/integration/anthropic_tool_policy_test.go` menutupnya lewat router
-produksi dengan upstream palsu: `parallel_tool_calls:false` harus sampai
-sebagai `disable_parallel_tool_use:true`, pilihan tool bernama harus tetap
-utuh sekaligus pembatasan ikut terpasang, dan `tool_choice:"none"` tidak
-boleh hilang di jalan ke Claude. Ketiganya sudah diverifikasi menangkap
-regresi — dengan `withDisabledParallelToolUse` dinonaktifkan sementara, dua
-pertama gagal dengan pesan yang tepat.
-
-
-**Verifikasi:** `go vet ./internal/...` bersih · `go test -count=1 ./...`
-hijau · `go test -tags=integration ./internal/integration/...` hijau ·
-`bun run build` + `bun run ratchet:svelte` (0 unresolved identifier, 89 error,
-sama dengan baseline yang diturunkan #163) · `bun test` 219 pass.
+`internal/integration/anthropic_tool_policy_test.go` closes it through the production
+router with a fake upstream: `parallel_tool_calls:false` must arrive
+as `disable_parallel_tool_use:true`, a named tool choice must remain
+intact while the restriction is also attached, and `tool_choice:"none"` must
+not get lost on the way to Claude. All three were verified to catch
+regressions — with `withDisabledParallelToolUse` temporarily disabled, the
+first two failed with the right messages.
 
 
+**Verification:** `go vet ./internal/...` clean · `go test -count=1 ./...`
+green · `go test -tags=integration ./internal/integration/...` green ·
+`bun run build` + `bun run ratchet:svelte` (0 unresolved identifier, 89 errors,
+same as the baseline lowered by #163) · `bun test` 219 pass.
+### 🩺 `go test -race ./...` becomes the CI gate — it never ran before, and it caught one flaky test
 
+The `test` job runs `go test ./...` **without** `-race`, and the only job
+using `-race` is `Integration tests`, whose coverage is limited to
+`./internal/integration/...`. That means `internal/db`, `internal/usagetracker`,
+`internal/proxy`, and `internal/handlers/chat` — where the gateway's shared
+state lives (usage tracker ring buffer, per-handler sticky state, SSE pumps,
+connection cooldown maps, pool-id cache in `Repo`) — have never been tested
+under the race detector in CI. A data race could merge green and then surface
+on a user's machine during real use.
 
-### 🩺 `go test -race ./...` jadi gerbang CI — sebelumnya tidak pernah jalan, dan menemukan satu test flaky
+The new `race` job runs `go test -race -count=1 -timeout 10m ./...`.
+It is separated from the `test` job rather than added as a step, so that the
+race report gets its own name in the checks list and two failures (a flaky
+assertion vs a real race) don't cover for each other in a single log. The
+local `make test-race` target runs the same command; `-race` needs cgo, so it
+is deliberately left out of `make test`/`test-short`.
 
-Job `test` menjalankan `go test ./...` **tanpa** `-race`, dan satu-satunya job
-yang memakai `-race` adalah `Integration tests`, yang cakupannya hanya
-`./internal/integration/...`. Artinya `internal/db`, `internal/usagetracker`,
-`internal/proxy`, dan `internal/handlers/chat` — tempat shared state gateway
-berada (ring buffer usage tracker, sticky state per handler, pompa SSE, peta
-cooldown koneksi, cache pool-id di `Repo`) — belum pernah diuji race detector
-di CI. Data race bisa merge hijau lalu muncul di mesin user saat dipakai.
+Two things made this possible now: the upstream live tests have already been
+separated from CI via the opt-in `9ROUTER_LIVE_TESTS=1` (#150) — previously
+`go test -race ./...` failed because `space-bunny-free` hit a rate limit, not
+because of the gateway — and `web/dist` is built first in the same step as the
+`integration` job, because `internal/app` → `web` → `web/embed.go` fails to
+compile without the SPA.
 
-Job baru `race` menjalankan `go test -race -count=1 -timeout 10m ./...`.
-Dipisah dari job `test`, bukan menambah step, supaya laporan race bernama sendiri
-di daftar check dan dua kegagalan (assertion flaky vs race asli) tidak saling
-menutupi di satu log. Target lokal `make test-race` menjalankan perintah yang
-sama; `-race` butuh cgo, jadi sengaja tidak ikut `make test`/`test-short`.
+Adding this gate immediately uncovered one bug:
+`TestTranscribeGeminiLive_PartialTranscriptOnClose` failed roughly **1 in 12
+runs**. Its fake server just closes the socket right after reading one frame,
+while the client is still writing its audio chunks — so the close can precede
+the transcription delta that was just sent, and a case that should pass becomes
+`socket closed before completion`. The fake server now reads until the
+`clientContent.turnComplete` frame (the point where the client is already
+waiting in its read loop) before sending the delta and closing. It fails
+deterministically at `-count=3`, and now shows 0 failures across 20
+consecutive runs. No production code changed.
 
-Dua hal yang membuat ini mungkin sekarang: test live upstream sudah dipisah dari
-CI lewat opt-in `9ROUTER_LIVE_TESTS=1` (#150) — sebelumnya `go test -race
-./...` gagal karena `space-bunny-free` kena rate limit, bukan karena gateway —
-dan `web/dist` dibangun lebih dulu di step yang sama seperti job `integration`,
-karena `internal/app` → `web` → `web/embed.go` gagal compile tanpa SPA.
+**Verification:** `go build ./...` and `go vet ./...` are clean; `go test ./...`
+is green; `go test -count=8 -run TestTranscribeGeminiLive ./internal/handlers/media/`
+is green; 20 consecutive runs of the formerly flaky test are green. The workflow
+file is run by an ubuntu runner (cgo is available there), not a local machine
+without a C compiler.
 
-Menambah gerbang ini langsung membongkar satu bug:
-`TestTranscribeGeminiLive_PartialTranscriptOnClose` gagal sekitar **1 dari 12
-run**. Fake server-nya menutup socket begitu saja setelah membaca satu frame,
-padahal client masih menulis chunk audio-nya — jadi close bisa mendahului delta
-transkripsi yang baru dikirim, dan kasus yang harusnya lulus jadi `socket
-closed before completion`. Fake server kini membaca sampai frame
-`clientContent.turnComplete` (titik di mana client sudah menunggu di read loop)
-sebelum mengirim delta dan menutup. Deterministik gagal di `-count=3`, dan
-sekarang 0 gagal di 20 run beruntun. Tidak ada kode produksi yang berubah.
-
-**Verifikasi:** `go build ./...` dan `go vet ./...` bersih; `go test ./...`
-hijau; `go test -count=8 -run TestTranscribeGeminiLive ./internal/handlers/media/`
-hijau; 20 run beruntun test yang tadinya flaky hijau. Berkas workflow
-dijalankan runner ubuntu (cgo tersedia di sana), bukan mesin lokal tanpa C
-compiler.
-
-### 🩹 Pembacaan usage yang gagal diam-diam dilaporkan sebagai nol — dashboard Usage & Analytics
+### 🩹 Failed usage reads silently reported as zero — Usage & Analytics dashboard
 
 `GetUsageDailyRecent`, `GetUsageHistorySince`, `GetRecentUsageHistory`,
-`GetRequestDetailsPaged`, dan `ListProxyPools` mengiterasi cursor
-`database/sql` tanpa mengecek `rows.Err()`, dan error `rows.Scan()` di
-`continue`-kan. Cursor yang terpotong di tengah, atau baris yang nilainya tidak
-cocok dengan kolom hasil scan, hilang tanpa satu pun jejak — sementara pemanggil
-menerima list yang lebih pendek dengan `err == nil`.
+`GetRequestDetailsPaged`, and `ListProxyPools` iterate `database/sql` cursors
+without checking `rows.Err()`, and `rows.Scan()` errors are `continue`d. A
+cursor truncated midway, or a row whose values don't match the scanned
+columns, vanishes without a trace — while the caller receives a shorter list
+with `err == nil`.
 
-`HandleUsageStats` membaca ketiga sumber usage di balik `if err == nil { ... }`
-tanpa cabang `else`, jadi kegagalan baca apa pun — tabel hilang, file tak
-terbaca, error scan — menghasilkan HTTP 200 berisi `{"totalRequests":0,
-"totalCost":0, ...}`. Dashboard merender itu sebagai "tidak ada traffic pada
-periode ini", dan tidak ada log yang mencatat kesalahannya. Angka nol karena
-sistemnya rusak terlihat identik dengan angka nol karena memang sepi.
+`HandleUsageStats` reads all three usage sources behind `if err == nil { ... }`
+with no `else` branch, so any read failure — missing table, unreadable file,
+scan error — yields HTTP 200 containing `{"totalRequests":0,
+"totalCost":0, ...}`. The dashboard renders that as "no traffic in this
+period", and no log records the mistake. A zero number because the system is
+broken looks identical to a zero number because it really is quiet.
 
-Kelima reader kini mengembalikan error yang dibungkus `%w` plus `rows.Err()`,
-dan ketiga pemanggilan di `HandleUsageStats` menulis 500 dengan pesan asalnya.
-`GetRequestDetailsPaged` juga tidak lagi menelan kegagalan `COUNT(*)` menjadi
-`total: 0` — halaman yang berisi baris tetapi melaporkan nol termasuk kelas
-"nol yang berarti rusak" yang sama. Test regresi menutup kedua arah: baris yang
-tidak bisa discan harus menghasilkan error (sebelumnya list terpotong tanpa
-error), dan pembacaan sehat tetap mengagregasi seperti sebelumnya.
+The five readers now return `%w`-wrapped errors plus `rows.Err()`, and the
+three calls in `HandleUsageStats` write a 500 with their original message.
+`GetRequestDetailsPaged` also no longer swallows `COUNT(*)` failures into
+`total: 0` — a page that contains rows but reports zero belongs to the same
+"zero that means broken" class. Regression tests cover both directions: a row
+that cannot be scanned must produce an error (previously the list was
+truncated without an error), and healthy reads still aggregate as before.
 
-Tiga penyesuaian dari review:
+Three adjustments from review:
 
-1. **`ListProxyPools` tidak gagal pada `testStatus` NULL.** Kolom itu nullable
-   di skema bersama dan database yang sama ditulis dashboard Next.js, jadi
-   pool yang belum pernah diprobe wajar punya NULL. Memindainya sebagai
-   `string` biasa akan membuat seluruh tab Proxy Pools 500 karena satu baris
-   yang hanya belum punya status. Nilainya kini dibaca sebagai `""`; kegagalan
-   scan lain tetap fatal.
-2. **`GetRecentUsageHistory` di `usagetracker` dicatat.** Ring buffer memang
-   best-effort — pembacaan yang gagal membiarkannya kosong dan push berikutnya
-   mengisinya — tapi sekarang menulis `log.Warn`, karena ring kosong tanpa jejak
-   tidak bisa dibedakan dari instalasi baru.
-3. **`rows.Err()` dibungkus dengan konteks pemanggil**, konsisten dengan
-   error `rows.Scan()` di fungsi yang sama (§4.E).
+1. **`ListProxyPools` does not fail on a NULL `testStatus`.** That column is
+   nullable in the shared schema and the very same database is written by the
+   Next.js dashboard, so a pool that has never been probed reasonably has
+   NULL. Scanning it as an ordinary `string` would make the entire Proxy Pools
+   tab 500 because of a single row that merely has no status yet. Its value is
+   now read as `""`; other scan failures remain fatal.
+2. **`GetRecentUsageHistory` in `usagetracker` was logged.** The ring buffer
+   really is best-effort — a failed read leaves it empty and the next push
+   fills it — but it now writes `log.Warn`, because an empty ring with no
+   trace cannot be told apart from a fresh install.
+3. **`rows.Err()` is wrapped with caller context**, consistent with the
+   `rows.Scan()` errors in the same functions (§4.E).
 
-### 🧹 `repos.go` dipecah per tabel; resolusi strategi combo jadi satu helper
+### 🧹 `repos.go` split per table; combo strategy resolution became one helper
 
-`internal/db/repos.go` tumbuh jadi 647 LoC dan melewati batas keras 400 (§4.D).
-Isinya dipecah sesuai tabel yang diquery, supaya setiap file berada di bawah
-target 300 LoC: `apikeys.go` (apiKeys), `connections.go` (providerConnections),
-`providernodes.go` (providerNodes), `combos.go` (combos), dan `aliases.go` (scope
-`kv`: modelAliases, customModels). `repos.go` sendiri kini hanya memegang tipe
-`Repo` beserta daftarnya.
+`internal/db/repos.go` had grown to 647 LoC and crossed the hard 400 limit
+(§4.D). Its contents are split according to the table being queried, so that
+each file sits under the 300 LoC target: `apikeys.go` (apiKeys),
+`connections.go` (providerConnections), `providernodes.go` (providerNodes),
+`combos.go` (combos), and `aliases.go` (`kv` scope: modelAliases, customModels).
+`repos.go` itself now only holds the `Repo` type and its lists.
 
-Daftar kolom `providerConnections` yang diulang di tiga literal SELECT dan daftar
-kolom `providerNodes`/`combos` kini menjadi konstanta + satu fungsi scan per
-tabel, dipakai bersama oleh pembaca baris tunggal dan pembaca list, sehingga
-urutan kolom tidak bisa lagi melenceng di satu jalur saja. Empat cabang
-WHERE pada `GetProviderConnections` (provider × activeOnly) diratakan jadi satu
-`switch` alih-alih dua `if` bersarang.
+The `providerConnections` column list that was repeated across three SELECT
+literals and the `providerNodes`/`combos` column lists are now constants plus
+one scan function per table, shared by the single-row and list readers, so the
+column order can no longer skew in only one path. The four WHERE branches in
+`GetProviderConnections` (provider × activeOnly) are flattened into a single
+`switch` instead of two nested `if`s.
 
-Resolusi strategi combo yang identik diulang tiga kali (`GetComboByName`,
-`GetComboById`, `GetCombos`) kini satu helper `resolveComboStrategy`. Perilaku
-tidak berubah: default `"fallback"`, override per combo menang atas setelan
-global, dan pembacaan setelan yang gagal membiarkan defaultnya tetap.
+The identical combo strategy resolution repeated three times (`GetComboByName`,
+`GetComboById`, `GetCombos`) is now one `resolveComboStrategy` helper.
+Behavior is unchanged: the `"fallback"` default, per-combo overrides win over
+global settings, and a failed settings read leaves its default in place.
 
-**Verifikasi:** API package `db` tidak berubah — 100 signature `func`
-sebelum dan sesudah split identik (`go doc -all ./internal/db` di bandingkan
-sebelum/sesudah). `go build ./...` dan `go vet ./...` bersih, `go test ./...`
-hijau, `go test -tags=integration ./internal/integration/...` hijau (69,7s +
-0,2s).
+**Verification:** the package `db` API is unchanged — the 100 `func`
+signatures before and after the split are identical (`go doc -all
+./internal/db` compared before/after). `go build ./...` and `go vet ./...` are
+clean, `go test ./...` is green, `go test -tags=integration
+./internal/integration/...` is green (69.7s + 0.2s).
 
-### 🔧 Backup dashboard kembali ke JSON yang dirapikan, seperti 9router upstream
+### 🔧 Dashboard backup returns to tidied JSON, like 9router upstream
 
-Latar (issue #160): tombol **Download Backup** di Settings menawarkan `.zip`
-berisi JSON. Upstream `9router` mengunduh JSON mentah — `JSON.stringify(payload,
-null, 2)` — dengan nama `9router-backup-<stamp>.json`, jadi backup di sini tidak
-bisa dibaca tanpa ekstrak dulu dan menyimpang dari parity.
+Background (issue #160): the **Download Backup** button in Settings offers a
+`.zip` containing JSON. Upstream `9router` downloads raw JSON —
+`JSON.stringify(payload, null, 2)` — named `9router-backup-<stamp>.json`, so
+the backup here can't be read without extracting it first and diverges from
+parity.
 
-- `HandleExportDatabase` (`internal/handlers/dashboard/settings.go`) tidak lagi
-  membungkus payload ke arsip. Responsnya JSON dua-spasi lekukan
-  (`JSON.stringify(x, null, 2)`) dengan
+- `HandleExportDatabase` (`internal/handlers/dashboard/settings.go`) no longer
+  wraps the payload in an archive. Its response is two-space indented JSON
+  (`JSON.stringify(x, null, 2)`) with
   `Content-Disposition: attachment; filename="9router-backup-<date>.json"`.
-  Cabang `?format=zip` dan deteksi `Accept: application/zip` dihapus karena
-  export kini hanya punya satu bentuk.
-- `handlerutil.WriteJSONIndented` (baru) menulis JSON berlekuk memakai
-  `jsontext.WithIndent("  ")` sambil tetap memakai `Deterministic(true)` yang
-  sudah dipakai seluruh respons dashboard.
-- `ProfileSettingsView.svelte` mengunduh `/api/settings/database` tanpa
-  `?format=zip`, menamai berkas `.json`, dan teks konfirmasinya menyebut
+  The `?format=zip` branch and the `Accept: application/zip` detection were
+  removed because the export now has only one shape.
+- `handlerutil.WriteJSONIndented` (new) writes indented JSON using
+  `jsontext.WithIndent("  ")` while still using the `Deterministic(true)` that
+  every dashboard response already uses.
+- `ProfileSettingsView.svelte` downloads `/api/settings/database` without
+  `?format=zip`, names the file `.json`, and its confirmation text mentions
   `(.json file)`.
-- **Import tetap menerima arsip `.zip` lama**: `HandleImportDatabase` masih
-  mendeteksi magic `PK\x03\x04` dan mengekstrak `*.json` di dalamnya, jadi
-  backup yang diunduh sebelum perubahan ini tetap bisa dipulihkan.
-- Test: `TestHandleExportDatabase_PrettyJSON` (Content-Type JSON, filename
-  `.json`, ada lekukan) menggantikan round-trip zip, dan
-  `TestHandleImportDatabase_LegacyZipArchive` memastikan import zip lama masih
-  bekerja.
+- **Import still accepts old `.zip` archives**: `HandleImportDatabase` still
+  detects the `PK\x03\x04` magic and extracts the `*.json` inside it, so
+  backups downloaded before this change remain restorable.
+- Tests: `TestHandleExportDatabase_PrettyJSON` (JSON Content-Type, `.json`
+  filename, indentation present) replaces the zip round-trip, and
+  `TestHandleImportDatabase_LegacyZipArchive` ensures old zip imports still
+  work.
 
-### 🏷️ Provider kustom bisa memakai URL suffix sendiri — `openai-compatible-chat-<suffix>`, bukan `<uuid>`
+### 🏷️ Custom providers can use their own URL suffix — `openai-compatible-chat-<suffix>`, not `<uuid>`
 
-Latar (issue #155): setiap node OpenAI/Anthropic-compatible yang dibuat dari
-dashboard memakai `generateId()` untuk ekor provider id-nya, jadi id yang
-tersimpan selalu `openai-compatible-chat-46b3f72a-5618-4485-8527-0eb4424e85db`.
-Id itu bukan label: ia jadi prefix model di `/v1/models`, kolom `provider` di
-`providerConnections`/`usageHistory`/`requestDetails`, dan key seluruh baris
-`customModels` milik node tersebut — sehingga tercatat di mana-mana dan tidak
-bisa dibaca.
+Background (issue #155): every OpenAI/Anthropic-compatible node created from
+the dashboard uses `generateId()` for the tail of its provider id, so the
+stored id is always
+`openai-compatible-chat-46b3f72a-5618-4485-8527-0eb4424e85db`. That id is not a
+label: it becomes the model prefix in `/v1/models`, the `provider` column in
+`providerConnections`/`usageHistory`/`requestDetails`, and the key for the
+entire set of `customModels` rows belonging to that node — so it is recorded
+everywhere and can't be read.
 
-Perubahan (`internal/handlers/dashboard/provider_node_id.go`, baru):
-1. `POST /api/provider-nodes` menerima `urlSuffix`. Kalau diisi, ekor id memakai
-   nilai itu (`openai-compatible-chat-bai`); kalau kosong, uuid acak upstream
-   tetap dipakai, jadi tidak ada node lama yang berubah bentuk.
-2. Aturan sufiks: `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. `/` ditolak karena
-   `resolution.go` memecah alamat model dengan `SplitN(entry, "/", 2)` — sufiks
-   ber-/ akan merusak routing; sufiks yang diawali literal provider
-   (`openai-compatible`, `anthropic-compatible`, `custom-embedding`) ditolak
-   karena seluruh pembaca id adalah `strings.HasPrefix`.
-3. Id yang sudah dipakai node lain dijawab **409**
-   `PROVIDER_NODE_ID_CONFLICT`, bukan 500 dari constraint SQLite.
-4. `GET /api/provider-nodes` melaporkan `urlSuffix` + `urlSuffixGenerated`,
-   sehingga field di dashboard menampilkan nilai yang benar untuk node uuid
-   (kosong + generated) alih-alih memaksa user "memperbaiki" uuid.
-5. Field `Custom URL Suffix` di `AddCompatibleNodeModal` (dengan preview id
-   lengkap) dan `EditCompatibleNodeModal`.
+Changes (`internal/handlers/dashboard/provider_node_id.go`, new):
+1. `POST /api/provider-nodes` accepts `urlSuffix`. If filled, the id tail uses
+   that value (`openai-compatible-chat-bai`); if empty, upstream's random uuid
+   is still used, so no existing node changes shape.
+2. Suffix rule: `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. `/` is rejected because
+   `resolution.go` splits model addresses with `SplitN(entry, "/", 2)` — a
+   `/`-bearing suffix would break routing; suffixes beginning with a literal
+   provider name (`openai-compatible`, `anthropic-compatible`,
+   `custom-embedding`) are rejected because every id reader uses
+   `strings.HasPrefix`.
+3. An id already used by another node is answered with **409**
+   `PROVIDER_NODE_ID_CONFLICT`, not a 500 from the SQLite constraint.
+4. `GET /api/provider-nodes` reports `urlSuffix` + `urlSuffixGenerated`, so the
+   dashboard field displays the correct value for uuid nodes (empty + generated)
+   instead of forcing the user to "fix" a uuid.
+5. The `Custom URL Suffix` field in `AddCompatibleNodeModal` (with a preview of
+   the full id) and `EditCompatibleNodeModal`.
 
-**Rename beserta seluruh kakinya** (`internal/db/provider_node_rename.go`, baru).
-`urlSuffix` yang diubah pada edit memindahkan `providerNodes.id`, dan id itu
-storage key dari semua yang dimiliki node tersebut. `RenameProviderNode`
-memindahkan semuanya dalam **satu transaksi**: `providerConnections.provider`,
-key **dan** nilai `kv.customModels`, key `kv.disabledModels`, target
-`kv.modelAliases`, member `combos.models`, kolom `provider` di `usageHistory` +
-`requestDetails`, dan map ber-key provider di blob `settings`
-(`providerStrategies`, `providerOverrides`). Tanpa ini, satu edit akan
-meninggalkan node tanpa kredensial, tanpa model buatan, dan tanpa riwayat.
-`MediaKindView` yang semula memanggil modal dengan prop `nodeType`/`onCreated`
-yang tidak pernah ada ikut diperbaiki ke `type`/`onSubmit`.
+**Rename along with all its legs** (`internal/db/provider_node_rename.go`,
+new). A `urlSuffix` changed on edit moves `providerNodes.id`, and that id is
+the storage key for everything owned by that node. `RenameProviderNode` moves
+all of it in **one transaction**: `providerConnections.provider`, the key **and**
+value of `kv.customModels`, the `kv.disabledModels` key, `kv.modelAliases`
+targets, `combos.models` members, the `provider` column in `usageHistory` +
+`requestDetails`, and the provider-keyed maps in the `settings` blob
+(`providerStrategies`, `providerOverrides`). Without this, a single edit would
+leave the node without credentials, without custom models, and without history.
+`MediaKindView`, which previously called the modal with `nodeType`/`onCreated`
+props that never existed, is also fixed to `type`/`onSubmit`.
 
-Satu koreksi sekuler di jalur yang sama: `isCompatibleProviderID` kini juga
-menerima `custom-embedding-`. Sebelumnya node embedding yang id-nya
-di-generating dengan `openai-compatible-chat-<uuid>` lolos sebagai
-"compatible", dan begitu `urlSuffix` membuat id-nya jadi `custom-embedding-*`,
-jalur tersebut akan fell through ke katalog registry dan `/v1/models`
-mengiklankan provider yang tidak dilayani node itu.
+One secular correction in the same path: `isCompatibleProviderID` now also
+accepts `custom-embedding-`. Previously embedding nodes whose id was generated
+as `openai-compatible-chat-<uuid>` passed as "compatible", and once `urlSuffix`
+made their id `custom-embedding-*`, that path would fall through to the
+registry catalog and `/v1/models` would advertise a provider the node doesn't
+serve.
 
-**Verifikasi:** `go vet ./...` bersih · `go test -count=1 ./...` hijau ·
-`bun run build` + `bun run ratchet:svelte` (0 unresolved identifier, 91 error —
-1 di bawah baseline, `bun run ratchet:svelte -- --update` disertakan) ·
-`bun test` 210 pass. Smoke ke binary asli di `DATA_DIR` terisolasi: create
-dengan sufiks menghasilkan `openai-compatible-chat-bai`, tanpa sufiks tetap
-uuid, 409 saat bentrok, 400 untuk sufiks ber-`/`, lalu **rename** `bai` →
-`bai-v2` yang terbukti ikut memindahkan koneksi, `customModels`,
-`disabledModels`, alias, member combo, `usageHistory`, `requestDetails`, dan
-kedua map `settings` — `POST /v1/chat/completions {"model":"bai/glm-5.3"}`
-lalu dijawab upstream (`"content":"routed"`) dan tercatat di `usageHistory`
-dengan provider `openai-compatible-chat-bai-v2`, sementara `/v1/models`
-tetap mengiklankan `bai/glm-5.3` tanpa membocorkan id mentah.
+**Verification:** `go vet ./...` clean · `go test -count=1 ./...` green ·
+`bun run build` + `bun run ratchet:svelte` (0 unresolved identifiers, 91 errors —
+1 below baseline, `bun run ratchet:svelte -- --update` included) ·
+`bun test` 210 pass. Smoke test against the real binary in an isolated
+`DATA_DIR`: creating with a suffix yields `openai-compatible-chat-bai`, without
+a suffix still yields a uuid, 409 on collision, 400 for a `/`-bearing suffix,
+then a **rename** `bai` → `bai-v2` is proven to also move connections,
+`customModels`, `disabledModels`, aliases, combo members, `usageHistory`,
+`requestDetails`, and both `settings` maps — `POST /v1/chat/completions
+{"model":"bai/glm-5.3"}` is then answered upstream (`"content":"routed"`) and
+recorded in `usageHistory` with provider `openai-compatible-chat-bai-v2`, while
+`/v1/models` keeps advertising `bai/glm-5.3` without leaking the raw id.
 
-### ✨ `feat(connections): ganti API key langsung dari modal Edit Connection` (issue #154)
+### ✨ `feat(connections): change API key directly from the Edit Connection modal` (issue #154)
 
-Modal Edit Connection di tab **Providers** dan di **Quota Tracker** sekarang
-punya kolom API. Isian kosong berarti "memakai key yang tersimpan", bukan
-"hapus key" — itu yang membuat modal ini bisa dipakai untuk rotasi tanpa
-menyalin key lama ke input teks.
+The Edit Connection modal in the **Providers** tab and in **Quota Tracker**
+now has an API field. An empty input means "use the stored key", not "delete
+the key" — that's what lets this modal be used for rotation without copying
+the old key into a text input.
 
-Kolomnya menampilkan key yang tersimpan sebagai mask (`sk-smo…inal`) dari
-`apiKeyMasked`, hasil baru di `GET /api/connections`. Mask, bukan key mentah,
-karena endpoint itu terjangkau dengan API key klien berprivat rendah: key
-mentah di sana berarti satu key bocor bisa mencuri seluruh secret. Bentuk
-mask-nya sama dengan `maskClientKey` yang sudah dipakai untuk daftar
-`/api/keys`.
+The field shows the stored key as a mask (`sk-smo…inal`) from `apiKeyMasked`,
+a new addition to `GET /api/connections`. A mask, not the raw key, because that
+endpoint is reachable with a low-privilege client API key: a raw key there
+means one leaked key could steal every secret. The shape of the mask is the
+same as `maskClientKey` already used for the `/api/keys` listing.
 
-`PUT /api/connections/{id}` sekarang menerima `apiKey`:
+`PUT /api/connections/{id}` now accepts `apiKey`:
 
-- `apiKey` tidak ada atau kosong setelah `TrimSpace` → key tersimpan utuh.
-- `apiKey` terisi → hanya `data.apiKey` yang ditulis. `authToken`,
-  `providerSpecificData`, dan status probe tidak disentuh.
+- `apiKey` absent or empty after `TrimSpace` → the stored key stays intact.
+- `apiKey` filled → only `data.apiKey` is written. `authToken`,
+  `providerSpecificData`, and probe status are untouched.
 
-Handler sengaja **tidak** mengubah `testStatus`/`lastError` saat rotasi.
-Mengganti key bukan bukti koneksi kembali hidup — satu-satunya buktinya
-jawaban provider, jadi modal yang meng-clear-nya setelah probe benar-benar
-menjawab, dengan mengirim `testStatus: "active"` secara eksplisit (parity
-dengan `EditConnectionModal` upstream).
+The handler deliberately **does not** change `testStatus`/`lastError` during
+rotation. Replacing a key is not evidence that the connection is alive again —
+the only evidence is the provider's answer, so the modal clears them only
+after a probe that actually answers, by explicitly sending `testStatus:
+"active"` (parity with upstream's `EditConnectionModal`).
 
-Modal menjalankan probe `/api/providers/validate` sebelum menulis:
+The modal runs a `/api/providers/validate` probe before writing:
 
-- key ditolak provider → **tidak disimpan**, modal tetap terbuka dengan
-  alasannya. Key yang tersimpan adalah satu-satunya yang menjaga akun ini di
-  rotasi, jadi key yang salah akan diam-diam dikeluarkan.
-- provider tanpa probe (`supported: false`) → bukan verdict, key tetap
-  disimpan tanpa `testStatus` yang dikoreksi.
-- field OAuth disembunyikan: yang dirotasi access token, bukan stuff yang
-  diketik user.
+- key rejected by the provider → **not saved**, the modal stays open with the
+  reason. The stored key is the only thing keeping this account alive during
+  the rotation, so a wrong key would be silently retired.
+- provider without a probe (`supported: false`) → not a verdict, the key is
+  still saved without a corrected `testStatus`.
+- OAuth fields hidden: it's the access token being rotated, not something the
+  user typed.
 
-Logika bersama ada di `web/src/components/connections/credential.ts`
-(placeholder, pemangkasan whitespace, pemetaan verdict, probe) supaya kedua
-modal tidak mengulang aturan yang sama.
+The shared logic lives in `web/src/components/connections/credential.ts`
+(placeholder, whitespace trimming, verdict mapping, probe) so that both modals
+don't repeat the same rules.
 
 Upstream parity: `decolua/9router` `src/shared/components/EditConnectionModal.js`
-— label "Leave blank to keep the current API key.", tombol Check via
-`/api/providers/validate`, dan `testStatus` hanya di-set saat validasi sukses.
+— the label "Leave blank to keep the current API key.", a Check button via
+`/api/providers/validate`, and `testStatus` only set when validation succeeds.
 
-### ♻️ `refactor(web): satu modal Edit Connection untuk Providers dan Quota Tracker` (issue #158)
+### ♻️ `refactor(web): one Edit Connection modal for Providers and Quota Tracker` (issue #158)
 
-Modal Edit Connection sebelumnya ada dua salinan: inline di
-`ProviderDetailView.svelte` dan inline di `QuotaTrackerView.svelte`,
-masing-masing dengan sembilan variabel `edit*` sendiri.
-`checkReplacementKey()`, `resetKeyCheck()`, blok kolom API, dan struktur
-tombol Test/Save/Cancel-nya sama persis — jadi setiap aturan baru harus
-ditulis dua kali, dan PR #154 memang menulisnya dua kali.
+The Edit Connection modal previously had two copies: inline in
+`ProviderDetailView.svelte` and inline in `QuotaTrackerView.svelte`, each with
+its own nine `edit*` variables. `checkReplacementKey()`, `resetKeyCheck()`, the
+API field block, and its Test/Save/Cancel button structure are exactly the same
+— so every new rule had to be written twice, and PR #154 indeed wrote it
+twice.
 
-Keduanya sekarang memanggil `EditConnectionModal.svelte`, satu-satunya
-implementasi. Yang tersisa di tiap pemanggil cuma opening dan refresh:
-`onClose` menutup, `onSave` menulis lalu me-refresh. State `edit*`, probe, dan
-markup berpindah ke komponen itu.
+Both now call `EditConnectionModal.svelte`, the single implementation. What
+remains in each caller is just the opening and the refresh: `onClose` closes,
+`onSave` writes then refreshes. The `edit*` state, the probe, and the markup
+move into that component.
 
-Tiga perbedaan yang dulu tersembunyi jadi satu perilaku. Semuanya memilih
-varian yang lebih aman, jadi ini refactor yang tidak sepenuhnya netral:
+Three differences that were hidden become one behavior. All of them pick the
+safer variant, so this is not a fully neutral refactor:
 
-- **Rename di Quota Tracker tidak lagi diam-diam menulis priority.** Modal itu
-  selalu mengirim `priority`, sehingga baris dengan `priority` NULL (yang
-  di-seed `1` di input) berubah jadi rank 1 hanya karena user mengganti nama —
-  bentrok dengan baris lain yang sudah memegang rank 1, dan resurrecting
-  pasangan yang tidak bisa di-reorder. Modal Providers sudah sejak awal memakai
-  `seededPriority` untuk mengabaikan priority yang tidak berubah; sekarang
-  keduanya.
-- **Kegagalan Save di Quota Tracker tidak lagi hilang diam-diam.** Errornya
-  hanya masuk `console.error`, jadi user menekan Save pada modal yang menolak
-  menutup tanpa penjelasan. Sekarang lewat `onSaveError`.
+- **Rename in Quota Tracker no longer silently writes priority.** That modal
+  always sent `priority`, so rows with a NULL `priority` (which is seeded as `1`
+  in the input) became rank 1 merely because the user changed the name —
+  clashing with other rows already holding rank 1, and resurrecting pairs that
+  couldn't be reordered. The Providers modal has used `seededPriority` from
+  the start to ignore unchanged priorities; now both do.
+- **Save failures in Quota Tracker no longer vanish silently.** Its error only
+  went to `console.error`, so a user pressing Save on a modal that refused
+  would close it without explanation. Now it goes through `onSaveError`.
 
-  `onSaveError` sendiri sengaja dibuat **wajib** di `EditConnectionModal`,
-  bukan opsional. Sempat opsional, dan Quota Tracker melewatkannya — jadi
-  klaim "sudah diperbaiki" di atas benar secara harfiah dan salah secara
-  perilaku: error tetap hilang, dan ini bukan lagi sekadar soal `console`.
-  Wajib di tipe berarti pemanggil yang melewatkannya jadi error kompilasi,
-  bukan satu lagi bug senyap yang lolos review.
+  `onSaveError` itself is deliberately made **required** in
+  `EditConnectionModal`, not optional. It was optional for a while, and Quota
+  Tracker skipped it — so the "already fixed" claim above is literally true
+  and behaviorally wrong: the error still disappeared, and this is no longer
+  merely about `console`. Required in the type means a caller that skips it
+  becomes a compile error, not yet another silent bug slipping through review.
 
-- **Escape menutup modal.** `AddConnectionModal` dan delapan modal lain sudah
-  punya ini (parity `Modal` upstream); kedua salinan lama tidak. Sekarang
-  terpusat di satu tempat, jadi keyboard user tidak tersangkut di modal yang
-  tidak bisa ditutup tanpa mouse.
-- **`max="100"` pada input priority Quota Tracker dihapus.** Tidak ada batas
-  priority di backend maupun di modal Providers; batas itu hanya menahan form
-  di satu tempat dan tidak konsisten dengan tetangganya.
+- **Escape closes the modal.** `AddConnectionModal` and eight other modals
+  already had this (parity with upstream's `Modal`); the two old copies didn't.
+  Now it's centralized in one place, so a user's keyboard no longer gets stuck
+  in a modal that can't be closed without a mouse.
+- **`max="100"` on the Quota Tracker priority input was removed.** There is no
+  priority limit in the backend nor in the Providers modal; that limit only
+  held the form back in one place and was inconsistent with its neighbors.
 
-Styling tombol Test disatukan ke paket ikon `science` milik Quota Tracker;
-label teksnya tetap berbeda (`Test` vs `Test Connection`) lewat prop
-`testLabel`, karena kedua halaman memang punya kebiasaan visual sendiri.
+The Test button styling is unified into Quota Tracker's `science` icon package;
+its text label stays different (`Test` vs `Test Connection`) via the
+`testLabel` prop, because the two pages genuinely have their own visual habits.
 
-Di luar scope, seperti di issue: `MediaProviderDetail.svelte` (modal edit
-koneksi media, tanpa key dan priority) dan `AddConnectionModal.svelte`.
-
+Out of scope, as in the issue: `MediaProviderDetail.svelte` (media connection
+edit modal, without key and priority) and `AddConnectionModal.svelte`.
 
 ## [v1.9.9] - 2026-10-05
 
-### 🐛 `TestGateAcquire_JitterOnlyWidensTheGap` masih flaky — stopwatch diukur dari slot sebelumnya
+### 🐛 `TestGateAcquire_JitterOnlyWidensTheGap` is still flaky — the stopwatch is measured from the previous slot
 
-PR #146 menaikkan floor 30ms → 40ms dan changelog-nya menyatakan test itu
-dipertahankan karena "tidak ada bukti ia perlu disentuh". Di branch ini
-buktinya ada, dan kali ini bukan margin yang kurang: `go test -race -shuffle=on
-./...` gagal
+PR #146 raised the floor 30ms → 40ms and its changelog states that the test
+was kept because "there is no evidence it needs to be touched". On this branch
+there is evidence, and this time it is not about insufficient margin: `go test -race -shuffle=on
+./...` fails
 
 ```
 fetchgate (4 passed, 1 failed)
@@ -821,369 +825,286 @@ fetchgate (4 passed, 1 failed)
      gate_test.go:115: slot 5 waited 39.4323ms, want at least the 40ms floor
 ```
 
-`go test ./internal/fetchgate/ -race -count=8` sendirian hijau, jadi ini
-beban-suite, bukan gate. Akar masalahnya batas stopwatch: loop mengukur
-`time.Since(start)` dengan `start := time.Now()` yang diambil **setelah**
-`Acquire` sebelumnya kembali. Floor gate adalah properti *reservasi* —
-`reserve` menerbitkan `start`, lalu tidur sampai `start` — sehingga slot yang
-dijanjikan selalu berjarak `minGap`, kecuali latensi bangun goroutine
-sebelumnya ikut dipotong dari gap berikutnya.
-Angka `start` diukur setelah itu, jadi latensi yang tidak ada hubungannya
-dengan gate ikut terpotong dari gap yang sedang diuji. Itu juga alasan indeks
-gagalnya selalu di tengah-tengah dan berpindah-pindah: hanya soal seberapa
-lambat goroutine sebelumnya kebetulan dibangunkan.
+`go test ./internal/fetchgate/ -race -count=8` passes on its own, so this is
+suite load, not the gate. The root cause is the stopwatch boundary: the loop
+measures `time.Since(start)` with `start := time.Now()` taken **after** the
+previous `Acquire` returned. The gate's floor is a *reservation* property —
+`reserve` publishes `start`, then sleeps until `start` — so a promised slot is
+always `minGap` away, unless the previous goroutine's wake-up latency gets
+subtracted from the next gap.
+The `start` number is measured after that, so latency unrelated to the gate
+also gets subtracted from the gap under test. That is also why the failing
+index is always somewhere in the middle and keeps moving: it only depends on
+how slowly the previous goroutine happened to be woken up.
 
-Menaikkan floor lagi hanya memperpanjang test, tidak memperbaiki ukurannya.
-Pengukuran dipindah ke sumber yang benar — start yang dijanjikan gate:
+Raising the floor again only makes the test longer, it does not fix its
+measurement. The measurement is moved to the right source — the start that the
+gate promises:
 
-1. `TestGateAcquire_JitterOnlyWidensTheGap` membandingkan `start` yang
-   dikeluarkan `reserve`, jadi bebas-noise total, sambil tetap memverifikasi
-   assertion aslinya: tidak ada gap di bawah floor, dan minimal satu gap
-   lebih lebar dari floor sehingga jitter benar-benar ikut bermain. Draw
-   semua nol delapan kali berpeluang `(1/61)^8`, jadi run tanpa jitter sama
-   sekali bukan hasil nyata.
-2. `TestGateAcquire_FloorHoldsWithoutJitter` baru, deterministik: dengan
-   jitter dimatikan tiap gap harus **tepat** `minGap`. Inilah yang menangkap
-   floor yang dihapus — test ber-jitter tidak bisa, karena draw di bawah
-   `minGap` itu sah.
-3. `TestGateAcquire_WaitsOutTheReservedSlot` baru: `Acquire` benar-benar
-   menunggu slot yang ia reservasi. Stopwatch-nya dimulai **sebelum**
-   reservasi, jadi satu-satunya yang bisa hilang adalah timer yang terlalu
-   cepat — dan timer Go terlambat, tidak pernah cepat — sehingga arah
-   pengukuran ini aman untuk diasersikan persis.
+1. `TestGateAcquire_JitterOnlyWidensTheGap` compares against the `start`
+   emitted by `reserve`, so it is completely noise-free, while still verifying
+   the original assertion: no gap below the floor, and at least one gap
+   wider than the floor so that jitter genuinely comes into play. Drawing
+   all zeros eight times has a `(1/61)^8` chance, so a run without jitter is
+   not a real outcome at all.
+2. `TestGateAcquire_FloorHoldsWithoutJitter`, new, deterministic: with
+   jitter disabled every gap must be **exactly** `minGap`. This is what catches
+   a removed floor — the jittered test cannot, because draws below
+   `minGap` are legitimate there.
+3. `TestGateAcquire_WaitsOutTheReservedSlot`, new: `Acquire` genuinely
+   waits out the slot it reserved. Its stopwatch starts **before** the
+   reservation, so the only thing that can be lost is a timer that fires too
+   fast — and Go timers run late, never fast — so this measurement direction is
+   safe to assert exactly.
 
-`internal/fetchgate/gate.go` tidak tersentuh: nol perubahan produksi.
+`internal/fetchgate/gate.go` is untouched: zero production changes.
 
-**Verifikasi:** `go vet ./internal/fetchgate/` bersih ·
-`go test ./internal/fetchgate/ -race -count=3` hijau ·
-`go test ./internal/fetchgate/ -race -count=5 -p 16` hijau. Kekuatan test
-dibuktikan dengan sengaja menghapus floor
-(`g.next = start.Add(g.jitter())`), yang membuat keempat test gagal —
-termasuk `JitterOnlyWidensTheGap` di `slot 3` dengan
-`32.86ms < 40ms`, dan itu pun deterministik: pengukurannya tidak lagi
-bergantung pada penjadwalan.
+**Verification:** `go vet ./internal/fetchgate/` clean ·
+`go test ./internal/fetchgate/ -race -count=3` green ·
+`go test ./internal/fetchgate/ -race -count=5 -p 16` green. The strength of the test
+is proven by deliberately removing the floor
+(`g.next = start.Add(g.jitter())`), which makes all four tests fail —
+including `JitterOnlyWidensTheGap` at `slot 3` with
+`32.86ms < 40ms`, and that too deterministically: its measurement no longer
+depends on scheduling.
 
-### 🏷️ Nama provider asli tampil di tab Details pada dashboard Usage
+### 🏷️ Real provider names now show in the Details tab on the Usage dashboard
 
-Latar: kolom `Provider` di tab **Details** (`/dashboard/usage`) menampilkan
-`item.provider` mentah. Untuk provider kustom, nilai itu id sintetis
-(`openai-compatible-chat-<uuid>`), jadi tabel terbaca
-`openai-compatible-chat-46b3f72a-5618-4485-8527-0eb4424e85db` alih-alih nama
-yang dikonfigurasi user (`tiarina`).
+Background: the `Provider` column in the **Details** tab (`/dashboard/usage`) displays
+the raw `item.provider`. For custom providers that value is a synthetic id
+(`openai-compatible-chat-<uuid>`), so the table reads
+`openai-compatible-chat-46b3f72a-5618-4485-8527-0eb4424e85db` instead of the name
+the user configured (`tiarina`).
 
-Parity: upstream memakai `getProviderName(detail.provider, cache)` di
-`RequestDetailsTab.js`, dengan cache gabungan `AI_PROVIDERS` +
-`providerNodes` (`node.id → node.name`). Sumber nama itu persis yang sudah
-dipakai kartu topologi di port ini (`AnalyticsView.topologyName`).
+Parity: upstream uses `getProviderName(detail.provider, cache)` in
+`RequestDetailsTab.js`, with a merged cache of `AI_PROVIDERS` +
+`providerNodes` (`node.id → node.name`). That name source is exactly what the
+topology cards on this port already use (`AnalyticsView.topologyName`).
 
-Perbaikan (`web/src/components/analytics/`):
-1. `providerDisplayName()` baru di `types.ts` — node kustom menang lebih dulu,
-   lalu nama katalog, lalu id apa adanya.
-2. `RequestDetailsTab` menerima `providerNodes` dan memakai nama itu di badge
-   tabel **dan** di header modal inspector. Id mentah tetap tersedia sebagai
-   `title` (tooltip) dan di panel Payload, jadi tidak ada informasi yang hilang.
-3. Kolom breakdown di tab Overview **tidak** disentuh — `provider` di sana
-   sudah di-resolve server (`nodeNameMap` di
+Fix (`web/src/components/analytics/`):
+1. New `providerDisplayName()` in `types.ts` — a custom node wins first,
+   then the catalog name, then the bare id.
+2. `RequestDetailsTab` receives `providerNodes` and uses that name in the table
+   badge **and** in the inspector modal header. The raw id stays available as
+   `title` (tooltip) and in the Payload panel, so no information is lost.
+3. The breakdown column in the Overview tab is **not** touched — `provider`
+   there is already resolved server-side (`nodeNameMap` in
    `internal/handlers/usage_stats.go:191`).
 
-**Verifikasi:** `bun test` (210 pass, termasuk 4 kasus baru untuk
-`providerDisplayName`), `bun run ratchet:svelte` (0 unresolved identifier,
-92 error = baseline), dan smoke ke instance dengan 9.862 baris `requestDetails`:
-baris yang sebelumnya terbaca `openai-compatible-chat-46b3f72a-…` kini
-`tiarina` / `OpenCode Zen`, icon `/providers/oai-cc.png` tetap terpakai.
+**Verification:** `bun test` (210 pass, including 4 new cases for
+`providerDisplayName`), `bun run ratchet:svelte` (0 unresolved identifiers,
+92 errors = baseline), and a smoke run against an instance with 9,862
+`requestDetails` rows: rows that previously read `openai-compatible-chat-46b3f72a-…` now
+read `tiarina` / `OpenCode Zen`, and the `/providers/oai-cc.png` icon is still used.
 
-### 🩺 Penolakan proxy egress kini terlihat di Usage & Analytics
+### 🩺 Proxy egress rejections are now visible in Usage & Analytics
 
-Latar: `tryForwardWithConnection` gagal **terlalu awal** saat pool proxy yang
-terikat tidak bisa melayani traffic (`internal/proxy/connections_proxy.go:88-98`
-— pool tidak ada / nonaktif / tanpa url). Jalur itu `return` di
-`fallback.go:410` **sebelum** `LogFailure` dan sebelum `TrackPending` menutup
-dengan `isError`, sehingga penolakan `502 proxy_error` tidak tercatat di mana
-pun: nol baris `usageHistory` (benar), tapi juga nol baris
-`requestDetails`. Di dashboard `/dashboard/usage`, request tersebut sama
-sekali tidak terlihat — user cuma melihat HTTP 502 di client tanpa jejak.
+Background: `tryForwardWithConnection` fails **too early** when a bound proxy pool
+cannot serve traffic (`internal/proxy/connections_proxy.go:88-98`
+— pool missing / disabled / without a url). That path `return`s at
+`fallback.go:410` **before** `LogFailure` and before `TrackPending` closes
+with `isError`, so the `502 proxy_error` rejection is recorded nowhere: zero
+`usageHistory` rows (correct), but also zero
+`requestDetails` rows. On the `/dashboard/usage` dashboard those requests are
+not visible at all — the user only sees an HTTP 502 in the client with no trace.
 
-Parity: upstream mencatat kondisi yang sama. Kondisi identik di Next.js
-*throw* dari dalam `executor.execute` (`open-sse/utils/proxyFetch.js`,
-"Proxy required but failed"), sehingga catch di `open-sse/handlers/chatCore.js`
-menulis `saveRequestDetail({status: "error"})` **dan**
-`trackPendingRequest(..., false, true)`. 9router-go sekarang mencatat keduanya.
+Parity: upstream records the same condition. The identical condition in Next.js
+*throws* from inside `executor.execute` (`open-sse/utils/proxyFetch.js`,
+"Proxy required but failed"), so the catch in `open-sse/handlers/chatCore.js`
+writes `saveRequestDetail({status: "error"})` **and**
+`trackPendingRequest(..., false, true)`. 9router-go now records both.
 
-Perbaikan (`internal/handlers/chat/fallback.go`):
-1. `fwdErr` di-assign sebelum `return`, jadi defer `TrackPending` melaporkan
-   `isError=true` dan kartu topologi menandai provider sebagai error
-   terakhir (`usagetracker.ErrorProvider`, jendela 10 detik).
-2. Satu baris `LogFailure` — tetap hanya `requestDetails` dengan
-   `status="error"`; agregat Overview (`usageHistory`/`usageDaily`) tidak
-   disentuh, sesuai upstream yang `saveRequestUsage()` hanya dipanggil dari
+Fix (`internal/handlers/chat/fallback.go`):
+1. `fwdErr` is assigned before the `return`, so the `TrackPending` defer reports
+   `isError=true` and the topology card marks the provider as the last error
+   (`usagetracker.ErrorProvider`, 10-second window).
+2. A single `LogFailure` line — still only `requestDetails` with
+   `status="error"`; the Overview aggregates (`usageHistory`/`usageDaily`) are
+   not touched, matching upstream where `saveRequestUsage()` is only called from
    `buildOnStreamComplete`.
-3. Body error **di-marshal**, bukan dirangkai string. Sebelumnya
-   `[]byte(`{"error":{...,"message":"` + clientErr.Error() + `"}}`)` — pool id
-   milik user, dan tanda kutip di dalamnya membuat payload tidak lagi JSON
-   valid. Akibatnya `extractErrorText` gagal parse dan baris tersimpan
-   berbunyi `"request failed"`; sekarang alasannya terbaca apa adanya.
+3. The error body is **marshaled**, not string-concatenated. Previously
+   `[]byte(`{"error":{...,"message":"` + clientErr.Error() + `"}}`)` — the pool id
+   belongs to the user, and quotes inside it made the payload no longer valid
+   JSON. As a result `extractErrorText` failed to parse and the stored row
+   read `"request failed"`; now the reason reads as-is.
 
-Jalur **tidak** diubah: `no API key found` (`fallback.go:260`) juga tidak
-mencatat baris, dan itu memang sesuai upstream — `src/sse/handlers/chat.js:248`
- mengembalikan `errorResponse(404, "No active credentials for provider")`
- tanpa `saveRequestDetail`.
+The **unmodified** path: `no API key found` (`fallback.go:260`) also does not
+record a row, and that matches upstream — `src/sse/handlers/chat.js:248`
+returns `errorResponse(404, "No active credentials for provider")`
+without `saveRequestDetail`.
 
-**Verifikasi:** `internal/handlers/chat/proxy_egress_failure_test.go`
-(table-driven; pool nonaktif + pool id berisi tanda kutip) membuktikan body ke
-client valid JSON dan menyebut poolnya, tepat 1 baris `requestDetails`
- `status='error'`, 0 baris `usageHistory`. `go vet ./internal/handlers/chat/`
- bersih · `go test -race ./internal/handlers/chat/ ./internal/proxy/...` hijau.
- Smoke live di port 20141 (binary baru, DATA_DIR kosong): request
- `deepseek/deepseek-chat` ke koneksi terikat pool yang dihapus → client
- menerima `502 {"error":{"type":"proxy_error","message":"proxy pool
- \"pool-\\\"gone\\\"\" is assigned but does not exist"}}`,
- `/api/usage/request-details` melaporkan `total=1` dengan
- `response.status=502` dan pesan yang menyebut pool,
- `/api/usage/stats` tetap `byProvider={}` dengan `errorProvider="deepseek"`.
+**Verification:** `internal/handlers/chat/proxy_egress_failure_test.go`
+(table-driven; disabled pool + pool id containing quotes) proves the body to
+the client is valid JSON and mentions its pool, exactly 1 `requestDetails` row
+with `status='error'`, 0 `usageHistory` rows. `go vet ./internal/handlers/chat/`
+clean · `go test -race ./internal/handlers/chat/ ./internal/proxy/...` green.
+Live smoke on port 20141 (new binary, empty DATA_DIR): a
+`deepseek/deepseek-chat` request to a connection bound to a deleted pool → the client
+receives `502 {"error":{"type":"proxy_error","message":"proxy pool
+\"pool-\\\"gone\\\"\" is assigned but does not exist"}}`,
+`/api/usage/request-details` reports `total=1` with
+`response.status=502` and a message naming the pool,
+`/api/usage/stats` still shows `byProvider={}` with `errorProvider="deepseek"`.
 
-### 🛡️ Combo mendeteksi error yang di-inject provider ke dalam SSE stream
+### 🛡️ Combos detect errors that the provider injects into the SSE stream
 
-Latar: combo `["oc/space-bunny-free", "openrouter/stealth/space-bunny-alpha",
-"ocz/space-bunny-free"]` gagal 10x berturut-turut dengan pesan client
-`502 JSON error injected into SSE stream`. Dari `requestDetails` produksi,
-penyebabnya bukan gateway: downstream `Stealth` di belakang OpenRouter mati
-(`provider_unavailable`), lalu OpenRouter me-relay kegagalan itu sebagai event
-`data: {"choices":[],"error":{"code":502,...}}` di atas HTTP 200. Gateway
-me-relay chunk itu mentah-mentah — turn tercatat `success`, koneksi sakit
-tidak pernah di-lock, jadi setiap retry mendarat di lubang yang sama.
+Background: the combo `["oc/space-bunny-free", "openrouter/stealth/space-bunny-alpha",
+"ocz/space-bunny-free"]` failed 10 times in a row with the client message
+`502 JSON error injected into SSE stream`. From production `requestDetails`,
+the cause is not the gateway: the `Stealth` downstream behind OpenRouter is dead
+(`provider_unavailable`), then OpenRouter relays that failure as an event
+`data: {"choices":[],"error":{"code":502,...}}` over HTTP 200. The gateway
+relays that chunk verbatim — the turn is recorded as `success`, the sick
+connection is never locked, so every retry lands in the same hole.
 
-Perbaikan (tanpa holdback, TTFT tidak berubah — deteksi inline per baris):
-`internal/proxy/sse_inband.go` baru berisi `DetectInbandSSEError` yang
-agnostik-provider — gagal untuk **setiap** payload `data:` ber-`error`
-non-null (bentuk OpenAI maupun event `error` Claude), tanpa memeriksa nama
-provider, model, atau teks pesan tertentu. `sseCopier` menelan (swallow)
-baris error itu, menutup turn error-only dengan frame error milik gateway
-sendiri, dan melaporkan `UpstreamFailure(502)` sehingga jalur combo yang
-sudah ada me-lock koneksi (`comboLockRetryable`) untuk retry berikutnya.
-Turn yang sudah sempat mengirim completion tetap dianggap sukses (aturan
-yang sama dengan codex stream). Strategi combo tidak berubah: round-robin
-tetap berotasi, hanya melewati koneksi yang sedang di-lock selama cooldown.
+Fix (without holdback, TTFT unchanged — per-line inline detection):
+the new `internal/proxy/sse_inband.go` contains `DetectInbandSSEError` which is
+provider-agnostic — it fails on **every** `data:` payload with a non-null
+`error` (both the OpenAI shape and Claude `error` events), without inspecting the
+provider name, model, or any specific message text. `sseCopier` swallows
+that error line, closes the error-only turn with the gateway's own error frame,
+and reports `UpstreamFailure(502)` so the existing combo path
+locks the connection (`comboLockRetryable`) for the next retry.
+A turn that already managed to send a completion is still considered successful (the same
+rule as with the codex stream). The combo strategy is unchanged: round-robin
+still rotates, it merely skips connections that are currently locked during the cooldown.
 
-Batasan yang disadari: jalur `ScanStream` ber-translate (client Claude,
-decloaker) belum dipasangi detektor ini; cakupan awal adalah `SSECopy`
-(OpenAI-format streaming) tempat kasus produksi terjadi. Perilaku
-post-commit loop combo tidak diubah (failover dalam request yang sama tetap
-mustahil setelah header 200 terkirim — sesuai pesan log yang sudah ada
+Known limitation: the translating `ScanStream` path (Claude client,
+decloaker) is not yet equipped with this detector; the initial scope is `SSECopy`
+(OpenAI-format streaming), where the production cases occur. The post-commit
+combo loop behavior is unchanged (failover within the same request remains
+impossible once the 200 headers are sent — matching the existing log message
 `upstream error after headers committed`).
 
-**Verifikasi:** unit table-driven (`sse_inband_test.go`, termasuk chunk
-Stealth asli) + `TestSSECopy_InbandErrorOnlyStreamFails`,
+**Verification:** table-driven unit tests (`sse_inband_test.go`, including the original
+Stealth chunk) + `TestSSECopy_InbandErrorOnlyStreamFails`,
 `TestSSECopy_CompletedTurnIgnoresTrailingInbandError`,
-`TestSSECopy_HealthyStreamUnaffectedByInbandDetection`, dan integration
-`TestComboSkipsInbandErrorOnRetry` (fake upstream sakit + sehat: request
-pertama membawa frame error gateway tanpa chunk mentah provider, retry
-langsung dilayani member sehat tanpa menyentuh upstream sakit). Satu bug
-urutan flag (`hasTerminal` diset sebelum `inbandFailure` dibaca) tertangkap
-oleh test ini saat implementasi.
+`TestSSECopy_HealthyStreamUnaffectedByInbandDetection`, and the integration
+`TestComboSkipsInbandErrorOnRetry` (fake sick + healthy upstream: the first
+request carries the gateway's error frame without the raw provider chunk, and the retry
+is served directly by the healthy member without touching the sick upstream). One flag-ordering
+bug (`hasTerminal` set before `inbandFailure` is read) was caught
+by these tests during implementation.
 
-Catatan paritas: path upstream lokal (`/Users/luqmannul.hakim/htdocs/9router`)
-tidak tersedia di host ini, jadi belum bisa dicocokkan dengan
-`open-sse` — perubahan ini aditif (stream sehat byte-identik, hanya stream
-error-only yang berubah dari silent-success menjadi 502) dan dicatat di sini
-bila upstream berperilaku beda.
-### 🩹 Rotasi proxy pool opencode: rotasi yang benar-benar lewat proxy
+Parity note: the local upstream path (`/Users/luqmannul.hakim/htdocs/9router`)
+is not available on this host, so it could not yet be compared with
+`open-sse` — this change is additive (healthy streams are byte-identical, only
+error-only streams change from silent-success to 502) and is noted here
+in case upstream behaves differently.
 
-Pada provider opencode, memilih rotasi (round-robin/random) tidak memakai pool
-warp yang sudah dipasang — request tetap jalan direct. Kolom egress di usage
-juga selalu menulis "direct" untuk request yang sebenarnya lewat proxy HTTP,
-dan kolom "bound" di halaman proxy-pools selalu 0 untuk pool yang dipasang
-level provider karena hanya koneksi yang dihitung.
+### 🩹 opencode proxy pool rotation: rotation that actually goes through the proxy
 
-Sekarang rotasi memutar request ke seluruh pool aktif, kolom egress menampilkan
-nama pool, dan kolom bound menghitung pemasangan level provider. Rotasi hanya
-berlaku untuk pengaturan rotasi proxy; rotasi round-robin koneksi tidak berubah
-perilakunya.
+On the opencode provider, choosing a rotation (round-robin/random) does not use the
+already-configured warp pool — requests still go direct. The egress column in usage
+also always writes "direct" for requests that actually go through an HTTP proxy,
+and the "bound" column on the proxy-pools page is always 0 for pools installed at
+the provider level because only connections are counted.
 
-Perbaikan lanjutan dari review:
+Now rotation cycles requests across all active pools, the egress column shows the
+pool name, and the bound column counts provider-level installations. Rotation only
+applies to proxy rotation settings; connection round-robin rotation keeps its
+behavior unchanged.
 
-- **Rotasi pool tidak lagi menyalakan rotasi koneksi.** Kartu provider menyimpan
-  dua rotasi ke satu entri: blok `isNoAuth` menulis rotasi **pool** ke
-  `rotateStrategy`, tombol round-robin menulis rotasi **koneksi** ke
-  `fallbackStrategy`, dan keduanya dibaca ke field yang sama. Provider NoAuth
-  kini hanya mempercayai `fallbackStrategy` untuk rotasi koneksi, jadi memilih
-  rotasi pool tidak ikut membuat akun berganti.
-- **Rotasi pool hanya berlaku untuk provider NoAuth.** Itu persis di mana UI
-  menawarkannya. Di provider ber-API-key, `rotateStrategy` berisi rotasi akun,
-  dan menjadikannya steer egress akan mengirim trafik lewat pool yang tidak
-  pernah dikonfigurasi operatornya.
-- **Guard hapus pool menutup celah rotasi.** Rotasi memakai seluruh pool aktif,
-  tapi `countProxyPoolBindings` hanya menghitung pool yang di-pin. Pool yang
-  sedang melayani trafik rotasi bisa dihapus (200) di bawah request berikutnya;
-  sekarang ditolak 409. Pool yang di-pin sekaligus dipakai rotasi tetap
-  dihitung satu binding, bukan dua.
-- **`sticky` ditolak sebagai strategi rotasi pool.** Nilai ini diterima lalu
-  dilayani sebagai round-robin, padahal resolver ini tidak mengimplementasikan
-  afinitas. UI hanya menawarkan round-robin dan random, jadi tidak ada yang
-  kehilangan opsi.
-- **Counter rotasi per-provider**, di-key dengan alias yang sudah di-resolve
-supaya `oc` dan `opencode` berbagi kursor dan tidak saling melompati.
-- **`ListProxyPools()` tidak lagi dipanggil di hot path.** Kandidat rotasi dibaca
-dengan query yang memfilter di SQL, disimpan di cache per-`Repo` (bukan state
-paket, supaya dua `Repo` atas database berbeda tidak saling membaca pool),
-dan di-invalidate di setiap mutasi pool — sesuai AGENTS.md §4.A.
+Follow-up fixes from review:
 
-### 📖 README: cara memakai database 9Router langsung, tanpa import
+- **Pool rotation no longer turns on connection rotation.** The provider card stores
+  two rotations in one entry: the `isNoAuth` block writes the **pool** rotation to
+  `rotateStrategy`, the round-robin button writes the **connection** rotation to
+  `fallbackStrategy`, and both are read into the same field. NoAuth providers
+  now trust only `fallbackStrategy` for connection rotation, so choosing a
+  pool rotation no longer makes accounts switch.
+- **Pool rotation only applies to NoAuth providers.** That is exactly where the UI
+  offers it. On API-key providers, `rotateStrategy` holds the account rotation,
+  and turning it into an egress steer would send traffic through a pool the operator
+  never configured.
+- **The pool-deletion guard closes a rotation gap.** Rotation uses all active pools,
+  but `countProxyPoolBindings` only counts pinned pools. A pool currently serving
+  rotation traffic could be deleted (200) beneath the next request;
+  now it is rejected with 409. A pool that is both pinned and used for rotation is still
+  counted as one binding, not two.
+- **`sticky` is rejected as a pool rotation strategy.** This value is accepted and then
+  served as round-robin, even though this resolver does not implement
+  affinity. The UI only offers round-robin and random, so no one
+  loses an option.
+- **Per-provider rotation counter**, keyed by the already-resolved alias
+  so `oc` and `opencode` share a cursor and do not skip each other.
+- **`ListProxyPools()` is no longer called in the hot path.** Rotation candidates are read
+  with a query that filters in SQL, cached per-`Repo` (not package
+  state, so two `Repo`s over different databases do not read each other's pools),
+  and invalidated on every pool mutation — per AGENTS.md §4.A.
 
-Pertanyaan yang paling sering masuk — "bisa nggak import dari 9router?" — sudah
-terjawab di dokumentasi, tapi jawabannya tersebar: satu kalimat di `DATABASE.md`
-dan operator checklist yang justru menyuruh jalankan upstream dulu. Yang kedua
-salah untuk kasus yang paling sering terjadi, karena `EnsureCoreSchema` sudah
-meng-tolerant database yang ada. Hasilnya pembaca menyimpulkan harus migrasi
-manual, padahal tidak ada yang perlu diimpor sama sekali.
+### 📖 README: how to use a 9Router database directly, without import
 
-Section baru `🔄 Sharing a database with 9Router` di README menyatakan soal ini
-tegas di depan: kedua proyek menunjuk `DATA_DIR/db/data.sqlite` yang sama,
-9router-go membukanya apa adanya, dan providers, connections, proxy pools,
-combos, API keys, model aliases, serta usage history langsung terbaca. Tidak ada
-langkah import, export, atau migrasi. Dua mode operasional dijelaskan: ganti
-sepenuhnya (berhenti 9Router, jalankan 9router-go), atau berdampingan di port
-berbeda dengan `DATA_DIR` yang sama. Arah sebaliknya juga aman — dua kolom
-Go-only dan tabel `upstream_leases` diabaikan upstream karena sinkronisasi
-skemanya additive.
+The most frequent question — "can I not import from 9router?" — is already
+answered in the documentation, but the answer is scattered: one sentence in `DATABASE.md`
+and an operator checklist that in fact tells you to run upstream first. The second
+is wrong for the most common case, because `EnsureCoreSchema` already
+tolerates an existing database. As a result readers conclude they must
+migrate manually, when in fact nothing needs to be imported at all.
 
-Batasnya ditulis apa adanya, tidak dipoles: tidak ada import JSON legacy, tidak
-ada migrasi destruktif atau backup pra-migrasi, dan `_meta.schemaVersion` tidak
-ditafsirkan — DB dari rilis 9Router yang jauh lebih baru wajib dicek manual.
-Operator checklist di `DATABASE.md` dikoreksi agar tidak menyuruh menjalankan
-upstream lebih dulu; baris "Default path" di tabel compatibility Boundaries
-dipperjelas bahwa tidak ada langkah import.
+The new `🔄 Sharing a database with 9Router` section in the README states the matter
+plainly up front: both projects point at the same `DATA_DIR/db/data.sqlite`,
+9router-go opens it as-is, and providers, connections, proxy pools,
+combos, API keys, model aliases, and usage history are immediately readable. There are no
+import, export, or migration steps. Two operational modes are explained: a full
+switch (stop 9Router, run 9router-go), or running side by side on different
+ports with the same `DATA_DIR`. The reverse direction is also safe — two Go-only
+columns and the `upstream_leases` table are ignored upstream because its schema
+sync is additive.
 
-**Verifikasi:** tidak sekadar diklaim dari dokumentasi. Fixture SQLite dibentuk
-dengan bentuk upstream — 11 tabel inti, `providerConnections` tanpa
-`lastUsedAt`/`consecutiveUseCount`, tanpa `upstream_leases`, berisi satu
-connection, satu API key, satu combo, satu scope KV, dan satu baris
-`usageHistory`. Binary hasil `make build` dijalankan terhadap fixture itu
-(`DATA_DIR` sama, port `:20197`): `/health` 200, login 200, `/api/connections`
-mengembalikan connection upstream apa adanya, `/api/settings` membaca
-`requireLogin`/`rtkEnabled` dari baris settings upstream, `/api/usage/stats`
-200, dan `GET /v1/models` dengan `Bearer sk-upstream-existing-key` (API key yang
-disimpan upstream) mengembalikan katalog model — sehingga bukan hanya baris
-terbaca, tapi juga benar-benar dipakai jalur proxy. Setelah boot, fixture
-memang mendapat tambahan `lastUsedAt`, `consecutiveUseCount`, dan
-`upstream_leases`, dan seluruh baris upstream tetap utuh. Jalur fresh-`DATA_DIR`
-diverifikasi terpisah (port `:20198`): 13 tabel terbentuk,
-`_meta.schemaVersion=1`, `settings` berisi baris kosong, `/health` 200. Kedua
-instance dimatikan dan port-nya dilepas.
+The limits are written as-is, not polished: no legacy JSON import, no
+destructive migration or pre-migration backup, and `_meta.schemaVersion` is not
+interpreted — a DB from a much newer 9Router release must be checked manually.
+The operator checklist in `DATABASE.md` is corrected so it no longer tells you to run
+upstream first; the "Default path" row in the compatibility Boundaries table
+is clarified that there are no import steps.
 
-### 🐛 `make web-build` hanya rebuild saat `dist` hilang — dashboard tetap bundle lama
+**Verification:** not merely claimed from the documentation. A SQLite fixture was built
+with the upstream shape — 11 core tables, `providerConnections` without
+`lastUsedAt`/`consecutiveUseCount`, without `upstream_leases`, containing one
+connection, one API key, one combo, one scope KV, and one
+`usageHistory` row. The binary produced by `make build` is run against that fixture
+(same `DATA_DIR`, port `:20197`): `/health` 200, login 200, `/api/connections` returns the upstream connection as-is, `/api/settings` reads `requireLogin`/`rtkEnabled` from the upstream settings row, `/api/usage/stats` 200, and `GET /v1/models` with `Bearer sk-upstream-existing-key` (the API key stored upstream) returns the model catalog — so not only are the rows read, they are genuinely used by the proxy path. After boot, the fixture does get the additional `lastUsedAt`, `consecutiveUseCount`, and `upstream_leases`, and the entire upstream row stays intact. The fresh-`DATA_DIR` path was verified separately (port `:20198`): 13 tables are created, `_meta.schemaVersion=1`, `settings` contains an empty row, `/health` 200. Both instances were shut down and their ports released.
 
-`web-build` sebelumnya deciding "rebuild kalau `web/dist/index.html` tidak ada".
-Jahatnya, itu benar di checkout segar dan salah di setiap mesin yang sudah punya
-`dist`: menarik atau fast-forward `main` mengubah `web/src` sementara
-`web/dist` tetap di tempat, jadi SPA tidak pernah dibangun ulang dan `go build`
-membenamkan bundle lama. Gejalanya dashboard terlihat seperti rilis sebelumnya
-sementara sisi Go sudah mutakhir, dan satu-satunya obatnya `FORCE=1 make
-web-build` yang tidak diingat siapa pun. Terjadi nyata pada 2026-10-04: fast-
-forward ke `bfa0e954` menyisakan `index-BvXlfcRR.js` di `dist`, sementara
-sumber sudah 7 file lebih baru.
+### 🐛 `make web-build` only rebuilds when `dist` is missing — dashboard keeps the old bundle
 
-Keputusan: nilai kesegaran pindah ke `web/scripts/web-build.ts`, yang
-mengfinger-print setiap input build — `web/src`, `web/public`, `package.json`,
-`bun.lock`, ketiga tsconfig, `vite.config.ts`, `web/index.html` — lalu
-membangun ulang saat fingerprint berubah. Isi file ikut hashed, bukan hanya
-mtime: `bun install` dan `git checkout` dapat menyetel ulang timestamp tanpa
-memindahkan satu byte pun. `bun.lock` dan `package.json` dihitung karena
-bump dependency mengubah bundle tanpa menyentuh `web/src` — kelas yang akan
-terlewat oleh watcher src-saja.
+`web-build` previously decided "rebuild if `web/dist/index.html` doesn't exist". The evil of it is that this is correct on a fresh checkout and wrong on every machine that already has `dist`: pulling or fast-forwarding `main` changes `web/src` while `web/dist` stays put, so the SPA is never rebuilt and `go build` bakes in the old bundle. The symptom is the dashboard looking like the previous release while the Go side is already up to date, and the only cure is `FORCE=1 make web-build` which nobody remembers. It actually happened on 2026-10-04: fast-forwarding to `bfa0e954` left `index-BvXlfcRR.js` in `dist` while the sources were already 7 files newer.
 
-Stamp disimpan di `web/.dist-stamp`, sengaja di luar `web/dist`: berkas
-bernama `.*` yang ada langsung di dalam `dist` ikut tertangkap
-`//go:embed dist/*` dan akan membocorkan fingerprint build sebagai route yang
-bisa diunduh. Stamp baru ditulis setelah build sukses, jadi build yang gagal
-meninggalkan stamp lama dan run berikutnya mencoba lagi, bukan melompat.
+Decision: the freshness value moves to `web/scripts/web-build.ts`, which fingerprints every build input — `web/src`, `web/public`, `package.json`, `bun.lock`, the three tsconfigs, `vite.config.ts`, `web/index.html` — then rebuilds when the fingerprint changes. File contents are hashed too, not just mtime: `bun install` and `git checkout` can reset timestamps without moving a single byte. `bun.lock` and `package.json` are counted because a dependency bump changes the bundle without touching `web/src` — a class that would be missed by a src-only watcher.
 
-Kebijakan `FORCE=1` dipertahankan sebagai jalan pintas eksplisit.
+The stamp is stored in `web/.dist-stamp`, deliberately outside `web/dist`: files named `.*` that sit directly inside `dist` are also caught by `//go:embed dist/*` and would leak the build fingerprint as a downloadable route. The new stamp is only written after a successful build, so a failed build leaves the old stamp and the next run tries again instead of skipping.
 
-**Verifikasi:** `bun test` 181/181 (10 test baru `web/scripts/web-build.test.ts`
-menutup: edit di `src`, berkas baru bersarang, bump manifest tanpa bump
-lockfile, rename dengan byte identik, `dist` dan `node_modules` diabaikan);
-`make web-build` dua kali berturut-turut — run pertama membangun dan mencatat
-stamp `1ce65ad06890`, run kedua "web/dist is up to date (inputs unchanged)";
-menyentuh `Sidebar.svelte` memicu build ulang, `git checkout` mengembalikan
-fingerprint ke `1ce65ad06890`. `tsc -b` bersih, `oxlint` tanpa warning baru
-(2 warning yang ada sudah pre-existing di `CreateComboModal.svelte` dan
-`clipboard.test.ts`), `make vet-svelte` 92 error = baseline, `go test ./web/...`
-8/8. Smoke: instance probe menyajikan `index-Ba3m-vxm.js` (JS 200, 899.073
-byte) yang sama dengan yang disajikan proses yang sudah berjalan, jadi proses
-lama sudah benar-benar menjalankan binary hasil rebuild.
+The `FORCE=1` policy is kept as an explicit shortcut.
 
-### 🎨 Console Log: tag dan pesan menempel jadi `requestGET`
+**Verification:** `bun test` 181/181 (10 new tests in `web/scripts/web-build.test.ts` covering: an edit in `src`, a new nested file, a manifest bump without a lockfile bump, a rename with identical bytes, `dist` and `node_modules` being ignored); `make web-build` twice in a row — the first run builds and records the stamp `1ce65ad06890`, the second run reports "web/dist is up to date (inputs unchanged)"; touching `Sidebar.svelte` triggers a rebuild, and `git checkout` restores the fingerprint to `1ce65ad06890`. `tsc -b` clean, `oxlint` with no new warnings (the 2 existing warnings were already pre-existing in `CreateComboModal.svelte` and `clipboard.test.ts`), `make vet-svelte` 92 errors = baseline, `go test ./web/...` 8/8. Smoke: the probe instance serves the same `index-Ba3m-vxm.js` (JS 200, 899.073 bytes) as the already-running process, so the old process really is running the rebuilt binary.
 
-Baris Console Log dirender dari `{#if parts}<span>{parts.tag}</span> {/if}{parts.message}`.
-Spasi literal di ujung blok `{#if}` dipangkas Svelte sebagai *text node* batas
-blok, jadi yang tampil `requestGET /models` atau `usageLogged provider=...` —
-method, path, dan status menyatu tanpa jeda sehingga sulit dipindai.
+### 🎨 Console Log: the tag and message stick together as `requestGET`
 
-Spasi sekarang dikirim eksplisit lewat ekspresi `{' '}`. Baris tanpa tag
-(mis. stdout yang tertangkap) tidak berubah.
+Console Log rows are rendered from `{#if parts}<span>{parts.tag}</span> {/if}{parts.message}`. The literal space at the edge of the `{#if}` block is trimmed by Svelte as a *text node* at the block boundary, so what displays is `requestGET /models` or `usageLogged provider=...` — the method, path, and status merge together with no gap, making it hard to scan.
 
-### ✨ Proxy Pools: tombol Test All, badge latency, dual-probe, dan kontrol filter
+The space is now sent explicitly through the `{' '}` expression. Rows without a tag (e.g. captured stdout) are unchanged.
 
-Health Check proxy pool lama hanya hidup di toolbar seleksi — kalau tidak ada
-yang terseleksi, tombolnya tidak ada. Sekarang ada **Test All** permanen di
-header, dengan progres `n/N` dan badge latency yang repaint per baris begitu
-tiap probe selesai, jadi status terlihat tanpa menunggu satu job penuh.
+### ✨ Proxy Pools: Test All button, latency badge, dual-probe, and filter controls
 
-Probe backend jadi dua tahap: **Google `generate_204` → Cloudflare
-`cdn-cgi/trace`**. Satu endpoint saja salah baca pada jaringan yang memblokir
-Google — proxy yang sehat dilaporkan mati, lalu user mematikan pool yang
-masih bisa dipakai. Yang menentukan bagi badge: latency yang dilaporkan dan
-disimpan selalu milik probe yang **memutuskan** hasil, bukan total waktu
-tunggu; primary yang lambat lalu gagal tidak mewariskan 200ms-nya ke badge
-fallback yang cepat. Pool gagal disimpan dengan latency `0` supaya angka tak
-terukur tidak pernah terbaca sebagai angka bagus.
+The old proxy pool Health Check only lived in the selection toolbar — if nothing was selected, there was no button. Now there is a permanent **Test All** in the header, with `n/N` progress and a latency badge that repaints per row as soon as each probe finishes, so the status is visible without waiting for a whole job.
 
-Dashboard dapat filter status (All / Active / Passed / Failed — `failed`
-dan `error` upstream digabung satu bucket), pengurutan (Fastest, Recently
-Tested, Name), dan dua aksi pembersihan: **Disable Failed** dan **Delete
-Failed**. Ketiganya sekarang melaporkan **hanya hasil yang benar-benar
-dikonfirmasi server**; sebelumnya `Delete Failed` membuang error non-409
-diam-diam lalu tetap berbunyi sukses, jadi user bisa mengira proxy sudah
-bersih padahal masih aktif dan tetap dipakai routing.
+The backend probe is now two-stage: **Google `generate_204` → Cloudflare `cdn-cgi/trace`**. A single endpoint alone misreads on networks that block Google — a healthy proxy is reported dead, and then the user turns off a pool that is still usable. What determines the badge: the latency that is reported and stored always belongs to the probe that **decided** the result, not the total wait time; a slow primary that then fails does not pass its 200ms on to a fast fallback badge. Failed pools are stored with latency `0` so an unmeasurable number never reads as a good number.
 
-Catatan parity: upstream `decolua/9router` masih probe `https://google.com/`
-dengan HEAD 8s dan menulis `testStatus: "active" | "error"`. Dua kosakata itu
-tetap diterima di UI, sementara gateway sendiri menulis `passed`/`failed`
-seperti sebelumnya.
+The dashboard gains status filtering (All / Active / Passed / Failed — upstream `failed` and `error` are merged into one bucket), sorting (Fastest, Recently Tested, Name), and two cleanup actions: **Disable Failed** and **Delete Failed**. All three now report **only results actually confirmed by the server**; previously `Delete Failed` silently discarded non-409 errors and still sounded successful, so the user could think the proxies were clean while they were still active and still used by routing.
 
-### 🩹 Test live upstream dipisah dari CI lewat opt-in eksplisit
+Parity note: upstream `decolua/9router` still probes `https://google.com/` with an 8s HEAD and writes `testStatus: "active" | "error"`. Those two words are still accepted in the UI, while the gateway itself still writes `passed`/`failed` as before.
 
-19 test di `internal/handlers/chat/` memanggil provider sungguhan dengan
-kredensial asli dari `~/.9router/db/data.sqlite`, dan semuanya ikut
-`go test ./...` yang dijalankan CI. Modelnya free-tier dan dipakai bersama:
-`oc/space-bunny-free` dan `muse-spark-*-contributor-free` membatasi rate per IP
-dan sering sudah habis dipakai pengguna lain. Akibatnya `space-bunny-free`
-gagal di `go test -race ./...` dengan `upstream error: Forward...` — kegagalan
-yang sama sekali tidak ada hubungannya dengan gateway ini. Yang lebih buruk,
-tanpa kredensial CI test itu akan "lolos" sambil tidak membuktikan apa pun.
+### 🩹 Live upstream tests split from CI via explicit opt-in
 
-Sekarang kelas test dibedakan oleh opt-in `9ROUTER_LIVE_TESTS=1`, bukan oleh
-skip per-status. Gerbangnya `requireLiveUpstream`, dipanggil di dalam
-`getRealUserDB` yang sudah dilewati setiap test live — sehingga test live baru
-yang lupa memasang gerbang tetap skip, bukan bocor ke CI. Lima test
-`muse_spark_*` tidak lewat `getRealUserDB` (koneksi opencode-nya tidak di-seed,
-jadi modelnya resolve langsung ke provider) dan memasang gerbangnya sendiri.
-`make test-live` adalah pembungkus untuk menjalankannya lokal.
+19 tests in `internal/handlers/chat/` call real providers with real credentials from `~/.9router/db/data.sqlite`, and all of them are included in `go test ./...` which CI runs. The models are free-tier and shared: `oc/space-bunny-free` and `muse-spark-*-contributor-free` rate-limit per IP and are often already used up by other users. As a result `space-bunny-free` fails in `go test -race ./...` with `upstream error: Forward...` — a failure that has absolutely nothing to do with this gateway. Worse, without CI credentials those tests would "pass" while proving nothing.
 
-Sembilan pola `if rec.Code == http.StatusTooManyRequests || ...` yang ditulis
-ulang bergantian per test kini satu helper `requireLiveOK`/`requireLiveSSE`, dan
-`upstreamUnavailable` dilebarkan ke 429/403/402/502/503/504 — status yang berarti
-"belum sekarang", bukan cacat gateway. Setiap skip membawa body jawaban
-provider, jadi run lokal tetap memberi tahu apa sebenarnya yang upstream said.
-400 dan 500 tetap gagal, karena itu kesalahan gateway. 401 sengaja dipisah: itu
-masalah profil lokal, bukan pemadaman provider.
+The test class is now distinguished by the opt-in `9ROUTER_LIVE_TESTS=1`, not by per-status skips. Its gate is `requireLiveUpstream`, called inside `getRealUserDB` which every live test already goes through — so a new live test that forgets to install the gate still skips, rather than leaking into CI. The five `muse_spark_*` tests don't go through `getRealUserDB` (their opencode connections aren't seeded, so their models resolve straight to the provider) and install the gate themselves. `make test-live` is a wrapper to run them locally.
 
-### 🐛 `TestGateAcquire_JitterOnlyWidensTheGap` flaky — floor 30ms tanpa margin
+The nine `if rec.Code == http.StatusTooManyRequests || ...` patterns that were rewritten over and over per test are now one `requireLiveOK`/`requireLiveSSE` helper, and `upstreamUnavailable` is widened to 429/403/402/502/503/504 — statuses that mean "not now", not a gateway defect. Every skip carries the provider's response body, so a local run still tells you what upstream actually said. 400 and 500 still fail, because those are gateway errors. 401 is deliberately separated: that's a local profile problem, not a provider outage.
 
-PR #146 memperbaiki `TestGateAcquire_SpacesConcurrentCallers` dengan mengukur
-rentang burst, dan sengaja tidak menyentuh `JitterOnlyWidensTheGap` karena
-"tidak ada bukti ia perlu disentuh". Bukti itu sekarang ada: di branch ini,
-sebelum perubahan, tes itu gagal sendiri —
+### 🐛 `TestGateAcquire_JitterOnlyWidensTheGap` flaky — a 30ms floor with no margin
+
+PR #146 fixed `TestGateAcquire_SpacesConcurrentCallers` by measuring the burst span, and deliberately left `JitterOnlyWidensTheGap` alone because "there was no evidence it needed touching". That evidence now exists: on this branch, before the change, the test fails on its own —
 
 ```
 fetchgate (24 passed, 1 failed)
@@ -1191,707 +1112,491 @@ fetchgate (24 passed, 1 failed)
      gate_test.go:100: slot 2 waited 29.7696ms, want at least 30ms floor
 ```
 
-Akar masalahnya sama: floor 30ms diukur dengan stopwatch dan jitter sah
-bernilai 0, jadi grant berikutnya jatuh tepat 30ms — tanpa sisa untuk menyerap
-bangunnya goroutine yang terlambat. Assertion-nya tetap per-gap: span akan
-sembunyikan floor yang setengah — jitter acak yang cukup dermawan bisa
-memperpanjang total melebihi target sementara setiap gap-nya pendek. Tapi
-minGap dinaikkan ke 40ms dengan jitter 60ms supaya ada margin.
+The root cause is the same: the 30ms floor is measured with a stopwatch and legitimate jitter can be 0, so the next grant lands at exactly 30ms — with no slack to absorb a late-starting goroutine. The assertion stays per-gap: a span would hide a half-applied floor — random jitter that is generous enough can extend the total past the target while every individual gap is short. But minGap is raised to 40ms with 60ms jitter so there is margin.
 
-`internal/fetchgate/gate.go` tidak tersentuh — nol perubahan produksi.
+`internal/fetchgate/gate.go` is untouched — zero production changes.
 
-### 🐛 `internal/fetchgate` flaky di `go test -p 16` — gap diukur salah
+### 🐛 `internal/fetchgate` flaky under `go test -p 16` — gaps measured wrong
 
-`TestGateAcquire_SpacesConcurrentCallers` gagal 4 dari 5 run pada
-`go test ./... -p 16`, di index yang konsisten (2, 3, 7) dengan gap
-12–35ms terhadap floor 40ms. Gate-nya sendiri tidak salah: yang diukur
-adalah "kapan goroutine ini sempat jalan", bukan "kapan slot-nya
-dibuka". Sebuah slot yang dibuka tepat waktu tetap bisa menunggu
-8ms lagi untuk dijadwalkan di CPU yang sibuk, dan itu ikut terhitung
-di `time.Since(start)`.
+`TestGateAcquire_SpacesConcurrentCallers` fails 4 out of 5 runs on `go test ./... -p 16`, at a consistent index (2, 3, 7) with gaps of 12–35ms against a 40ms floor. The gate itself isn't wrong: what's being measured is "when did this goroutine get a chance to run", not "when was its slot opened". A slot opened exactly on time can still wait another 8ms to be scheduled on a busy CPU, and that counts toward `time.Since(start)`.
 
-Membandingkan start time berurutan berarti membandingkan nasib penjadwalan
-dua goroutine yang berbeda. Satu yang cepat bersebelahan dengan satu yang
-lambat terbaca seperti dua slot diberikan sekaligus — itu sebabnya
-index yang gagal selalu di tengah-tengah, bukan di ujung.
+Comparing sequential start times means comparing the scheduling luck of two different goroutines. One fast one sitting next to a slow one reads as two slots granted at once — which is why the failing index is always in the middle, never at the ends.
 
-Assertion-nya diganti dari "tiap gap ≥ 40ms" jadi "rentang 8 pemanggil
-≥ 280ms". Noise penjadwalan bersifat nol-terhadap-jumlah di sekeliling
-loop, jadi penjumlahan gap menghilangkannya: delapan slot dengan floor
-40ms selalu membentang ≥ 280ms, sedangkan gate yang membagikan
-semuanya sekaligus membentang beberapa mikrosecond berapa pun padatnya CPU.
+The assertion is changed from "each gap ≥ 40ms" to "the span of 8 callers ≥ 280ms". Scheduling noise is zero-sum around the loop, so summing the gaps cancels it out: eight slots with a 40ms floor always span ≥ 280ms, while a gate that hands out everything at once spans a few microseconds no matter how busy the CPU is.
 
-Kekuatan test tidak berkurang. Dicoba dengan pacing dilepas dari
-`reserve()`, ia gagal persis di tempat yang seharusnya:
+The test's strength is not reduced. Tried with pacing decoupled from `reserve()`, it fails in exactly the right place:
 
 ```
 --- FAIL: TestGateAcquire_SpacesConcurrentCallers
     gate_test.go:82: 8 callers spanned 0s end to end, want at least 280ms
 ```
 
-`TestGateAcquire_JitterOnlyWidensTheGap` **tidak** diubah: meski ikut
-muncul di beberapa run paralel, ia tidak muncul sekali pun dalam 5 run
-baseline di `-p 16`, dan ia mengukur satu pemanggil sehingga noise-nya
-satu arah (selalu ≥, tidak pernah <). Tidak ada bukti ia perlu
-disentuh, jadi tidak.
+`TestGateAcquire_JitterOnlyWidensTheGap` is **not** changed: even though it also shows up in some parallel runs, it appeared not once in the 5 baseline runs at `-p 16`, and it measures a single caller so its noise is one-directional (always ≥, never <). There's no evidence it needs touching, so it isn't touched.
 
-**Verifikasi:** `go vet ./...` bersih; `go build ./...` bersih;
-`go test ./internal/fetchgate/ -count=10 -race` hijau; `go test ./...`
-hijau; `go test ./... -p 16` hijau 4 dari 4 run, sebelumnya gagal 4 dari
-5.
+**Verification:** `go vet ./...` clean; `go build ./...` clean; `go test ./internal/fetchgate/ -count=10 -race` green; `go test ./...` green; `go test ./... -p 16` green in 4 of 4 runs, previously failing 4 out of 5.
 
-### 🐛 `go test -shuffle` gagal di `internal/app` — test order-dependent
+### 🐛 `go test -shuffle` fails in `internal/app` — order-dependent tests
 
-`db.InitGlobalDatabase` hanya mengizinkan satu connection database per proses
-lewat `sync.Once`, dan hook `OnStop` dari `app.DatabaseModule` menutup
-connection itu untuk selamanya. Di produksi itu benar: satu proses berarti
-satu gateway, dan boot kedua akan diam-diam membuka file SQLite yang sama di
-balik pool connection yang pertama. Di test, kombinasi itu membuat seluruh
-`internal/app` order-dependent: test yang boot pertama mengklaim satu-satunya
-handle global, hook `OnStop`-nya menutupnya, dan setiap boot berikutnya
-mengambil handle yang sudah tertutup. Di `origin/main`, seed shuffle 1 sampai
-6 semuanya gagal; setelah patch ini, 10 seed hijau.
+`db.InitGlobalDatabase` only allows one database connection per process via `sync.Once`, and the `OnStop` hook of `app.DatabaseModule` closes that connection forever. In production that's correct: one process means one gateway, and a second boot would silently open the same SQLite file under the first connection pool's reverse. In tests, that combination makes all of `internal/app` order-dependent: the test that boots first claims the only global handle, its `OnStop` hook closes it, and every subsequent boot gets an already-closed handle. On `origin/main`, shuffle seeds 1 through 6 all fail; after this patch, 10 seeds are green.
 
-`sync.Once` diganti dengan mutex plus handle, lalu ditambahkan
-`ResetGlobalDatabaseForTest` untuk mengembalikan keadaan proses ke nol sebelum
-dan sesudah test yang boot `DatabaseModule`. Polanya mengikuti
-`shutdown.TestReset` yang sudah ada di paket sebelah. Reset hanya dipakai
-test; produksi tidak pernah memanggilnya, karena menutup satu-satunya
-connection di tengah proses justru kegagalan yang ada untuk dicegah.
+`sync.Once` is replaced with a mutex plus handle, and `ResetGlobalDatabaseForTest` is added to return the process state to zero before and after tests that boot `DatabaseModule`. The pattern follows the existing `shutdown.TestReset` in the neighboring package. The reset is only used by tests; production never calls it, because closing the only connection in the middle of the process is precisely the failure that exists to be prevented.
 
-`TestGlobalDatabase` sekarang juga menguji hal yang sebelumnya tidak diuji:
-boot kedua dengan path berbeda harus memakai kembali handle yang sama, bukan
-membuka pool kedua pada satu file. Dan regression test baru
-`TestDatabaseModule_SecondBootAfterAFirstOneWasClosed` melakukan boot dua kali
-berturut-turut; dicoba tanpa reset, ia gagal tepat dengan pesan
-`first boot is not usable: sql: database is closed`.
+`TestGlobalDatabase` now also tests what previously wasn't tested: a second boot with a different path must reuse the same handle, not open a second pool on one file. And the new regression test `TestDatabaseModule_SecondBootAfterAFirstOneWasClosed` boots twice in a row; tried without a reset, it fails with exactly the message `first boot is not usable: sql: database is closed`.
 
-**Verifikasi:** `go vet ./...` bersih; `go build ./...` bersih;
-`go test ./internal/app/ ./internal/db/ -shuffle=<1..10>` hijau semua;
-`go test -race` pada kedua paket dengan shuffle hijau; `go test ./...` hijau;
-`go test -tags=integration ./internal/integration/...` hijau.
+**Verification:** `go vet ./...` clean; `go build ./...` clean; `go test ./internal/app/ ./internal/db/ -shuffle=<1..10>` all green; `go test -race` on both packages with shuffle green; `go test ./...` green; `go test -tags=integration ./internal/integration/...` green.
 
-### 🐛 Deploy Vercel/Deno/Cloudflare Relay dashboard 401 — issue #140
+### 🐛 Vercel/Deno/Cloudflare relay dashboard deploys 401 — issue #140
 
-Ketiga endpoint deploy relay didaftarkan di `SetupRoutes`
-(`internal/handlers/router.go`) pada path `/proxy-pools/{platform}-deploy`,
-yang terpasang di bawah `RequireApiKey`. Dashboard SPA justru memanggilnya
-dengan cookie sesi dan tanpa engine key (`getAuthHeaders()` hanya mengirim
-`Authorization: Bearer` bila `localStorage['9router_key']` terisi), sehingga
-setiap tombol "Deploy Relay" dijawab `401 Authentication required. Provide an
-API key via Authorization: Bearer <key> ...` — persis laporan issue #140.
+All three deploy relay endpoints were registered in `SetupRoutes` (`internal/handlers/router.go`) at the path `/proxy-pools/{platform}-deploy`, which is mounted under `RequireApiKey`. The dashboard SPA instead calls it with a session cookie and without an engine key (`getAuthHeaders()` only sends `Authorization: Bearer` if `localStorage['9router_key']` is populated), so every "Deploy Relay" button is answered with `401 Authentication required. Provide an API key via Authorization: Bearer <key> ...` — exactly the issue #140 report.
 
-Dipindahkan ke `SetupDashboardRoutes` sebagai
-`/api/proxy-pools/{vercel,deno,cloudflare}-deploy` di balik
-`RequireDashboardAuth`, sama dengan CRUD pool di sebelahnya dan dengan upstream
-(`src/app/api/proxy-pools/*-deploy/route.js`, yang memang berada di namespace
-`/api/*`). Prefix `/api` sekaligus menutup celah kedua: `web/vite.config.ts`
-hanya mem-proxy `['/api', '/v1', '/usage', '/translator', '/debug', '/admin']`,
-sehingga path lama juga 404 di mode dev.
+Moved to `SetupDashboardRoutes` as `/api/proxy-pools/{vercel,deno,cloudflare}-deploy` behind `RequireDashboardAuth`, same as the pool CRUD next to it and same as upstream (`src/app/api/proxy-pools/*-deploy/route.js`, which does indeed live in the `/api/*` namespace). The `/api` prefix closes a second gap at the same time: `web/vite.config.ts` only proxies `['/api', '/v1', '/usage', '/translator', '/debug', '/admin']`, so the old path also 404s in dev mode.
 
-Catatan: ini berlaku untuk **Vercel dan Cloudflare juga**, bukan hanya Deno —
-ketiganya berbagi blok registrasi yang sama. Yang menutupi Vercel hanya
-keberadaan API key di `localStorage`; begitu satu 401 terjadi,
-`handleUnauthorized()` menghapus `9router_key` *dan* `9router_auth`, sehingga
-percobaan berikutnya ikut mati.
+Note: this applies to **Vercel and Cloudflare too**, not just Deno — all three share the same registration block. The only thing that masked Vercel was the presence of an API key in `localStorage`; as soon as one 401 occurs, `handleUnauthorized()` deletes `9router_key` *and* `9router_auth`, so the next attempt dies too.
 
-Bug kedua di handler yang sama: polling status Deno hanya mencari
-`"succeeded"`, sehingga revisi yang sudah ditolak Deno sebagai `failed` tetap
-meng isi anggaran 60 detik dan akhirnya melaporkan `"deployment timed out"` —
-gejala yang terbaca seperti gangguan jaringan, bukan kegagalan build.
-`awaitDenoRevision` kini mengikuti upstream: loop hanya berjalan selama
-`queued`/`building`, dan status terminal yang sudah dilaporkan oleh panggilan
-deploy langsung dikembalikan tanpa satu pun request.
+A second bug in the same handler: Deno status polling only looks for `"succeeded"`, so a revision Deno has already rejected as `failed` still burns the full 60-second budget and finally reports `"deployment timed out"` — a symptom that reads like a network problem rather than a build failure. `awaitDenoRevision` now follows upstream: the loop only runs while `queued`/`building`, and a terminal status already reported by the deploy call is returned without a single request.
 
-Bagian parity yang **sudah** benar dan tidak diubah: template worker, field
-body, validasi, slug + label, penghapusan app saat deploy gagal, dan
-komposisi `deployUrl`. Badge `deno relay` di daftar pool juga bukan gap —
-upstream tidak punya; dan `0 bound` untuk OpenCode juga bukan bug, karena
-upstream menghitung `boundConnectionCount` hanya dari `providerConnections`
-(`buildUsageMap` di `src/app/api/proxy-pools/route.js:31-41`) sementara
-OpenCode adalah provider noAuth yang tidak punya baris koneksi.
+The parts of parity that were **already** correct and were not changed: the worker template, body fields, validation, slug + label, deleting the app when deploy fails, and the composition of `deployUrl`. The `deno relay` badge in the pool list is also not a gap — upstream doesn't have one; and `0 bound` for OpenCode isn't a bug either, because upstream counts `boundConnectionCount` only from `providerConnections` (`buildUsageMap` in `src/app/api/proxy-pools/route.js:31-41`) while OpenCode is a noAuth provider that has no connection row.
 
-**Verifikasi:** `internal/integration/relay_deploy_test.go` — cookie sesi dan
-API key sama-sama mencapai handler (400 dari validasinya sendiri, bukan 401),
-dan anonymous tetap 401. Test dibuktikan gagal pada wiring lama (405 di kedua
-path). `internal/handlers/media/deploy_test.go` — status terminal melewati
-polling tanpa request, `failed` di tengah poll berhenti di panggilan pertama.
-`go vet ./...` dan `go vet -tags=integration ./internal/integration/...` bersih.
+**Verification:** `internal/integration/relay_deploy_test.go` — both session cookie and API key reach the handler (400 from its own validation, not 401), and anonymous stays 401. The test is proven to fail on the old wiring (405 on both paths). `internal/handlers/media/deploy_test.go` — a terminal status passes polling with no request, `failed` mid-poll stops at the first call. `go vet ./...` and `go vet -tags=integration ./internal/integration/...` clean.
 
-### 🐛 PRAGMA SQLite per-connection diaplikasikan via driver DSN — issue #139
+### 🐛 SQLite PRAGMAs applied per-connection via the driver DSN — issue #139
 
-Sebelumnya PRAGMA (`busy_timeout`, `synchronous`, `temp_store`, `mmap_size`, `cache_size`, `foreign_keys`) dieksekusi via `db.Exec()`, yang hanya memengaruhi satu koneksi awal. Akibatnya 3 dari 4 koneksi pada pool berjalan dengan pengaturan default (`busy_timeout=0`), sehingga rentan terhadap `SQLITE_BUSY` saat write contention. Pengaturan per-koneksi kini dipindahkan ke driver DSN `modernc.org/sqlite` (`_pragma=...`) agar otomatis berlaku untuk setiap koneksi baru di pool, `PRAGMA journal_mode = WAL;` tetap dipertahankan post-open, dan `SetMaxIdleConns` diselaraskan ke 4.
+Previously the PRAGMAs (`busy_timeout`, `synchronous`, `temp_store`, `mmap_size`, `cache_size`, `foreign_keys`) were executed via `db.Exec()`, which only affects the one initial connection. As a result 3 of the 4 connections in the pool ran with default settings (`busy_timeout=0`), making them susceptible to `SQLITE_BUSY` under write contention. The per-connection settings are now moved to the `modernc.org/sqlite` driver DSN (`_pragma=...`) so they automatically apply to every new connection in the pool, `PRAGMA journal_mode = WAL;` is still kept post-open, and `SetMaxIdleConns` is aligned to 4.
 
-**Catatan `foreign_keys`:** sebelum perubahan ini `PRAGMA foreign_keys = ON` hanya berlaku pada satu koneksi, sehingga 3 dari 4 koneksi berjalan tanpa enforce. Sekarang seluruh koneksi pool benar-benar menegakkan FK. Schema core upstream v0.5.85 (termasuk `upstream_leases`) tidak mendeklarasikan constraint `FOREIGN KEY` — `grep REFERENCES` di repo nol match — sehingga tidak ada baris yang bisa ditolak oleh perubahan ini. Jika constraint FK ditambahkan di kemudian hari, jalur tulis yang selama ini diam-diam melanggar integritas referensial akan mulai gagal; itu memang hasil yang benar, tetapi harus dicatat sebagai perubahan semantik, bukan sekadar perbaikan konfigurasi.
+**`foreign_keys` note:** before this change `PRAGMA foreign_keys = ON` only took effect on one connection, so 3 of 4 connections ran without enforcement. Now every pool connection genuinely enforces FKs. The upstream v0.5.85 core schema (including `upstream_leases`) declares no `FOREIGN KEY` constraints — `grep REFERENCES` in the repo has zero matches — so there is no row that this change could reject. If FK constraints are added later, the write path that has been silently violating referential integrity will start failing; that is indeed the correct outcome, but it must be recorded as a semantic change, not merely a configuration fix.
 
-**Verifikasi:** Unit test `TestPooledConnectionsPragma` di `internal/db/client_test.go` memverifikasi seluruh PRAGMA pada semua (4) koneksi aktif di connection pool. `TestSQLiteDSN` memverifikasi bentuk DSN (daftar `_pragma`, pemisah `?` vs `&`, dan absennya `journal_mode`) tanpa membuka database. Reproduksi konkurensi (8 writer × 40 write, throwaway) gagal 64/320 dengan `SQLITE_BUSY` pada kode lama dan 0/320 pada kode ini, 5× berturut-turut — mode combo lintas provider dengan round-robin memang menghasilkan write paralel seperti itu.
+**Verification:** the unit test `TestPooledConnectionsPragma` in `internal/db/client_test.go` verifies all the PRAGMAs on all (4) live connections in the connection pool. `TestSQLiteDSN` verifies the shape of the DSN (the list of `_pragma`s, the `?` vs `&` separator, and the absence of `journal_mode`) without opening a database. A concurrency reproduction (8 writers × 40 writes, throwaway) failed 64/320 with `SQLITE_BUSY` on the old code and 0/320 on this code, 5 times in a row — the cross-provider combo mode with round-robin really does produce parallel writes like that.
 
-### 🔒 Proteksi pprof di balik `RequireAdminAuth` saat `PPROF_ENABLED=true` — issue #126
+### 🔒 pprof protection behind `RequireAdminAuth` when `PPROF_ENABLED=true` — issue #126
 
-Endpoint profiling `/debug/pprof/*` sebelumnya diregistrasikan langsung di root router tanpa auth group, sehingga saat flag `PPROF_ENABLED=true` diaktifkan, debug surface (heap, cmdline, cpu profile, goroutine trace) dapat diakses publik tanpa kredensial. Route pprof kini dipindahkan ke dalam admin tier (`middleware.RequireAdminAuth()`), mewajibkan admin session cookie atau local CLI token (`x-9r-cli-token`), serta menolak request publik maupun standard client API key (`401 Unauthorized`).
+The profiling endpoints `/debug/pprof/*` were previously registered directly on the root router with no auth group, so when the `PPROF_ENABLED=true` flag was enabled, the debug surface (heap, cmdline, cpu profile, goroutine trace) was publicly reachable with no credentials. The pprof routes are now moved into the admin tier (`middleware.RequireAdminAuth()`), requiring an admin session cookie or a local CLI token (`x-9r-cli-token`), and rejecting both public requests and standard client API keys (`401 Unauthorized`).
 
-**Verifikasi:** `TestSetupServerRouter_PprofUnauthenticated`, `TestSetupServerRouter_PprofAuthenticated`, dan `TestSetupServerRouter_PprofDisabledByDefault` di `internal/handlers/router_test.go` lulus 100%.
-
+**Verification:** `TestSetupServerRouter_PprofUnauthenticated`, `TestSetupServerRouter_PprofAuthenticated`, and `TestSetupServerRouter_PprofDisabledByDefault` in `internal/handlers/router_test.go` pass 100%.
 
 ## [v1.9.8] - 2026-10-04
 
-### ✨ Metrik kompresi RTK & reasoning di log/UI, serta output style "I have ADHD" — issue #129
+### ✨ RTK compression metrics & reasoning in log/UI, plus the "I have ADHD" output style — issue #129
 
-- **Metrik efisiensi prompt:** Menghitung dan menampilkan penghematan token hasil kompresi RTK (`rtkSavedTokens`, rasio kompresi) serta tracking `reasoningTokens` pada log request dan panel analytics UI (`RequestDetailsTab`).
-- **Gaya output "I have ADHD":** Menambahkan opsi output style baru di Token Saver (`adhd_prompt`) untuk menyajikan respons model yang terstruktur rapi, ringkas, berpoin, dan mudah dipindai, dengan kontrol toggle di dashboard Settings & TokenSaverView.
+- **Prompt efficiency metrics:** Computes and displays the token savings produced by RTK compression (`rtkSavedTokens`, compression ratio) and tracks `reasoningTokens` in the request log and the UI analytics panel (`RequestDetailsTab`).
+- **"I have ADHD" output style:** Adds a new output style option to the Token Saver (`adhd_prompt`) to present model responses in a neatly structured, concise, bulleted, and easy-to-scan way, with a toggle control in the dashboard's Settings & TokenSaverView.
 
-**Verifikasi:** Unit test `internal/tokensaver/prompts_adhd_test.go` dan `internal/handlers/chat/rtk_metrics_test.go` lulus 100%.
-
-
-### 🧹 Test OAuth Antigravity dipisahkan ke `antigravity_test.go` — issue #136
-
-Empat test handler Antigravity (`TestHandleAntigravityAuthorize`, `TestGetAntigravityRedirectURI`, `TestHandleAntigravityExchangeErrors`, `TestHandleAntigravityExchangeSuccess`) sebelumnya tersimpan di `freebuff_test.go` sehingga mengaburkan isolasi provider. Keempatnya dipindahkan ke `antigravity_test.go` dengan isi identik, menjaga prinsip isolasi mandiri antar provider.
-
-**Verifikasi:** `go vet ./...` bersih, `go test -race ./internal/handlers/oauth/...` hijau.
-
-### ⚡ Force Fallback: layani akun yang cooldown-nya paling cepat berakhir (issue #130, parity `decolua/9router` PR #130)
-
-Selama ini, kalau **seluruh** akun sebuah provider sedang cooldown, gateway
-gagal seketika — sementara akun yang paling cepat bebas justru bisa menerima
-permintaan hanya beberapa detik kemudian. Operator harus menunggu atau menambah
-akun. PR upstream `decolua/9router#130` menambahkan sakelar "Force Fallback":
-saat tidak ada akun yang tersedia, pakai akun dengan sisa cooldown paling
-kecil, lalu biarkan upstream yang memutuskan menerima atau menolak.
-
-Sumber kebenarannya tetap satu: `getBestConnection` sudah menghitung
-`cooldownUntil` (reset tercepat) untuk pesan error, jadi kandidat yang dipaksa
-hanya perlu diurutkan ulang berdasarkan nilai yang sama. Sakelarnya
-`settings.forceFallback` (toggle Dashboard → Default Routing Strategy) atau env
-`FORCE_FALLBACK_ON_ALL_UNAVAILABLE=true` untuk deployment yang harus bertahan
-sebelum ada yang membuka UI. Default-nya mati: tanpa opt-in, perilaku tidak
-berubah sama sekali.
-
-Kandidat paksa hanya berisi akun yang benar-benar punya cooldown. Akun yang
-kena per-model lock atau quota cache tidak ikut, sebab tidak ada cooldown yang
-bisa dipendekkan — memaksanya berarti membuang kunci yang justru menyingkirkan
-akun tersebut, lalu model's itu dihajar berulang. Blokir per-model dievaluasi
-lebih dulu (`connectionModelBlocked`), dan akun yang dikecualikan client
-(`x-connection-id`/combo) juga disaring seperti upstream. Bila seluruh kandidat
-tersaring habis, error cooldown yang biasa tetap dikembalikan.
-
-Perbaikan yang ikut ditemukan: `handleAccountFallback` mengatribusikan permintaan
-kandidat loop (`c.ID`), bukan ke akun yang benar-benar dipanggil. Begitu
-seleksi paksa aktif, keduanya bisa berbeda — baris usage, log, dan daftar
-exclusion semuanya harus menyebut akun yang benar-benar didial. Integrasi
-`internal/integration/force_fallback_test.go` mengunci kontrak ini lewat router
-produksi dengan upstream palsu.
+**Verification:** Unit tests `internal/tokensaver/prompts_adhd_test.go` and `internal/handlers/chat/rtk_metrics_test.go` pass 100%.
 
 
-### 🐛 Antigravity: fallback ke `aicode-consumers` saat project ID kosong & perbaiki copy clipboard di HTTP LAN — issue #123
+### 🧹 Antigravity OAuth tests split out into `antigravity_test.go` — issue #136
 
-- **Fallback project ID kosong:** Permintaan Antigravity tanpa project ID eksplisit kini fallback ke default `aicode-consumers`, mencegah kegagalan routing ke upstream assist Google Cloud Code.
-- **Probe metadata & enum:** Menyelaraskan metadata probe dengan format enum numerik, membersihkan header klien yang tidak otentik, dan menghormati cache negatif.
-- **Clipboard di non-secure context (HTTP LAN):** `navigator.clipboard` hanya tersedia pada secure context (HTTPS / localhost). Akses dashboard melalui alamat IP LAN via HTTP biasa sebelumnya mengalami error saat menyalin API key atau perintah terminal. Ditambahkan fallback berbasis `document.execCommand('copy')` dengan elemen textarea tersembunyi.
+Four Antigravity handler tests (`TestHandleAntigravityAuthorize`, `TestGetAntigravityRedirectURI`, `TestHandleAntigravityExchangeErrors`, `TestHandleAntigravityExchangeSuccess`) were previously stored in `freebuff_test.go`, obscuring provider isolation. All four were moved to `antigravity_test.go` with identical contents, preserving the principle of independence between providers.
+**Verification:** `go vet ./...` is clean, `go test -race ./internal/handlers/oauth/...` is green.
 
-**Verifikasi:** `TestResolveAntigravityProjectID_FallbackAICodeConsumers` & unit test clipboard di `web/src/lib/clipboard.test.ts` (105 assertion) lolos 100%.
+### ⚡ Force Fallback: serve the account whose cooldown expires soonest (issue #130, parity with `decolua/9router` PR #130)
 
-### ✨ Override header per provider — issue #101 (bagian 4), upstream b3cf3fde parity
+Until now, if **all** accounts of a provider were on cooldown, the gateway
+failed immediately — while the account that would be free soonest could have
+served requests just seconds later. Operators had to wait or add more
+accounts. Upstream PR `decolua/9router#130` adds a "Force Fallback" switch:
+when no account is available, use the account with the smallest remaining
+cooldown, then let upstream decide whether to accept or reject.
 
-Operator akhirnya bisa menyuntik header ke request outbound sebuah provider
-tanpa menyentuh kode. Hilang total dari sisi kita: tidak ada route, tidak ada
-field settings, tidak ada titik injeksi, tidak ada UI.
+The source of truth stays single: `getBestConnection` already computes
+`cooldownUntil` (the earliest reset) for the error message, so the forced
+candidate only needs to be re-sorted by the same value. The switch is
+`settings.forceFallback` (Dashboard → Default Routing Strategy toggle) or the env
+`FORCE_FALLBACK_ON_ALL_UNAVAILABLE=true` for deployments that must hold up
+before anyone opens the UI. The default is off: without opt-in, behavior does
+not change at all.
 
-**Penyimpanan** mengikuti pola settings yang sudah ada, bukan tabel baru:
-`providerOverrides` di blob `settings`, dibaca lewat `db.GetProviderOverride`
-dan ditulis lewat `db.SetProviderOverride`, dengan kunci **canonical provider
-id** — sama seperti upstream yang mengunci `resolveProviderAlias(id)`. Sisi
-request mengkanonicalkan juga (`chat.ProviderOverrideKey`), jadi satu entri
-melayani dua ejaan: dashboard membuka halaman lewat alias, sementara request
-datang sebagai `provider/model`.
+Forced candidates only include accounts that actually have a cooldown. Accounts
+hit by a per-model lock or the quota cache are not included, since there is no
+cooldown that could be shortened — forcing them means discarding the very lock
+that excludes such an account, after which that model gets hammered repeatedly.
+Per-model blocks are evaluated first (`connectionModelBlocked`), and
+client-excluded accounts (`x-connection-id`/combo) are filtered as upstream
+does. If all candidates are filtered out, the usual cooldown error is returned.
 
-**Titik injeksi** cuma satu: `getProviderConfig` memerge override ke
-`cfg.StaticHeaders` sebelum mengembalikan config
-(`chat.applyProviderOverrides`). Itu sengaja — setiap executor menyusun
-header outbound dari `cfg.StaticHeaders`, jadi merge di sini menjangkau
-semuanya tanpa satu pun file executor belajar fitur ini. Upstream sendiri
-melakukan merge di dalam executor, yang di sini berarti menyalinnya ke
-sekitar belasan file. Merge dilakukan **setelah** rewrite relay, jadi header
-relay pun bisa di-override, sama seperti `Object.assign` upstream.
+A fix discovered along the way: `handleAccountFallback` attributed the request
+to the loop candidate (`c.ID`), not to the account actually invoked. As soon as
+forced selection is active, the two can differ — usage rows, logs, and the
+exclusion list must all name the account actually dialed. The integration
+`internal/integration/force_fallback_test.go` locks down this contract through the
+production router with a fake upstream.
 
-**Presedensi ditulis eksplisit:** override menang atas static header registry
-(`providers.MergeHeaderOverrides`), persis `Object.assign(headers,
-providerOverrides.headers)` di `open-sse/executors/base.js:132`. Operator
-memperbaiki header yang gateway kirim, bukan menambah pendapat kedua.
 
-**Permukaan yang ditolak** — inilah yang membuat fitur ini tidak menjadi
-auth bypass, berbeda dari kalau "override menang atas semua" diterapkan tanpa
+### 🐛 Antigravity: fall back to `aicode-consumers` when the project ID is empty & fix clipboard copy on HTTP LAN — issue #123
+
+- **Empty project ID fallback:** Antigravity requests without an explicit project ID now fall back to the default `aicode-consumers`, preventing routing failures to the Google Cloud Code assist upstream.
+- **Metadata probe & enum:** Aligning the metadata probe with the numeric enum format, cleaning up inauthentic client headers, and honoring the negative cache.
+- **Clipboard in non-secure contexts (HTTP LAN):** `navigator.clipboard` is only available in a secure context (HTTPS / localhost). Accessing the dashboard via a LAN IP address over plain HTTP previously produced errors when copying the API key or terminal commands. A fallback based on `document.execCommand('copy')` with a hidden textarea element was added.
+
+**Verification:** `TestResolveAntigravityProjectID_FallbackAICodeConsumers` & the clipboard unit tests in `web/src/lib/clipboard.test.ts` (105 assertions) pass 100%.
+
+### ✨ Per-provider header override — issue #101 (part 4), upstream b3cf3fde parity
+
+Operators can finally inject headers into a provider's outbound request
+without touching code. It was entirely absent on our side: no route, no
+settings field, no injection point, no UI.
+
+**Storage** follows the existing settings pattern rather than a new table:
+`providerOverrides` in the `settings` blob, read via `db.GetProviderOverride`
+and written via `db.SetProviderOverride`, keyed by the **canonical provider
+id** — just like upstream, which locks `resolveProviderAlias(id)`. The request
+side canonicalizes too (`chat.ProviderOverrideKey`), so one entry serves two
+spellings: the dashboard opens the page via the alias, while the request
+arrives as `provider/model`.
+
+**Injection point** is just one: `getProviderConfig` merges the overrides into
+`cfg.StaticHeaders` before returning the config
+(`chat.applyProviderOverrides`). That's deliberate — every executor builds its
+outbound headers from `cfg.StaticHeaders`, so merging here reaches
+everything without a single executor file learning about this feature. Upstream
+itself merges inside the executor, which here would mean copying it into about a
+dozen files. The merge happens **after** the relay rewrite, so relay headers
+can be overridden too, just like upstream's `Object.assign`.
+
+**Precedence is written explicitly:** overrides win over the static header
+registry (`providers.MergeHeaderOverrides`), exactly `Object.assign(headers,
+providerOverrides.headers)` in `open-sse/executors/base.js:132`. Operators
+correct the headers the gateway sends, not add a second opinion.
+
+**Rejected surface** — this is what keeps this feature from becoming an auth
+bypass, unlike applying "overrides win over everything" without any
 filter. `authorization`, `cookie`, `host`, `content-length`, `content-type`,
-`connection`, dan `transfer-encoding` tidak bisa di-override. Daftar dan
-aturannya milik upstream, dipindah ke `db.NormalizeProviderOverrides` supaya
-tidak bisa dilewati lewat jalur tulis kedua. `Host` yang boleh di-override
-akan mengarahkan traffic ke host lain; `Authorization` yang boleh di-override
-akan mengarahkan traffic ke akun lain. Keduanya ditolak, dan GET
-mengembalikannya ke UI supaya field-nya ditolak **dengan alasan**, bukan
-supaya operator menemukannya lewat 400.
+`connection`, and `transfer-encoding` cannot be overridden. The list and its
+rules belong to upstream and were moved into `db.NormalizeProviderOverrides` so
+they cannot be bypassed through a second write path. An overridable `Host`
+would direct traffic to a different host; an overridable `Authorization`
+would direct traffic to a different account. Both are rejected, and the GET
+returns them to the UI so its fields are rejected **with a reason**, rather than
+so operators discover it via a 400.
 
-Nama header dibatasi ke subset token RFC 7230 dan nilai dicek bebas CR/LF —
-tanpa itu, satu nilai dengan `\r\n` menyuntik header kedua ke request yang
-keluar.
+Header names are restricted to the RFC 7230 token subset and values are
+checked to be free of CR/LF — without that, a single value containing `\r\n`
+would inject a second header into the outgoing request.
 
-**UI** `ProviderHeaderOverridesModal.svelte` (padanan `CustomConfigCard`
-upstream), dipasang di toolbar provider detail. Ia menampilkan
-`builtinHeaders` dari registry sebagai baseline — jadi operator melihat
-persis apa yang dikirim gateway, bukan menebak — dan memvalidasi dengan
-aturan yang sama sebelum mengirim, supaya kesalahan ditemukan di field.
+**UI** `ProviderHeaderOverridesModal.svelte` (the counterpart of upstream's
+`CustomConfigCard`) is placed in the provider detail toolbar. It displays
+`builtinHeaders` from the registry as the baseline — so operators see exactly
+what the gateway sends instead of guessing — and validates with the same rules
+before submitting, so mistakes are caught in the field.
 
-**Verifikasi:** `TestProviderHeaderOverrideReachesUpstream` (integration —
-router asli, upstream palsu) membuktikan `X-Tenant: acme` benar-benar diterima
-upstream sementara `Authorization` milik koneksi tetap utuh;
-`TestProviderHeaderOverrideBeatsRegistryHeader` membuktikan override
-mengalahkan `x-opencode-client: desktop` dari registry;
-`TestProviderHeaderOverrideIsScopedToItsProvider` membuktikan override kimi
-tidak bocor ke request deepseek; `TestProviderHeaderOverrideCannotStealCredentials`
-membuktikan penolakan 400 tidak merusak entri yang tersimpan. Plus
+**Verification:** `TestProviderHeaderOverrideReachesUpstream` (integration —
+real router, fake upstream) proves `X-Tenant: acme` is genuinely accepted
+upstream while the connection's `Authorization` stays intact;
+`TestProviderHeaderOverrideBeatsRegistryHeader` proves the override
+defeats the registry's `x-opencode-client: desktop`;
+`TestProviderHeaderOverrideIsScopedToItsProvider` proves the kimi override
+does not leak into deepseek requests; `TestProviderHeaderOverrideCannotStealCredentials`
+proves the 400 rejection does not corrupt the stored entry. Plus
 `TestProviderOverridesRoundTrip`,
 `TestProviderOverridesAliasAndCanonicalAreOneEntry`,
-`TestProviderOverridesRejectAuthAndFramingHeaders` (11 subtest), dan
-`TestProviderOverridesRejectedWriteKeepsPrevious`. Test wire gagal identik di
-`origin/main` (`upstream X-Tenant = ""`, dan `x-opencode-client = "desktop"`).
-Disinke juga lewat UI sungguhan: modal dibuka di browser, header disimpan,
-dan nilainya masih ada setelah reload.
+`TestProviderOverridesRejectAuthAndFramingHeaders` (11 subtests), and
+`TestProviderOverridesRejectedWriteKeepsPrevious`. The wire tests fail
+identically on `origin/main` (`upstream X-Tenant = ""`, and `x-opencode-client = "desktop"`).
+Also synced through the real UI: the modal is opened in a browser, the header
+saved, and its value is still there after a reload.
 
-### ✨ Dashboard: deep link filter quota, filter `hidden`, `recurring` codebuddy-intl — issue #101 (bagian 1–3)
+### ✨ Dashboard: deep link for the quota filter, `hidden` filter, `recurring` for codebuddy-intl — issue #101 (parts 1–3)
 
-Tiga permukaan dashboard yang tertinggal dari upstream v0.5.95.
+Three dashboard surfaces left behind from upstream v0.5.95.
 
-**`?provider=` tidak melakukan apa pun.** `providerFilter` di
-`QuotaTrackerView` selalu mulai dari `'all'`; `onMount` membaca localStorage
-dan settings, tidak pernah `window.location.search`, dan perubahan filter
-tidak pernah menulis balik ke URL — jadi deep link dan bookmark mati.
-Sekarang filter diinisialisasi dari URL saat mount, dan setiap perubahan
-menulis balik lewat `history.replaceState`, bukan `pushState`: ini filter,
-bukan navigasi, jadi tombol back tidak boleh menelusuri setiap provider yang
-diklik. Kembali ke `all` menghapus parameternya. Nilai yang tidak dikenal
-dilepas setelah daftar opsi benar-benar tiba — bukan diabaikan di awal —
-supaya bookmark lama tidak pernah menyisakan daftar kosong tanpa jalan keluar.
+**`?provider=` does nothing.** `providerFilter` in
+`QuotaTrackerView` always starts from `'all'`; `onMount` reads localStorage
+and settings, never `window.location.search`, and filter changes never write
+back to the URL — so deep links and bookmarks are dead.
+Now the filter is initialized from the URL on mount, and every change writes
+back via `history.replaceState`, not `pushState`: this is a filter,
+not navigation, so the back button must not walk through every provider
+clicked. Going back to `all` removes its parameter. Unknown values are
+dropped after the option list has actually arrived — not ignored up front —
+so old bookmarks never leave an empty list with no way out.
 
-**`codebuddy-intl` kehilangan `recurring`.** Backend sudah mengirim field itu
-(`usage_providers.go:998` `true`, `:1006` `false`); switch frontend hanya
-punya `case 'codebuddy-cn'`. Akibatnya paket bonus codebuddy-intl tampil dengan
-label "Reset in" alih-alih "Expires in". Kedua provider kini ditangani di
-case yang sama, seperti `ProviderLimits/utils.js:621-635` upstream.
+**`codebuddy-intl` loses `recurring`.** The backend was already sending that
+field (`usage_providers.go:998` `true`, `:1006` `false`); the frontend switch
+only has `case 'codebuddy-cn'`. As a result the codebuddy-intl bonus plan
+displayed with the label "Reset in" instead of "Expires in". Both providers are
+now handled in the same case, like upstream's `ProviderLimits/utils.js:621-635`.
 
-**Flag `hidden` ada di tipe tapi tidak dipakai.** `providers.ts`
-mendeklarasikan dan menyetelnya, dan dua pemakainya sudah benar
-(`ProvidersOverviewGrid` untuk tiap kategori, `providers.ts:2282` untuk
-`supportsKind`) — yang belum adalah peta topologi. Dari lima provider yang
-ditandai tersembunyi, empat hanya TTS dan sudah tersaring oleh
-`supportsKind`; satu-satunya yang tersisa adalah `mmf`/mimo-free,
-provider chat tersembunyi yang satu-satunya di registry. `addProvider` →
-`topologyProviders` di `AnalyticsView` sekarang melewatinya, dengan alasan
-yang sama seperti daftar provider: peta itu dibaca sebagai "siapa yang sedang
-di bus", bukan inventaris lengkap. Halaman detail provider untuk yang
-`hidden` tetap bisa dibuka — itu kontrak field-nya sendiri.
+**The `hidden` flag exists in the type but is unused.** `providers.ts`
+declares and sets it, and its two consumers are already correct
+(`ProvidersOverviewGrid` for each category, `providers.ts:2282` for
+`supportsKind`) — what is missing is the topology map. Of the five providers
+marked hidden, four are TTS-only and are already filtered out by
+`supportsKind`; the only one remaining is `mmf`/mimo-free, the only hidden
+chat provider in the registry. `addProvider` → `topologyProviders` in
+`AnalyticsView` now skips it, for the same reason as the provider list: that
+map is read as "who is on the bus right now", not a complete inventory. The
+provider detail page for one that is `hidden` can still be opened — that is
+the field's own contract.
 
-**Soal "satu sumber kebenaran" di sisi Go:** tidak ada, dan tidak dibuat.
-Go tidak punya salinan flag `hidden`; memilikinya berarti menggandakan
-registry yang sudah hidup di `web/src/lib/providers.ts` ke tempat ketiga.
-Yang bisa dijamin Go adalah hal yang benar-benar dimilikinya — daftar
-provider yang dilayani quota tracker. Daftar itu sekarang berisi nol dari
-lima provider tersembunyi, jadi `isUsageEligibleConnection` sudah mengeluarkan
-mereka dari `providerOptions` dan daftar koneksi; hasilnya identik dengan
-penyaringan upstream di `UsageStats.js:242` dan `:250` untuk registry saat
-ini. `TestHiddenProvidersStayOutOfTheQuotaList` mengunci itu, sehingga
-provider tersembunyi yang suatu saat ikut dilayani quota tracker akan
-gagal di test dan diperbaiki di commit yang sama.
+**On the "single source of truth" on the Go side:** there is none, and none
+was created. Go does not have a copy of the `hidden` flag; owning one would
+mean duplicating the registry that already lives in
+`web/src/lib/providers.ts` into a third place. What Go can guarantee is what
+it actually owns — the list of providers served by the quota tracker. That
+list now contains zero of the five hidden providers, so
+`isUsageEligibleConnection` has already excluded them from `providerOptions`
+and the connection list; the result is identical to upstream's filtering in
+`UsageStats.js:242` and `:250` for the current registry.
+`TestHiddenProvidersStayOutOfTheQuotaList` locks that in, so a hidden provider
+that someday gets served by the quota tracker will fail the test and be fixed
+in the same commit.
 
-**Verifikasi:** `bun test` (127 pass), `tsc -b`, `oxlint`, `bun run build`,
-`go test ./internal/handlers/dashboard/...` (termasuk
+**Verification:** `bun test` (127 pass), `tsc -b`, `oxlint`, `bun run build`,
+`go test ./internal/handlers/dashboard/...` (including
 `TestHiddenProvidersStayOutOfTheQuotaList`).
 
-### ✨ Custom model bisa mendeklarasikan `contextWindow` dan `maxOutput` — issue #90
+### ✨ Custom models can declare `contextWindow` and `maxOutput` — issue #90
 
-`db.CustomModel` hanya punya lima field, jadi model pada provider node
-OpenAI-compatible tidak punya cara menyatakan jendela konteksnya. Angka yang
-dipublikasikan ke `/v1/models` dan `/v1/models/info` murni hasil tebakan
-substring: `my-custom-model` dan `llama-3.3-70b` selalu jatuh ke `128000 /
-4096` hanya karena id-nya tidak kena pola apa pun. Rantai resolusinya
-(`GetModelTokenLimits` selalu mengembalikan non-nol, jadi lantai 128k praktis
-tidak pernah tercapai) membuat model open-source ber-window besar dilaporkan
-jauh lebih kecil dari kenyataan endpoint.
+`db.CustomModel` had only five fields, so models on OpenAI-compatible provider
+nodes had no way to state their context window. The numbers published to
+`/v1/models` and `/v1/models/info` were pure substring guesses: `my-custom-model`
+and `llama-3.3-70b` always fell to `128000 / 4096` simply because their ids
+matched no pattern. The resolution chain
+(`GetModelTokenLimits` always returns non-zero, so the 128k floor is
+practically never reached) makes large-window open-source models report
+far smaller than the endpoint really is.
 
-Dua field opsional ditambahkan:
+Two optional fields were added:
 
-- `db.CustomModel.ContextWindow` / `MaxOutput`, `omitempty` — nol berarti
-  "tidak dideklarasikan", jadi baris yang tersimpan sebelum field ini ada
-  berperilaku persis seperti sebelumnya.
-- `applyCustomCaps` membaca keduanya sebagai **deklarasi**, bukan penutup
-  celah: angka yang dideklarasikan menggantikan tebakan tabel, sedangkan
-  angka yang nol membiarkan tabel yang bicara. Ini berbeda dari flag
-  modalitas di sekitarnya yang bersifat aditif.
+- `db.CustomModel.ContextWindow` / `MaxOutput`, `omitempty` — zero means
+  "not declared", so rows saved before these fields existed behave exactly as
+  before.
+- `applyCustomCaps` reads both as **declarations**, not gap closers: a
+  declared number replaces the table guess, while a zero number leaves the
+  table in charge. This differs from the surrounding modality flags, which are
+  additive.
 
-Form "Add Model" punya dua kolom baru (opsional), dan "Import from /models"
-menyimpan `context_length` / `max_completion_tokens` apa yang dilaporkan
-endpoint itu — sumbernya otoritatif, jadi tidak perlu ditebak ulang.
+The "Add Model" form has two new (optional) columns, and "Import from /models"
+saves the `context_length` / `max_completion_tokens` that the endpoint
+reports — the source is authoritative, so there is no need to guess again.
 
-`GET /api/models/caps?provider=<node>` juga diperbaiki: node yang modelnya
-semua custom row tidak punya katalog registry, jadi endpoint itu membalas
-`caps: {}` dan angka yang sama tidak pernah terlihat di dashboard. Sekarang
-custom row ikut di sana, dengan flag dan limit yang dideklarasikan.
+`GET /api/models/caps?provider=<node>` is also fixed: a node whose models are
+all custom rows has no registry catalog, so the endpoint replied with
+`caps: {}` and the same numbers were never visible in the dashboard. Now
+custom rows are included there, with the declared flags and limits.
 
-Angka ini hanya untuk jalur metadata: `handleSingleModel` meneruskan
-body apa adanya, jadi tidak ada truncasi atau clamp `max_tokens` yang ikut
-berubah.
+These numbers are only for the metadata path: `handleSingleModel` passes the
+body through as-is, so no truncation and no `max_tokens` clamp change along
+with it.
 
-**Verifikasi:** `TestCustomModelDeclaredLimitsReachEveryDiscoverySurface`
-(integration — router asli, HTTP listener sungguhan, SQLite sementara)
-membuktikan angka 1000000/32000 sampai apa adanya ke `/v1/models`,
-`capabilities`, dan `/v1/models/info`, sementara baris tanpa deklarasi tetap
-memakai nilai tabel; `TestCustomModelDeclaredLimitsPublishedVerbatim` dan
+**Verification:** `TestCustomModelDeclaredLimitsReachEveryDiscoverySurface`
+(integration — real router, a real HTTP listener, temporary SQLite)
+proves the 1000000/32000 numbers reach `/v1/models`, `capabilities`, and
+`/v1/models/info` untouched, while rows without declarations still use the
+table values; `TestCustomModelDeclaredLimitsPublishedVerbatim` and
 `TestCustomModelPartialLimitFillsOnlyTheGap` (unit), plus
-`TestHandleGetModelCaps_CustomModelsOnNode` (dashboard, termasuk baris
-bertipe image yang tidak boleh muncul di peta chat). Ketiga test batas gagal
-identik di `origin/main` (dibuktikan dengan `git stash`).
+`TestHandleGetModelCaps_CustomModelsOnNode` (dashboard, including
+image-typed rows which must not appear in the chat map). All three boundary
+tests fail identically on `origin/main` (proven with `git stash`).
 
-### 🧹 `signalSelfShutdown` mati di kedua varian build dihapus — issue #76
+### 🧹 Dead `signalSelfShutdown` in both build variants removed — issue #76
 
-`internal/updater/signal_unix.go` dan `signal_windows.go` mendefinisikan
-`signalSelfShutdown` dengan isi identik (`shutdown.RequestStop()`), dan tidak
-punya call site sejak rewrite `RestartSelf` pindah ke
-`shutdown.RestartAfterStop`. Komentar fallback `os.Exit(0)` yang dibawa keduanya
-mendeskripsikan kode yang sudah tidak ada. Keduanya dihapus: pembatas platform
-yang membenarkan pemisahan file itu sudah hilang, karena
-`shutdown.RequestStop()` adalah satu-satunya jalur shutdown di semua platform.
+`internal/updater/signal_unix.go` and `signal_windows.go` defined
+`signalSelfShutdown` with identical contents (`shutdown.RequestStop()`), and it
+has had no call site since the `RestartSelf` rewrite moved to
+`shutdown.RestartAfterStop`. The `os.Exit(0)` fallback comment that both carried
+describes code that no longer exists. Both were removed: the platform caveat
+that justified splitting the file is gone, because
+`shutdown.RequestStop()` is the only shutdown path on all platforms.
 
-Entri "BELUM dihapus" yang sebelumnya tertinggal di `[Unreleased]` dan di badan
-rilis v1.9.7 dikoreksi menjadi mencatat penghapusannya.
+The "NOT YET REMOVED" entry that had been left behind in `[Unreleased]` and in
+the body of the v1.9.7 release was corrected to note its removal.
 
-**Verifikasi:** `go vet ./internal/updater/...` bersih, `go test -race
-./internal/updater/...` bersih, dan `go build ./...` untuk linux, windows, dan
-darwin tetap sukses.
+**Verification:** `go vet ./internal/updater/...` is clean, `go test -race
+./internal/updater/...` is clean, and `go build ./...` for linux, windows, and
+darwin still succeeds.
 
-### 🐛 Input custom window usage menolak huruf `d`/`h` di ponsel — issue #115
+### 🐛 Custom window usage input rejects the letters `d`/`h` on phones — issue #115
 
-Field "Custom window" di halaman Usage sudah `type="text"`, tapi tetap membawa
-`inputmode="numeric"`. Di Android/iOS keyboard itu menampilkan keypad angka
-tanpa tombol huruf, jadi pengguna ponsel tidak bisa mengetik `14d` atau `12h`
-sama sekali — sufiks wajib justru tidak bisa diketik, dan input yang kembali
-kosong membuat halaman jatuh ke preset 7 hari. `inputmode="numeric"` dihapus;
-`normalizeCustomPeriod` sudah menolak angka telanjang dengan pesan galat, jadi
-validasi tidak berubah.
+The "Custom window" field on the Usage page was already `type="text"`, but it
+still carried `inputmode="numeric"`. On Android/iOS keyboards that shows a
+numeric keypad with no letter keys, so mobile users simply cannot type `14d` or
+`12h` — the mandatory suffix itself cannot be typed, and the input coming back
+empty makes the page fall back to the 7-day preset. `inputmode="numeric"` was
+removed; `normalizeCustomPeriod` already rejects absurdly large numbers with an
+error message, so validation is unchanged.
 
-### 🎨 Console Log: warna mengikuti level yang benar-benar dieminkan
+### 🎨 Console Log: colors follow the level actually emitted
 
-Halaman Console Log menampilkan semua baris hijau. Penyebabnya bukan pilihan
-warna, tapi halaman menebak level dari teks yang sudah dirender
-(`TerminalView.svelte`: cocokkan `[tag]` atau awalan `INF/WRN/ERR`, selain itu
-hijau), sehingga apa pun yang tidak dikenali — termasuk `502` dari upstream yang
-gagal — jatuh ke hijau "sukses".
+The Console Log page showed every line in green. The cause was not the color
+choice, but the page guessing the level from already-rendered text
+(`TerminalView.svelte`: matching `[tag]` or an `INF/WRN/ERR` prefix, otherwise
+green), so anything unrecognized — including a failing upstream's `502` — fell
+into green "success".
 
-Perbaikannya memindahkan kebenaran ke sumbernya. `log.ConsoleEntry` kini membawa
-`{time, level, line}` yang diambil dari level yang dilaporkan emitter, bukan dari
-teks hasil render, dan buffer + SSE mengirim objek itu apa adanya. Waktu tiba
-ikut ditambahkan karena format teks tidak mencetak stempel waktu sama sekali —
-tanpa itu baris tidak bisa dibedakan begitu buffer tergulir.
+The fix moves the truth to its source. `log.ConsoleEntry` now carries
+`{time, level, line}` taken from the level reported by the emitter, not from the
+rendered text, and the buffer + SSE send that object as-is. Time was added
+alongside because the text format doesn't print a timestamp at all —
+without it lines couldn't be told apart once the buffer scrolls.
 
-Bentuk `logs` berubah dari `string[]` menjadi objek. Ini perubahan kontrak wire
-yang disengaja: satu-satunya konsumennya adalah dashboard Svelte, dan upstream
-Next tidak pernah mengirim level apa pun, jadi tidak ada yang bisa dilanggar.
+The shape of `logs` changes from `string[]` to an object. This is an intentional
+wire contract change: its only consumer is the Svelte dashboard, and upstream
+Next never sent any level, so there is nothing that could break.
 
-Dampaknya ke halaman: baris memakai warna level (ERR merah, WRN amber, INF
-hijau, DBG biru), tiap baris punya stempel `HH:MM:SS.mmm`, chip level
-sekaligus jadi filter dan menampilkan hitungan, pencarian, toggle wrap,
-tombol Jump-to-latest yang muncul saat auto-scroll berhenti, salin/ekspor, serta
-empty state yang menyebut penyebabnya. Panel memakai token tema, bukan
-`bg-black` — panel gelap di tema terang dashboard terbaca seperti tidak sengaja.
+Impact on the page: lines use the level color (ERR red, WRN amber, INF
+green, DBG blue), each line has an `HH:MM:SS.mmm` stamp, the level chip is
+both the filter and the counter display, plus search, a wrap toggle, a
+Jump-to-latest button that appears when auto-scroll stops, copy/export, and an
+empty state that names the cause. The panel uses theme tokens, not
+`bg-black` — a dark panel in the dashboard's light theme reads as an accident.
 
-Warna level diverifikasi terhadap palet yang benar-benar terkompilasi, bukan
-perkiraan nama kelas: Tailwind 4 mengkompilasi warna ke `oklch`, jadi
-`text-red-700` bukan `#b91c1c`. Diukur pada piksel render sungguhan — light
+Level colors were verified against the palette that actually gets compiled, not
+a guess of the class name: Tailwind 4 compiles colors to `oklch`, so
+`text-red-700` is not `#b91c1c`. Measured on real rendered pixels — light
 ERR 6.10:1 / INF 5.10:1 / DBG 7.14:1, dark ERR 4.90:1 / WRN 8.22:1 / INF
-7.30:1 / DBG 8.50:1 — semua di atas ambang WCAG AA 4.5:1, dan
-`consoleLogContrast.test.ts` menjaga angka itu agar tidak bisa diam-diam
-menurun saat palet Tailwind naik versi.
+7.30:1 / DBG 8.50:1 — all above the WCAG AA 4.5:1 threshold, and
+`consoleLogContrast.test.ts` guards those numbers so they can't silently
+drop when the Tailwind palette bumps versions.
 
-### 🐛 Capacity adapter tidak mengikuti upstream — parity `open-sse/services/capacityAdapter.js`
+### 🐛 Capacity adapter does not follow upstream — parity with `open-sse/services/capacityAdapter.js`
 
-Adapter input-modality (vision/pdf/audioInput/videoInput) di port ini menyimpang
-dari upstream `decolua/9router` di enam titik, tiga di antaranya mengubah
-perilaku yang diamati klien:
+The input-modality adapter (vision/pdf/audioInput/videoInput) in this port
+diverges from upstream `decolua/9router` in six places, three of which change
+client-observable behavior:
 
-1. **Toggle `enabled: false` diabaikan.** `combo.go` `continue` melewati entri yang
-   dinonaktifkan, lalu blok "default fallback" tetap berjalan karena `len(pool) == 0`
-   — tidak ada pembeda antara pool *dimatikan* dan pool *tidak dikonfigurasi*.
-   Akibatnya request berisi gambar tetap dialihkan ke
-   `ag/gemini-3.8-flash-high` meski operator mematikan adapter-nya. Upstream
-   `normalizeCapEntry` mengembalikan `{enabled:false, models:[]}` dan
-   `getCapacityAdapterModels` melewatkannya, jadi tidak ada yang di-inject.
-2. **Default model salah.** Entri kosong jatuh ke `ag/gemini-3.8-flash-high`;
-   upstream memakai satu konstanta untuk semua kapabilitas,
-   `DEFAULT_FALLBACK_MODEL = "oc/mimo-v2.6-flash-free"`, hanya di dalam cabang
-   `enabled && models.length === 0`.
-3. **Bentuk entri legacy tidak didukung.** Upstream menerima bentuk array lama
-   `[{model, enabled}]`; parse typed hanya mengenali bentuk objek.
-4. **`reorderByCapabilities` dua tier.** Versi ini hanya "penuhi semua kapabilitas"
-   vs "sisanya". Upstream tiga tier: hard+soft, hard saja, lalu sisanya — sehingga
-   di antara dua model yang sama-sama vision, yang juga punya `search`/`tools`
-   didahulukan.
-5. **Deteksi kapabilitas jauh lebih sempit.** Yang port ini punya hanya memindai
-   satu pesan `role: "user"` terakhir; upstream memindai *trailing run* setelah
-   pesan assistant/model terakhir dan juga membaca `contents`/`request.contents`
+1. **`enabled: false` toggle ignored.** `combo.go` `continue`s past disabled
+   entries, then the "default fallback" block still runs because `len(pool) == 0`
+   — there's no distinction between a pool that is *off* and a pool that is
+   *unconfigured*. As a result requests containing images still get routed to
+   `ag/gemini-3.8-flash-high` even though the operator turned the adapter off.
+   Upstream `normalizeCapEntry` returns `{enabled:false, models:[]}` and
+   `getCapacityAdapterModels` skips it, so nothing gets injected.
+2. **Wrong default model.** Empty entries fall to `ag/gemini-3.8-flash-high`;
+   upstream uses one constant for all capabilities,
+   `DEFAULT_FALLBACK_MODEL = "oc/mimo-v2.6-flash-free"`, only inside the
+   `enabled && models.length === 0` branch.
+3. **Legacy entry shape unsupported.** Upstream accepts the old array shape
+   `[{model, enabled}]`; the typed parse only recognizes the object shape.
+4. **`reorderByCapabilities` is two-tier.** This version only has "satisfy all
+   capabilities" vs "the rest". Upstream has three tiers: hard+soft, hard only,
+   then the rest — so among two models that are both vision and also have
+   `search`/`tools`, the latter is prioritized.
+5. **Capability detection is far narrower.** What this port has only scans
+   the last single `role: "user"` message; upstream scans the *trailing run* after
+   the last assistant/model message and also reads `contents`/`request.contents`
    (Gemini/Antigravity), `images` (Ollama/Hermes), `attachments` /
-   `experimental_attachments`, data-URI di dalam string, serta menebak mime pada
-   blok file dari `file_data`/`source.media_type`.
-6. **History tidak dipangkas untuk model adapter.** Upstream
-   `stripHistoryForContext` memotong tengah percakapan agar muat di context window
-   model adapter yang sering jauh lebih kecil. Tanpa itu, percakapan panjang yang
-   dialihkan ke adapter gagal karena panjang di upstream.
+   `experimental_attachments`, data-URIs inside strings, and guesses the mime
+   of file blocks from `file_data`/`source.media_type`.
+6. **History isn't trimmed for adapter models.** Upstream
+   `stripHistoryForContext` cuts the conversation in the middle so it fits the
+   adapter model's context window, which is often much smaller. Without it, long
+   conversations routed to the adapter fail on length upstream.
 
-Selain itu `detectRequiredCapabilities` kini memakai `trailingUserItems`, jadi
-gambar di turn lama tidak lagi mengunci combo ke model vision — sesuai catatan
-upstream bahwa media history "gets stripped + placeholdered downstream".
-Jalur fusion juga kini menerima model combo apa adanya, bukan daftar yang sudah
-di-augment, sesuai `src/sse/handlers/chat.js` yang mengirim `comboModels` ke
-`handleFusionChat`.
+Additionally, `detectRequiredCapabilities` now uses `trailingUserItems`, so
+images in old turns no longer lock the combo to a vision model — matching
+upstream's note that history media "gets stripped + placeholdered downstream".
+The fusion path now also accepts any combo model as-is, rather than a list that
+has already been augmented, matching `src/sse/handlers/chat.js` which sends
+`comboModels` to `handleFusionChat`.
 
-Ditambah `looksLikeVisionModel` (port `open-sse/providers/visionPatterns.js`) sebagai
-heuristik terakhir: id model yang memuat kata modalnya sendiri (`qwen3-vl-plus`,
-`glm-4.6v`) dianggap vision walau belum ada di tabel kapabilitas. Sepperti
-upstream, ini hanya menyalakan vision, tidak pernah mematikannya.
+Also added is `looksLikeVisionModel` (a port of `open-sse/providers/visionPatterns.js`)
+as a last-resort heuristic: a model id containing its modality word itself
+(`qwen3-vl-plus`, `glm-4.6v`) is treated as vision even if it's not yet in the
+capability table. As with upstream, this only turns vision on, never off.
 
-Perilaku yang dipertahankan: nama combo di pool vision tetap tidak memenuhi hard
-cap, karena `modelSatisfies` upstream memecah pada `/` dengan cara yang sama. Pool
-hanya menerima model vision, bukan combo — jadi combo utama yang tidak mendukung
-vision tidak dialihkan ke "combo vision", dan memang tidak bisa begitu di upstream.
+Preserved behavior: combo names in the vision pool still don't satisfy a hard
+cap, because upstream's `modelSatisfies` splits on `/` the same way. The pool
+only accepts vision models, not combos — so a primary combo that doesn't
+support vision isn't routed to the "vision combo", and indeed couldn't be so
+upstream either.
 
-### 🔒 `http.Server` tanpa batas koneksi — rentan Slowloris — issue #124
+### 🔒 `http.Server` without connection limits — vulnerable to Slowloris — issue #124
 
-`ProvideServer` membangun `http.Server` hanya dengan `Addr` dan `Handler`, jadi
-`ReadHeaderTimeout` dan `IdleTimeout` sama-sama nol: klien yang membuka soket
-lalu mengirim header byte-per-byte menahan satu file descriptor tanpa ujung,
-dan koneksi yang ditinggalkan di pool keep-alive tidak pernah diserap. Bahaya
-pada konfigurasi ini bukan hipotesis — repo ini punya dua jalur expose ke
-internet (`internal/auth/tunnel.go` untuk tailscale funnel,
-`internal/handlers/media/deploy.go` untuk deploy Cloudflare tunnel / Vercel /
-Deno), jadi "cuma jalan di localhost" tidak berlaku.
+`ProvideServer` builds the `http.Server` with only `Addr` and `Handler`, so
+`ReadHeaderTimeout` and `IdleTimeout` are both zero: a client that opens a
+socket then sends headers byte-by-byte holds one file descriptor indefinitely,
+and connections abandoned in the keep-alive pool are never reaped. The danger
+in this configuration is not hypothetical — this repo has two expose paths to
+the internet (`internal/auth/tunnel.go` for tailscale funnel,
+`internal/handlers/media/deploy.go` for Cloudflare tunnel / Vercel /
+Deno deploys), so "it only runs on localhost" does not hold.
 
-Kini `ReadHeaderTimeout: 10s` dan `IdleTimeout: 120s`. Nilai 10 detik bukan
-angka tebakan: itu sudah dipakai listener OAuth callback di
-`internal/proxy/oauth/codex_proxy.go`, jadi sekarang satu konvensi berlaku di
-kedua tempat. Nilainya sengaja **tidak** dibuat configurable lewat `.env` —
-limit inilah yang menahan satu koneksi, jadi membukanya lewat konfigurasi
-berarti menyerahkan kendali Slowloris ke siapa pun yang bisa mengedit file
-tersebut.
+Now `ReadHeaderTimeout: 10s` and `IdleTimeout: 120s`. The 10-second figure is
+not a guess: it is already used by the OAuth callback listener in
+`internal/proxy/oauth/codex_proxy.go`, so now one convention applies in both
+places. Its value is deliberately **not** made configurable via `.env` —
+this limit is what holds a single connection, so opening it up through
+configuration means handing Slowloris control to anyone who can edit that
+file.`MaxHeaderBytes: 1 MiB` was also installed, but it is **not** part of the hole. Slowloris is already rejected by `net/http` without a limit on header blocks, because the `Server` with a zero value falls back to `http.DefaultMaxHeaderBytes` (1 MiB), so the value actually enforced is the same. Setting it explicitly acts as a statement — the limit is this repo's decision, not a stdlib default that was never reviewed here.
 
-`MaxHeaderBytes: 1 MiB` ikut dipasang, tapi ia **bukan** bagian dari lubang
-Slowloris: `net/http` sudah menolak blok header tanpa batas, karena `Server`
-yang bernilai nol jatuh ke `http.DefaultMaxHeaderBytes` (1 MiB), jadi nilai
-yang benar-benar ditegakkan sama saja. Mematkannya berfungsi sebagai pernyataan
-— batasnya adalah keputusan repo ini, bukan default stdlib yang belum pernah
-direview di sini.
+`WriteTimeout` stays at zero for the reason now written in the code: `internal/proxy/stall.go` allows one silent SSE stream to idle until `DefaultStallTimeout` (6 minutes), and a write deadline would cut that stream off mid-response — including the SSE usage/console-log for the dashboard and Gemini Live WebSocket sockets. `IdleTimeout` is safe because it only applies to keep-alive connections that are **not** currently serving a request.
 
-`WriteTimeout` tetap nol dengan alasan yang sekarang tertulis di kode:
-`internal/proxy/stall.go` mengizinkan satu stream SSE diam sampai
-`DefaultStallTimeout` (6 menit), dan deadline pada penulisan akan memutus
-stream tersebut di tengah respons — termasuk SSE usage/console-log untuk
-dashboard dan socket WebSocket Gemini Live. `IdleTimeout` aman karena hanya
-berlaku ke koneksi keep-alive yang **tidak** sedang melayani request.
+**Verification:** `go vet ./...` is clean; `go test ./... -count=1` is green; `go test -tags=integration -race -count=1 ./internal/integration/...` is green. The new test `TestServer_ConnectionLimitsAreEnforced` boots `ServerModule` via fx and tests the limits that the real `ProvideServer` builds — it fails on `origin/main` with `ReadHeaderTimeout` and `IdleTimeout` at zero, and passes after this patch.
 
-**Verifikasi:** `go vet ./...` bersih; `go test ./... -count=1` hijau;
-`go test -tags=integration -race -count=1 ./internal/integration/...` hijau.
-Test baru `TestServer_ConnectionLimitsAreEnforced` boot `ServerModule` lewat fx
-dan menguji batas yang dibangun `ProvideServer` sungguhan — ia gagal di
-`origin/main` dengan `ReadHeaderTimeout` dan `IdleTimeout` bernilai nol, dan
-lulus setelah patch ini.
+The proof that these limits do not cut off slow models is now a test: `TestServer_SlowStreamingRequestSurvivesTheLimits` runs a handler that uploads its headers in five spaced chunks, is silent for 400ms before the first byte, then drips chunks for ~2.4 seconds — everything must arrive. This test is checked in both directions: it **fails** if `WriteTimeout` is set to 2 seconds, with the last chunk lost right in the middle of the stream, and passes on the correct configuration. The first version of its handler only ran 1.6 seconds so the 2-second deadline happened to suffice and the negative case slipped through — the stream duration now deliberately exceeds that threshold.
 
-Bukti bahwa batas ini tidak memutus model yang lambat, sekarang jadi test:
-`TestServer_SlowStreamingRequestSurvivesTheLimits` menjalankan handler yang
-mengunggah header dalam lima potongan jeda, diam 400ms sebelum byte pertama,
-lalu meneteskan chunk selama ~2,4 detik — semua harus sampai. Test ini
-diperiksa dua arah: ia **gagal** kalau `WriteTimeout` diisi 2 detik, dengan
-chunk terakhir hilang tepat di tengah stream, dan lulus pada konfigurasi yang
-benar. Versi pertama handler-nya hanya berjalan 1,6 detik sehingga deadline 2
-detik sempat cukup dan negatifnya lolos — durasi stream sekarang sengaja
-melampaui ambang itu.
+So the installed limits only apply **before** and **after** a request exists, never in the middle of a stream.
 
-Jadi batas yang dipasang hanya berlaku **sebelum** dan **sesudah** ada request,
-tidak pernah di tengah stream.
+> Note: on one run of `go test ./...`, `TestGateAcquire_SpacesConcurrentCallers` and two tests in `usage_throttle_test.go` failed with the message `want >= 40ms`. Both measure time gaps with `time.Sleep`, and this diff does not touch `internal/fetchgate` or `internal/handlers/dashboard` — `usage_throttle_test.go` calls `router.ServeHTTP` with `httptest.NewRecorder()`, so it never passes through `http.Server` at all. Re-runs on this branch (`-count=3` at `-p 1` and `-p 16`, plus two full `go test ./...` runs) were all green, so this is CPU contention on concurrent runs, not a regression.
 
-> Catatan: pada satu run `go test ./...`, `TestGateAcquire_SpacesConcurrentCallers`
-> dan dua test di `usage_throttle_test.go` gagal dengan pesan
-> `want >= 40ms`. Keduanya mengukur jarak waktu dengan `time.Sleep`, dan diff ini
-> tidak menyentuh `internal/fetchgate` maupun `internal/handlers/dashboard` —
-> `usage_throttle_test.go` memanggil `router.ServeHTTP` dengan
-> `httptest.NewRecorder()`, jadi tidak pernah melewati `http.Server` sama sekali.
-> Run ulang pada branch ini (`-count=3` di `-p 1` dan `-p 16`, plus dua run
-> penuh `go test ./...`) semuanya hijau, jadi ini kontensi CPU pada run paralel,
-> bukan regresi.
+### 🐛 Round-robin rotation stuck: the `lastUsedAt` stamp never advances — issue #107
 
-### 🐛 Rotasi round-robin macet: stempel `lastUsedAt` tidak pernah maju — issue #107
+The root cause is not the stamp format but the time source. The nanosecond format was already correct (`db.RotationTimestampFormat`, fixed width). What failed is `time.Now()`: its precision follows the platform, not Go's promise. On the Windows host where this problem was diagnosed, the clock only advances **every ~815µs** — 689,900 consecutive calls produced 246 distinct values in 200ms. Six rotation picks within a single millisecond therefore formatted into identical strings, and rows with the same stamp could not be distinguished by the least-recently-used tie-break, so the selector kept returning the same account.
 
-Akar masalahnya bukan format stempel, tapi sumber waktunya. Format nanodetik
-memang sudah benar (`db.RotationTimestampFormat`, lebar tetap). Yang gagal adalah
-`time.Now()`: presisinya mengikuti platform, bukan janji Go. Di host Windows tempat
-masalah ini didiagnostik, jam hanya maju **setiap ~815µs** — 689.900 panggilan
-beruntun menghasilkan 246 nilai berbeda dalam 200ms. Enam pick rotasi di dalam
-satu milidetik karena itu memformat menjadi string yang identik, dan baris dengan
-stempel sama tidak bisa dibedakan oleh tie-break least-recently-used, sehingga
-selector mengembalikan akun yang sama terus-menerus.
+`TestApplyConnectionStrategy_KeepsRotatingPastFirstCycle` failed ~1 in 3 runs on a clean `origin/main` (`-count=50`), not as a side effect of any PR.
 
-`TestApplyConnectionStrategy_KeepsRotatingPastFirstCycle` gagal ~1 dari 3 run di
-`origin/main` yang bersih (`-count=50`), bukan efek samping PR mana pun.
+The fix makes the ordering a **property of the write path**, not a property of the clock: `db.stampConnection` reads `MAX(lastUsedAt)` and writes a value that always sorts after it, all inside a single SQLite write lock (`BEGIN IMMEDIATE`). The lock is taken up front, not at the `UPDATE` — a deferred transaction only locks after the `MAX` is read, so two processes sharing one database could read the same maximum and stamp the same value onto two different rows, resurrecting the tie the selector could not break.
 
-Perbaikannya membuat urutan jadi **properti jalur tulis**, bukan properti jam:
-`db.stampConnection` membaca `MAX(lastUsedAt)` dan menulis nilai yang selalu
-mengurutkan setelahnya, di dalam satu kunci tulis SQLite (`BEGIN IMMEDIATE`).
-Kunci diambil di depan, bukan saat `UPDATE` — transaksi deferred baru mengunci
-sesudah `MAX` dibaca, sehingga dua proses yang berbagi satu database bisa membaca
-maksimum yang sama dan mencetak stempel yang sama untuk dua baris berbeda,
-menghidupkan kembali tie yang tidak bisa diputus selector.
+A consequence fixed along the way: `TouchConnectionRotation` now returns the value actually written, so the in-memory row the selector reads can no longer differ from the row on disk. The selector previously read the clock a *second* time separately, so the in-memory value could differ from what was stored.
 
-Konsekuensi yang ikut diperbaiki: `TouchConnectionRotation` kini mengembalikan
-nilai yang benar-benar ditulis, sehingga baris in-memory yang dibaca selector
-tidak lagi bisa berbeda dari baris di disk. Selector sebelumnya membaca jam
-*kedua* secara terpisah, jadi nilai in-memory bisa tidak sama dengan yang
-tersimpan.
+A second flaw was caught while writing the test: the fixed-width stamp `…:00.000000001Z` turns out to sort **after** the legacy `…:00Z` when compared as strings, because `'.'` (0x2E) beats `'Z'` (0x5A). A one-nanosecond bump would never get past that legacy row at all, so the bump skips a full second when a nanosecond is not enough.
 
-Satu cacat kedua ketahuan saat menulis testnya: stempel lebar-tetap
-`…:00.000000001Z` ternyata terurut **sesudah** `…:00Z` versi lama saat
-dibandingkan sebagai string, karena `'.'` (0x2E) mengalahkan `'Z'` (0x5A).
-Lonjakan satu nanosecond tidak akan melewati baris legacy itu sama sekali, jadi
-lonjakan melompat satu detik penuh saat nanosecond tidak cukup.
+**Verification:** `go test ./internal/...` is clean; `go vet ./internal/...` is clean; `go test -race ./internal/db/ ./internal/handlers/chat/` is green; `TestApplyConnectionStrategy_*` is green at `-count=50` (previously failing intermittently on `origin/main`). The new test `TestStampConnection_FrozenClockStillOrdersStrictly` freezes the clock entirely — a condition that would never occur on a host with a low-resolution clock — so the ordering is tested as a contract, not as coincidence. `TestStampConnection_SurvivesRestartAndClockJump` closes the database, reopens it, then sets the clock back one hour to prove the ordering survives a restart **and** an NTP correction. `TestNextRotationStamp_AlwaysSortsAfterPrevious` covers eight combinations of clock position and stored stamp format.
 
-**Verifikasi:** `go test ./internal/...` bersih; `go vet ./internal/...` bersih;
-`go test -race ./internal/db/ ./internal/handlers/chat/` hijau;
-`TestApplyConnectionStrategy_*` hijau di `-count=50` (sebelumnya gagal berkala di
-`origin/main`). Test baru `TestStampConnection_FrozenClockStillOrdersStrictly`
-mematikan jam sepenuhnya — kondisi yang tidak akan pernah kejadian di host dengan
-jam beresolusi rendah, sehingga urutan diuji sebagai kontrak, bukan sebagai
-kebetulan. `TestStampConnection_SurvivesRestartAndClockJump` menutup basis data,
-membukanya lagi, lalu memundurkan jam satu jam untuk membuktikan urutan bertahan
-melewati restart **dan** koreksi NTP. `TestNextRotationStamp_AlwaysSortsAfterPrevious`
-menutup delapan kombinasi posisi jam dan format stempel tersimpan.
+> Note: `TestGateAcquire_*` in `internal/fetchgate` occasionally fails due to `time.Sleep` assumptions in this environment, and has been failing identically on `origin/main` (proven with `git stash`), so it is out of scope for this issue.
 
-> Catatan: `TestGateAcquire_*` di `internal/fetchgate` sesekali gagal karena
-> asumsi `time.Sleep` di environment ini, dan sudah gagal dengan identik di
-> `origin/main` (dibuktikan dengan `git stash`), jadi di luar cakupan issue ini.
+### 🐛 "Strict Proxy" does not hold — upstream decolua/9router#4333 parity
 
-### 🐛 "Strict Proxy" tidak menahan — upstream decolua/9router#4333 parity
+`strictProxy` on the pool and on the connection means "never leave through the real IP". Two places in this gateway still let it through: `proxy.DoRequest` replays a request that failed at the proxy through `directProxyClient` without checking the flag at all, and the legacy path `getClientForConnection` merely logs `strict proxy enabled but proxy url invalid` and returns a direct client. Both mean traffic that should never touch the real IP stays active.
 
-`strictProxy` di pool dan di connection berarti "tidak pernah keluar lewat IP
-asli". Dua tempat di gateway ini tetap meloloskannya: `proxy.DoRequest`
-memutar ulang request yang gagal di proxy lewat `directProxyClient` tanpa
-memperiksa flag sama sekali, dan jalur legacy `getClientForConnection` hanya
-mencatat `strict proxy enabled but proxy url invalid` lalu mengembalikan
-client direct. Keduanya berarti traffic yang seharusnya tidak pernah menyentuh
-IP asli tetap aktif.
+Now `DoRequest` rejects (rather than replays) when the proxy fails, both via a marker on the context (`proxy.WithStrictProxy`) and via the client that a strict pool provides (`proxy.ForbidDirectReplay`), and the legacy path returns an error. `strictProxy` is only read from the connection row that is actually stored; previously `var strictProxy bool` shadowed the field so the flag at the connection level never meant anything — the branch at `connections_proxy.go:117-120` that carries the `strict proxy enabled but proxy url invalid` message was never executed all along.
 
-Kini `DoRequest` menolak (bukan memutar ulang) saat proxy gagal, baik lewat
-penanda pada context (`proxy.WithStrictProxy`) maupun lewat client yang
-diberikan pool strict (`proxy.ForbidDirectReplay`), dan jalur legacy mengembalikan
-error. `strictProxy` hanya dibaca dari baris connection yang sebenarnya
-disimpan; sebelumnya `var strictProxy bool` menutupi field tersebut sehingga
-flag di level connection tidak pernah berarti apa pun — cabang di
-`connections_proxy.go:117-120` yang memuat pesan `strict proxy enabled but proxy
-url invalid` selama ini tidak pernah dieksekusi.
+The "proxy is actually intended" gate is also preserved exactly like upstream: strict only refuses when there is a `proxyPoolId`, `enabled`, `connectionProxyEnabled`, or a non-empty url. Executors like Qoder set `strictProxy` with no proxy at all — meaning "don't replay this request directly", not "a proxy must exist" — and without that gate they would die outright.
 
-Gerbang "proxy memang dimaksud" ikut dijaga persis seperti upstream: strict
-hanya menolak bila ada `proxyPoolId`, `enabled`, `connectionProxyEnabled`, atau
-url yang tidak kosong. Executor seperti Qoder memasang `strictProxy` dengan
-tidak ada proxy sama sekali — artinya "jangan putar ulang request ini langsung",
-bukan "proxy wajib ada" — dan tanpa gerbang itu mereka akan mati total.
+### 🐛 Insecure TLS fallback for certificates that fail verification — upstream b58bd804 parity
 
-### 🐛 Fallback TLS insecure untuk sertifikat yang gagal diverifikasi — upstream b58bd804 parity
+A certificate verification failure (corporate proxy or antivirus that re-issues TLS) is now retried once without verification, using an `InsecureSkipVerify` transport cached per proxy url. Detection is via `errors.As` against `x509.UnknownAuthorityError`, `x509.CertificateInvalidError`, `x509.HostnameError`, and `tls.CertificateVerificationError` — not a substring match like `isProxyFailure`, which would flag almost every error. `STRICT_SSL=true` or `=1` disables this fallback, following upstream.
 
-Kegagalan verifikasi sertifikat (proxy korporat atau antivirus yang
-menerbitkan ulang TLS) kini dicoba satu kali lagi tanpa verifikasi, memakai
-transport `InsecureSkipVerify` yang di-cache per url proxy. Deteksi lewat
-`errors.As` terhadap `x509.UnknownAuthorityError`, `x509.CertificateInvalidError`,
-`x509.HostnameError`, dan `tls.CertificateVerificationError` — bukan pencocokan
-substring seperti `isProxyFailure`, yang akan menandai hampir semua error.
-`STRICT_SSL=true` atau `=1` mematikan fallback ini, mengikuti upstream.
+### 🐛 3-second watchdog for a delayed `response.completed` — upstream fbcaa282 + 7111db35 parity
 
-### 🐛 Watchdog 3 detik untuk `response.completed` yang tertunda — upstream fbcaa282 + 7111db35 parity
+The translator holds `response.completed` until the usage trailer arrives (#4476). If upstream stops after `finish_reason` — without a trailer and without `[DONE]`, the connection is held open — that delay never finishes and the client waits forever. `proxy.ScanStreamWithDeadline` now caps the pause between events only after a terminal event is genuinely delayed, and the watchdog bridge (`executor.completionWatchdog`) sends `response.completed` exactly once when that limit is exceeded. A stream that is still flowing is never cut off, and a terminal event is never sent twice.
 
-Translator menahan `response.completed` sampai trailer usage arrives (#4476).
-Bila upstream berhenti setelah `finish_reason` — tanpa trailer dan tanpa
-`[DONE]`, koneksi ditahan terbuka — penundaan itu tidak pernah selesai dan
-client menunggu selamanya. `proxy.ScanStreamWithDeadline` kini membatasi jeda
-antar event hanya setelah event terminal benar-benar tertunda, dan watchdog
-bridge (`executor.completionWatchdog`) mengirim `response.completed` tepat
-sekali ketika batas itu terlampaui. Stream yang masih mengalir tidak pernah
-dipotong, dan event terminal tidak pernah terkirim dua kali.
-
-**Verifikasi:** `TestDoRequestStrictProxyNeverReplaysDirect` (dua jalur StrictProxy) membuktikan tidak ada satu pun request yang sampai ke upstream langsung;
-`TestDoRequestStrictProxyAllowsDirectWhenNothingConfigured`,
-`TestStrictProxyFlagAloneDoesNotBlockDirectUpstream`, dan
-`TestNonStrictPoolStillDegradesToDirect` menjaga gerbang "proxy dimaksud";
-`TestDoRequestRetriesWithInsecureTLS` / `TestDoRequestStrictSSLRefusesInsecureRetry`
-menguji fallback TLS dan opt-out-nya; `TestStreamChatToResponses_WatchdogFlushesStalledCompletion`
-dan `TestScanStreamWithDeadlineReleasesAStalledUpstream` menjalankan batasnya
-melalui variabel paket, bukan tidur 3 detik.
+**Verification:** `TestDoRequestStrictProxyNeverReplaysDirect` (the two StrictProxy paths) proves that not a single request reaches upstream directly; `TestDoRequestStrictProxyAllowsDirectWhenNothingConfigured`, `TestStrictProxyFlagAloneDoesNotBlockDirectUpstream`, and `TestNonStrictPoolStillDegradesToDirect` protect the "proxy is intended" gate; `TestDoRequestRetriesWithInsecureTLS` / `TestDoRequestStrictSSLRefusesInsecureRetry` exercise the TLS fallback and its opt-out; `TestStreamChatToResponses_WatchdogFlushesStalledCompletion` and `TestScanStreamWithDeadlineReleasesAStalledUpstream` run the limit through package variables rather than sleeping 3 seconds.
 
 
-### 🐛 Routing & translator: enabledModels codex, tool DeepSeek ganda, prefill Claude — issue #95
+### 🐛 Routing & translator: codex `enabledModels`, dual DeepSeek tool, Claude prefill — issue #95
 
-Tiga filter yang upstream terapkan saat memilih akun dan menyusun request tidak ada di sisi kita. Dua di antaranya menjawab 400.
+Three filters that upstream applies when picking an account and building a request are missing on our side. Two of them answer 400.
 
-- **Codex `enabledModels` dipakai saat routing.** Akun codex punya daftar model sendiri; yang tidak ada di sana ditolak OpenAI dengan 400. `codexAccountServesModel` melewati akun yang daftar enabledModels-nya non-kosong tapi tidak memuat model yang diminta — dibaca dari `providerSpecificData.enabledModels` dulu lalu field top-level, persis seperti `buildModelsList` sudah melakukannya, karena dua penulisnya ada di dunia luar. Filter dijalankan **sebelum** strategi rotasi, bukan sesudahnya: sapuan round-robin mengembalikan urutan seluruh kandidat, jadi penyaring harus mendahului strategi. Dijalankan juga di dalam loop seleksi dan di `pinnedConnectionIneligible`, sesuai urutan predikat upstream.
-- **Tool DeepSeek dengan nama ganda.** `DedupeToolsDeepSeek` hanya berlaku untuk model DeepSeek (`isDeepSeekModel` melepas sufiks `(level)` dan menerima id berawalan vendor lebih dulu). Definisi pertama yang bertahan, dan tool lain milik provider apa pun tidak tersentuh. Diletakkan di `tryForwardWithConnection` setelah `SanitizeOpenAITools` dan sebelum `FitToolNames` — titik terakhir sebelum dispatch, jadi berjalan setelah semua konversi. Aturan dedupe MCP milik klien yang ada di upstream **sengaja tidak** dipindah: ia bergantung pada deteksi tool klien yang tidak kita punya.
-- **Perbaikan trailing turn Claude.** `EnsureTrailingUserTurn` menempelkan turn user `Continue.` ketika cleanup menyisakan ekor assistant, **kecuali** pemanggil memang membuka dengan prefill. `ClaudeIntentionalPrefill` membaca ekor mentah lebih dulu pada bentuk sumbernya (`contents[]` untuk Gemini/Antigravity, `input[]` untuk Responses/Codex), jadi prefill yang disengaja tetap utuh. Tanpa ini model Claude yang lebih baru menjawab `400 … does not support assistant message prefill`.
+- **Codex `enabledModels` is used during routing.** A codex account has its own model list; ones not in it are rejected by OpenAI with 400. `codexAccountServesModel` passes accounts whose enabledModels list is non-empty but does not contain the requested model — read from `providerSpecificData.enabledModels` first and then the top-level field, exactly as `buildModelsList` already does, because the two writers exist in the outside world. The filter runs **before** the rotation strategy, not after: the round-robin sweep returns the whole candidate ordering, so the filter must precede the strategy. It also runs inside the selection loop and in `pinnedConnectionIneligible`, following the upstream predicate order.
+- **Dual DeepSeek tool name.** `DedupeToolsDeepSeek` only applies to DeepSeek models (`isDeepSeekModel` strips the `(level)` suffix and accepts ids with a vendor prefix first). The first definition wins, and other tools belonging to any provider are untouched. It is placed in `tryForwardWithConnection` after `SanitizeOpenAITools` and before `FitToolNames` — the last point before dispatch, so it runs after all conversions. The client-owned MCP dedupe rule that exists upstream is **deliberately not** ported: it depends on client tool detection that we do not have.
+- **Claude trailing turn fix.** `EnsureTrailingUserTurn` appends a `Continue.` user turn when cleanup leaves an assistant tail, **unless** the caller genuinely opened with a prefill. `ClaudeIntentionalPrefill` reads the raw tail first in its source form (`contents[]` for Gemini/Antigravity, `input[]` for Responses/Codex), so an intentional prefill stays intact. Without this, newer Claude models answer `400 … does not support assistant message prefill`.
 
-**Verifikasi:** `go vet ./...` bersih · `go test -race ./internal/translator/ ./internal/handlers/chat/` hijau · ketiganya terbukti load-bearing lewat mutasi terarah: menonaktifkan pengecualian prefill menggagalkan `TestSanitizeClaudePassthrough_ClientPrefillPreserved`; menghapus gerbang `IsDeepSeekModel` menggagalkan `TestDedupeToolsDeepSeek`; membuat `codexAccountServesModel` selalu `true` menggagalkan `TestGetBestConnection_CodexEnabledModelsPickOnlyEligibleAccount`. Arah kedua diuji pada prefill: `TestEnsureTrailingUserTurnBody` punya kasus `assistant tail gets the placeholder` **dan** `client prefill is left alone` — satu arah saja tidak cukup.
+**Verification:** `go vet ./...` clean · `go test -race ./internal/translator/ ./internal/handlers/chat/` green · all three are proven load-bearing via directed mutation: disabling the prefill exemption fails `TestSanitizeClaudePassthrough_ClientPrefillPreserved`; removing the `IsDeepSeekModel` gate fails `TestDedupeToolsDeepSeek`; making `codexAccountServesModel` always `true` fails `TestGetBestConnection_CodexEnabledModelsPickOnlyEligibleAccount`. Both directions are tested for prefill: `TestEnsureTrailingUserTurnBody` has an `assistant tail gets the placeholder` case **and** a `client prefill is left alone` case — one direction alone is not enough.
 
 
-### 🔵 Empat provider upstream v0.5.95 — Meta Muse, v1m System One, TinyFish, seed Agnes
+### 🔵 Four upstream v0.5.95 providers — Meta Muse, v1m System One, TinyFish, Agnes seed
 
-Empat entri registry dari upstream `decolua/9router` v0.5.91…v0.5.95.
-Setiap entri harus ada di **semua** tabel (transport, alias, katalog,
-executor, dashboard) — kalau tidak, provider itu ada di `/v1/models` tapi
-tidak pernah route.
+Four registry entries from upstream `decolua/9router` v0.5.91…v0.5.95. Each entry must exist in **every** table (transport, alias, catalog, executor, dashboard) — otherwise that provider is present in `/v1/models` but never routes.
 
-- **Meta Muse** (`muse`): Model API Meta dengan dual auth — device code akun
-  Meta (langganan Muse Code, key-nya di-mint dari token akun) **dan** API key
-  pay-as-you-go dari dev.meta.ai. Both rides the same bearer transport.
-  Kelima model Muse Spark meng-pin lane `openai-responses`, jadi
-  `internal/proxy/executor/muse.go` memilih endpoint per model (memakai
-  `handleCodexStream`, sama seperti executor Responses lain), bukan
-  per provider. Katalog live `/v1/models` butuh header `x-api-version: 1.0.0`
-  selain bearer — itu sebabnya ada `providers.ModelsListHeaders`
-  (upstream `PROVIDER_MODELS_CONFIG.muse`). Device flow-nya ada di
-  `internal/handlers/oauth/muse_device.go`, termasuk retry mint saat Meta
-  membalas 429 dan pesan langganan belum aktif. Pricing kelima model ikut
-  dari dev.meta.ai (contributor tier jauh lebih murah).
-- **v1m System One** (`v1m`, alias `systemone`): decision engine terkalibrasi,
-  `serviceKinds: ["systemone"]`, endpoint `https://v1m.ir/v1/systemone`.
-  Registry `ProviderConfig` tidak punya BaseURL chat untuknya — upstream pun
-  tidak, jadi `BaseURL` sengaja kosong dan hanya `SystemoneURL` yang diisi.
-  `/v1/models/{kind}` memilih lewat `SystemoneURL != ""`, jadi modelnya
-  otomatis tampil di tab System One.
-- **TinyFish** (`tinyfish`): `serviceKinds: ["webSearch","webFetch"]` dengan
-  **dua host terpisah** di balik satu key `x-api-key` — `api.search.tinyfish.ai`
-  dan `api.fetch.tinyfish.ai`. Karena `/v1/search` di repo ini adalah
-  *transparansi* (gateway meneruskan body apa adanya ke `BaseURL + endpoint`),
-  search TinyFish **tidak** diimplementasikan: menambahkan satu host kedua
-  berarti membangun pipeline builder/normalizer khusus provider di dalam
-  `internal/handlers/media/`, yang tidak pernah ada di repo ini — `linkup`,
-  `tavily`, `serper` dan `brave-search` semuanya seperti itu. Yang di-wire
-  adalah jalur fetch yang memang punya passthrough (`FetchURL` =
-  `https://api.fetch.tinyfish.ai`, POST) plus kartu dashboard dengan kedua
-  service kind. Detail lengkap di laporan issue.
-- **Agnes seed models**: provider-nya sudah ada sejak v0.5.91 tapi katalognya
-  kosong, dan `/v1/models` live-nya membalas 401 tanpa token, jadi halaman
-  provider-nya kosong total. Sekarang diisi empat seed upstream
-  (`agnes-2.5-flash`, `agnes-2.5-pro`, `agnes-2.5-pro-beta`,
+- **Meta Muse** (`muse`): Meta's Model API with dual auth — the device code of a Meta account (Muse Code subscription, its key minted from the account token) **and** a pay-as-you-go API key from dev.meta.ai. Both ride the same bearer transport. All five Muse Spark models pin the `openai-responses` lane, so `internal/proxy/executor/muse.go` chooses an endpoint per model (using `handleCodexStream`, like the other Responses executors), not per provider. The live `/v1/models` catalog needs the `x-api-version: 1.0.0` header besides the bearer — that is why `providers.ModelsListHeaders` exists (upstream `PROVIDER_MODELS_CONFIG.muse`). The device flow is in `internal/handlers/oauth/muse_device.go`, including the mint retry when Meta replies 429 and the message that the subscription is not active yet. Pricing for all five models also comes from dev.meta.ai (the contributor tier is far cheaper).
+- **v1m System One** (`v1m`, alias `systemone`): a calibrated decision engine, `serviceKinds: ["systemone"]`, endpoint `https://v1m.ir/v1/systemone`. The `ProviderConfig` registry has no chat BaseURL for it — upstream does not either, so `BaseURL` is deliberately empty and only `SystemoneURL` is filled. `/v1/models/{kind}` selects via `SystemoneURL != ""`, so the model automatically appears on the System One tab.
+- **TinyFish** (`tinyfish`): `serviceKinds: ["webSearch","webFetch"]` with **two separate hosts** behind one `x-api-key` key — `api.search.tinyfish.ai` and `api.fetch.tinyfish.ai`. Because `/v1/search` in this repo is *transparency* (the gateway forwards the body as-is to `BaseURL + endpoint`), TinyFish search is **not** implemented: adding a second host means building a provider-specific builder/normalizer pipeline inside `internal/handlers/media/`, which has never existed in this repo — `linkup`, `tavily`, `serper` and `brave-search` are all like that. What is wired up is the fetch path, which genuinely has a passthrough (`FetchURL` = `https://api.fetch.tinyfish.ai`, POST) plus a dashboard card with both service kinds. Full details in the issue report.
+- **Agnes seed models**: the provider has existed since v0.5.91 but its catalog is empty, and the live `/v1/models` answers 401 without a token, so its provider page is completely empty. Now it is filled with the four upstream seeds (`agnes-2.5-flash`, `agnes-2.5-pro`, `agnes-2.5-pro-beta`,
 
-### ⬆️ Tabel capabilities & thinking levels disinkronkan dengan upstream v0.5.95 — issue #97
+### ⬆️ Capabilities and thinking levels tables synced with upstream v0.5.95 — issue #97
 
-Ditemukan saat mengaudit range `v0.5.86..v0.5.95`. Fixture paritas yang mengunci thinking level **menyembunyikan** sebagian dari gap ini: `TestGetThinkingLevels_MatchesUpstreamFixture` melaporkan 1547/1547 tanpa error, karena fixture itu masih memakai versi lama.
+Found while auditing the `v0.5.86..v0.5.95` range. The parity fixture that locks the thinking levels **hides** part of this gap: `TestGetThinkingLevels_MatchesUpstreamFixture` reported 1547/1547 without error, because that fixture was still using the old version.
 
-- **`xhigh` untuk `claude-adaptive`** (`7894f3d3`). Format `claude-adaptive` kini memakai set `budgetX`, bukan `levelMax`. **Kedua separuh ini harus datang bersama:** dua baris pengecualian `CLAUDE_NO_XHIGH` untuk `*claude*4.6*` dan `*claude*4-6*` ditambahkan pada saat yang sama. Tanpa pengecualian tersebut, picker menawarkan `xhigh` pada model yang menjawab 400 untuk itu.
-- **Baris pattern `*claude*sonnet-5*`** (`ccd0677d`). Id berawalan vendor (`anthropic/claude-sonnet-5`, `openrouter/claude-sonnet-5`) tidak punya entri persis dan jatuh ke baris `*claude*sonnet*` → `claude-budget`, yaitu thinking adaptive yang diserialisasi sebagai anggaran token.
-- **`claude-sonnet-5-5`** dan empat varian **`claude-opus-5.5*`** masuk ke tabel persis. `CacheCreationPer1M` `anthropic/claude-sonnet-5` dikoreksi dari 0 ke 2.5; `claude-sonnet-5` dan `claude-sonnet-5-5` ditambahkan ke tabel harga.
-- **Jendela konteks GPT-6 / GPT-5.4+** (`89ffac5a`). `gpt-6` naik dari 272000 ke **1050000** — nilai lama adalah truncasi satu gateway yang bocor ke setiap provider gpt-6 lain lewat pattern generik. `gpt-5.4` / `gpt-5.5` / `gpt-5.6` juga 1050000; `gpt-5.4-mini` / `gpt-5.4-nano` tetap 400000. Ditambah blok 200k khusus `devin-cli`, yang mendeklarasikan jendela sendiri meski modelnya GPT.
-- **Alias `deepseek-v4-1-flash`** (`8a4f4d9d`). Beberapa gateway memaparkannya dengan tanda hubung; tanpa baris ini ia jatuh ke pattern `*deepseek-v4*` dan kehilangan vision serta jendela 1M-nya.
+- **`xhigh` for `claude-adaptive`** (`7894f3d3`). The `claude-adaptive` format now uses the `budgetX` set, not `levelMax`. **Both halves must ship together:** the two `CLAUDE_NO_XHIGH` exception lines for `*claude*4.6*` and `*claude*4-6*` were added at the same time. Without those exceptions, the picker offers `xhigh` on models that answer 400 for it.
+- **`*claude*sonnet-5*` pattern line** (`ccd0677d`). Vendor-prefixed ids (`anthropic/claude-sonnet-5`, `openrouter/claude-sonnet-5`) have no exact entry and fall to the `*claude*sonnet*` line → `claude-budget`, i.e. adaptive thinking serialized as a token budget.
+- **`claude-sonnet-5-5`** and the four **`claude-opus-5.5*`** variants enter the table exactly. `CacheCreationPer1M` for `anthropic/claude-sonnet-5` is corrected from 0 to 2.5; `claude-sonnet-5` and `claude-sonnet-5-5` are added to the pricing table.
+- **GPT-6 / GPT-5.4+ context window** (`89ffac5a`). `gpt-6` goes up from 272000 to **1050000** — the old value was one gateway's truncation that leaked into every other gpt-6 provider via the generic pattern. `gpt-5.4` / `gpt-5.5` / `gpt-5.6` are also 1050000; `gpt-5.4-mini` / `gpt-5.4-nano` stay 400000. Plus a 200k block specific to `devin-cli`, which declares its own window even though the model is GPT.
+- **`deepseek-v4-1-flash` alias** (`8a4f4d9d`). Some gateways expose it with a hyphen; without this line it falls to the `*deepseek-v4*` pattern and loses its vision and its 1M window.
 
-**Bug yang ditemukan lewat regenerate fixture — bukan dari daftar issue:** urutan baris `*gpt-5*image*` salah ada **di belakang** baris `*gpt-5.4*` / `*gpt-5.5*` / `*gpt-5.6*`, padahal first-match-wins. Akibatnya `gpt-5.6-sol-image` cocok ke `*gpt-5.6*` dan terbit sebagai model reasoning — tujuh entri image (`cx/gpt-5.4-image`, `cx/gpt-5.5-image`, `cx/gpt-5.6-{sol,terra,luna}-image`, `codex/gpt-5.5-image`, `codex/gpt-5.4-image`) menawarkan thinking level yang upstream nyatakan `null`. Baris image dipindahkan ke depan, sesuai urutan upstream `capabilities.js:344-352`.
+**Bug found by regenerating the fixture — not from the issue list:** the `*gpt-5*image*` lines were wrongly placed **after** the `*gpt-5.4*` / `*gpt-5.5*` / `*gpt-5.6*` lines, even though first-match-wins. As a result `gpt-5.6-sol-image` matched `*gpt-5.6*` and surfaced as a reasoning model — the seven image entries (`cx/gpt-5.4-image`, `cx/gpt-5.5-image`, `cx/gpt-5.6-{sol,terra,luna}-image`, `codex/gpt-5.5-image`, `codex/gpt-5.4-image`) offered thinking levels that upstream declares `null`. The image lines were moved to the front, matching the upstream order in `capabilities.js:344-352`.
 
-**Fixture di-regenerate dari v0.5.95** — 1588 pasangan (naik dari 1547, mengikuti katalog yang sekarang melayani model baru). Regenerasinya reproducible, bukan hasil ketik tangan:
+**The fixture was regenerated from v0.5.95** — 1588 pairs (up from 1547, following the catalog that now serves the new models). The regeneration is reproducible, not hand-typed:
 
 ```
 DUMP_CATALOG_PAIRS=testdata/catalog_pairs.json \
@@ -1900,139 +1605,108 @@ node scripts/gen-thinking-levels.mjs <checkout-upstream> v0.5.95 \
   internal/providers/testdata/catalog_pairs.json
 ```
 
-Generator menjalankan `getThinkingLevels` upstream secara langsung, dan daftar pasangannya diambil dari `ProviderModels` — katalog yang benar-benar dilayani port ini — sehingga provider atau model baru tidak bisa lolos diam-diam dari test paritas. Hasilnya stabil: dua kali jalan menghasilkan byte identik (`fe426f51…`).
+The generator runs the upstream `getThinkingLevels` directly, and the pair list is taken from `ProviderModels` — the catalog this port actually serves — so a new provider or model cannot slip past the parity test silently. The result is stable: two runs produce identical bytes (`fe426f51…`).
 
-**Verifikasi:** `go vet ./...` bersih · `go test ./internal/providers/ -count=1` ok · 19 subtest gagal tanpa perubahan ini (`git stash` pada kode saja, test dipertahankan) dan semuanya hijau dengannya · generator dijalankan ulang oleh integrator dan hasilnya cocok.
+**Verification:** `go vet ./...` clean · `go test ./internal/providers/ -count=1` ok · 19 subtests fail without this change (`git stash` on the code only, keeping the tests) and all are green with it · the generator was re-run by the integrator and the results match.
 
 
-### 🐛 Tiga perilaku translator yang hilang, satu yang memang belum ada — parity upstream v0.5.95
+### 🐛 Three missing translator behaviors, one that genuinely does not exist yet — upstream v0.5.95 parity
 
-**1. Keyword anotasi MCP menolak seluruh request Gemini** (upstream `aafe3002`, #4283).
-`UNSUPPORTED_SCHEMA_CONSTRAINTS` upstream menambah `errorMessage`,
-`errorMessages`, `markdownDescription`, `doNotSuggest`, `suggestSortText`,
-`minProperties`, dan `maxProperties`. Schema tool dari MCP server memakai
-ejaan polos itu; proto schema Gemini tidak punya field-nya dan menolak
-seluruh request dengan `Unknown name errorMessage: Cannot find field` —
-padahal ejaan berawalan vendor (`x-errorMessage`, `x-taplo`, …) sudah
-tertangkap aturan `x-` yang terpisah. Ketujuh ejaan polos kini masuk daftar
-yang dilepas.
+**1. MCP annotation keywords reject the entire Gemini request** (upstream `aafe3002`, #4283). Upstream `UNSUPPORTED_SCHEMA_CONSTRAINTS` adds `errorMessage`, `errorMessages`, `markdownDescription`, `doNotSuggest`, `suggestSortText`, `minProperties`, and `maxProperties`. Tool schemas from MCP servers use those plain spellings; the Gemini proto schema has no fields for them and rejects the whole request with `Unknown name errorMessage: Cannot find field` — even though the vendor-prefixed spellings (`x-errorMessage`, `x-taplo`, …) were already caught by the separate `x-` rule. All seven plain spellings are now in the stripped list.
 
-**2. Turn user yang isinya hanya `container_upload` dihapus** (upstream
-`4f274c7f`, #4316). Sanitizer passthrough Claude membuang pesan yang
-kontennya kosong, dan blok di luar daftar "berisi" ikut terhitung kosong —
-padahal `container_upload` (Files API) adalah input Anthropic yang sah
-sendiri. Akibatnya request diteruskan sebagai `messages: []` dan provider
-membalas 200 untuk percakapan yang sudah tidak ada. Sekarang filter memakai
-satu daftar blok berisi (`tool_use`, `tool_result`, `image`, `document`,
-`container_upload`) untuk keputusan kosong-tidak-kosong di kedua arah.
+**2. A user turn that contains only `container_upload` is dropped** (upstream `4f274c7f`, #4316). The Claude passthrough sanitizer discards messages whose content is empty, and blocks outside the "contains" list also counted as empty — even though `container_upload` (Files API) is itself a legitimate Anthropic input. As a result the request was forwarded as `messages: []` and the provider answered 200 for a conversation that no longer existed. The filter now uses a single content-containing block list (`tool_use`, `tool_result`, `image`, `document`, `container_upload`) for the empty/non-empty decision in both directions.
 
-**3. Hasil tool terakhir tidak pernah masuk cache** (upstream `49c761cd`).
-Dalam tool loop, request berakhir dengan hasil tool dari putaran assistant
-terakhir — sesudah breakpoint putaran itu — jadi isinya dibayar penuh dan
-hanya ditulis cache oleh request berikutnya. Selama anggaran 4 marker masih
-sisa, satu breakpoint 5m sekarang ditaruh di blok cache-eligible terakhir
-turn user tersebut; turn yang sudah punya `cache_control` tidak diubah
-sehingga re-anchoring tetap idempoten.
+**3. The last tool result never entered the cache** (upstream `49c761cd`). In the tool loop, a request ends with the tool result from the last assistant round — after that round's breakpoint — so its body is paid for in full and only written to the cache by the next request. While the 4-marker budget has room left, a single 5m breakpoint is now placed on the last cache-eligible block of that user turn; turns that already have `cache_control` are left untouched so re-anchoring stays idempotent.
 
-**Belum dipindah: thinking placeholder tak bertanda tangan untuk DeepSeek**
-(upstream `08b21fea`, #4436). Upstream menyuntik
-`{"type":"thinking","thinking":"."}` ke putaran assistant yang punya
-`tool_use` tanpa blok thinking saat thinking aktif, dan pada DeepSeek
-menempelkan placeholder itu **tanpa** signature. Di `9router-go` jalur
-tersebut belum ada sama sekali: `prepareClaudeRequest` belum diporting, dan
-`AnchorClaudeCache` — satu-satunya penanchor `cache_control` — tidak pernah
-menyentuh thinking maupun signature (passthrough kita juga menghapus
-`signature` sebelum meneruskan). Menambal placeholder tanpa jalur
-`prepareClaudeRequest` yang sudah benar hanya akan menulis signature palsu ke
-riwayat, jadi perubahan ini sengaja tidak dipaksakan; tidak ada placeholder
-maupun fetch signature yang dibuat agar tidak tersisa kode mati.
+**Not ported: the unsigned thinking placeholder for DeepSeek** (upstream `08b21fea`, #4436). Upstream injects `{"type":"thinking","thinking":"."}` into an assistant round that has `tool_use` but no thinking block while thinking is active, and on DeepSeek appends that placeholder **without** a signature. In `9router-go` that path does not exist at all: `prepareClaudeRequest` has not been ported, and `AnchorClaudeCache` — the only `cache_control` anchor — never touches thinking or signatures (our passthrough also strips `signature` before forwarding). Patching in a placeholder without a proper `prepareClaudeRequest` path would only write a fake signature into the history, so this change is deliberately not forced; neither the placeholder nor a signature fetch is created so that no dead code remains.
 
-### 🐛 Combo publish limit ctx salah total — plus rekursi tak berujung yang menggantung proses — issue #99
+### 🐛 Combo publish limit ctx wrong entirely — plus an endless recursion that hangs the process — issue #99
 
-Entry combo di `/v1/models` tidak menerbitkan `context_length` / `max_completion_tokens` sama sekali. Komentar di `models_list.go` mengklaim itu parity — v0.5.95 sudah mengizinkannya, jadi catatan itu usang dan dihapus.
+The combo entry in `/v1/models` does not publish `context_length` / `max_completion_tokens` at all. The comment in `models_list.go` claimed that was parity — v0.5.95 already allows it, so that note was obsolete and was removed.
 
-Enam perubahan, dua di antaranya di luar daftar file yang diminta dan karena itu dicatat terpisah.
+Six changes, two of which are outside the requested file list and therefore recorded separately.
 
-**Yang diminta issue:**
+**Requested by the issue:**
 
-- `comboSeatLimits` di-`/v1/models` — minimum `context_window` dan minimum `max_completion_tokens` di seluruh pohon seat, dengan ekspansi combo bersarang dan deteksi siklus (set `visiting`), setara `src/app/api/v1/models/route.js`.
-- `ContextLength` / `MaxCompletionTokens` berubah dari `int` + `omitzero` ke `*int` + `omitempty` di lima titik producer. Sebuah combo hanya boleh menjanjikan apa yang **semua** seat setuju; combo tanpa seat LLM tidak menjanjikan apa-apa dan **menghilangkan** kedua key, bukan menerbitkan nol yang dibaca client sebagai limit asli. Ini terkait langsung dengan #90: angka tebakan lebih buruk daripada tidak ada.
-- Seat web (`<alias>/search`, `<alias>/fetch`) dilewati. Seat itu alat, bukan model chat, dan membiarkannya ikut suara akan menerbitkan capability floor seolah-olah itu jendela seluruh combo.
-- `comboIndex` membaca daftar seat seluruh combo **sekali per request**. Sebelumnya satu combo dibaca ulang per seat, dan tiap pembacaan membaca settings lagi — saat `aggregateComboCapabilities` juga memanggilnya, satu entry combo bisa menghujan query puluhan query.
+- `comboSeatLimits` in `/v1/models` — minimum `context_window` and minimum `max_completion_tokens` across the whole seat tree, with nested combo expansion and cycle detection (the `visiting` set), equivalent to `src/app/api/v1/models/route.js`.
+- `ContextLength` / `MaxCompletionTokens` change from `int` + `omitzero` to `*int` + `omitempty` at five producer points. A combo may only promise what **all** seats agree on; a combo with no LLM seat promises nothing and **omits** both keys, rather than publishing a zero that a client reads as a real limit. This is directly related to #90: a guessed number is worse than none.
+- Web seats (`<alias>/search`, `<alias>/fetch`) are skipped. Those seats are tools, not chat models, and letting them vote would publish a capability floor as if it were the whole combo's window.
+- `comboIndex` reads the whole combo's seat list **once per request**. Previously one combo was re-read per seat, and each read re-read the settings again — when `aggregateComboCapabilities` also calls it, a single combo entry could rain dozens of queries.
 
-**Dua hal di luar daftar file, dilaporkan terpisah:**
+**Two things outside the file list, reported separately:**
 
-- **Rekursi tak berujung.** `resolveModelEntry` memanggil dirinya sendiri untuk setiap seat combo tanpa batas. Combo yang menunjuk dirinya sendiri — langsung (`["self-combo", …]`) atau tidak langsung (`mutual-combo` ⇄ `loop-combo`) — membuat `/v1/models` **gantung selamanya**. Dikonfirmasi di `origin/main`: test dengan seed tersebut menghasilkan 67 frame `resolveModelEntry` berulang sebelum timeout 60 detik, tiap hop query SQLite lagi. Tidak ada yang membatasi selain stack. `resolveModelEntryGuarded` kini membawa set `visiting`; seed yang sama selesai dalam 0.2 detik.
-- **`aggregateComboCapabilities` dan seat live.** Untuk daun yang resolver live-nya menerbitkan blok kapabilitas utuh (kiro: `{thinking, agentic}`), tabel statis bukan lagi deskripsi model itu, jadi limit statisnya tidak ikut dilipat seolah-olah diketahui. Setara upstream yang mengambil blok provider "verbatim".
+- **Endless recursion.** `resolveModelEntry` calls itself for every combo seat without a bound. A combo that refers to itself — directly (`["self-combo", …]`) or indirectly (`mutual-combo` ⇄ `loop-combo`) — makes `/v1/models` **hang forever**. Confirmed on `origin/main`: a test with such a seed produced 67 repeated `resolveModelEntry` frames before the 60-second timeout, each hop querying SQLite again. Nothing bounded it but the stack. `resolveModelEntryGuarded` now carries a `visiting` set; the same seed finishes in 0.2 seconds.
+- **`aggregateComboCapabilities` and live seats.** For leaves whose live resolver publishes a full capability block (kiro: `{thinking, agentic}`), the static table is no longer a description of that model, so its static limits are not folded in as if they were known. Equivalent to upstream taking the provider block "verbatim".
 
-**Divergence yang disengaja, tercatat:** upstream `comboSeatLimits` tidak punya filter non-LLM, sehingga seat web di dalam combo LLM ikut terhitung ke minimum lewat `DEFAULT_CAPABILITIES` 200k/64k. Melewati seat itu satu-satunya pembacaan yang memenuhi dua syarat issue sekaligus — "seat non-LLM tidak boleh menarik minimum ke bawah" dan "jangan menerbitkan tebakan" — dan menjaga `/v1/models` konsisten dengan gate per-model (`isLLMModelEntry`) yang sudah membuang `<alias>/search` di cabang provider.
+**Deliberate divergence, documented:** upstream `comboSeatLimits` has no non-LLM filter, so a web seat inside an LLM combo still counted toward the minimum via the 200k/64k `DEFAULT_CAPABILITIES`. Skipping those seats is the only reading that satisfies the issue's two conditions at once — "non-LLM seats must not drag the minimum down" and "don't publish guesses" — and keeps `/v1/models` consistent with the per-model gate (`isLLMModelEntry`) that already drops `<alias>/search` in the provider branch.
 
-**Catatan:** `capabilities.maxOutput` di blok `capabilities` combo tetap **terlebar** (itu `aggregateComboCapabilities` upstream, `capabilities.js:519-520`), sedangkan `max_completion_tokens` top-level adalah **tertipis** (`comboSeatLimits`). Dua angka itu memang berbeda maknanya, jadi agregat bersama tidak diubah — mengubahnya akan diam-diam mengubah blok capabilities yang dibaca pemanggil lain.
+**Note:** `capabilities.maxOutput` in the combo's `capabilities` block stays the **widest** (that is upstream `aggregateComboCapabilities`, `capabilities.js:519-520`), while the top-level `max_completion_tokens` is the **tightest** (`comboSeatLimits`). The two numbers genuinely mean different things, so the combined aggregate is not changed — changing it would silently alter the capabilities block that other callers read.
 
-**Verifikasi:** `go vet ./...` bersih · `go vet -tags integration ./internal/integration/` bersih · `go test ./internal/handlers/chat/... -count=1` ok · `go test -tags integration ./internal/integration/ -count=1` ok (3.6s) · 6 test baru (5 handler + 1 integrasi lewat router produksi), semuanya gagal tanpa perbaikan — termasuk test siklus yang tidak pernah selesai sebelum · smoke live ke binary di `:29201` dengan `DATA_DIR` sekali pakai: 4 combo dibuat lewat `POST /api/combos`, `GET /v1/models` mengembalikan `wide-combo` 128000/16384, `outer-combo` 128000/8192, combo web-only dan self-loop tanpa kedua key, 1302 entry, 0 provider kehilangan `context_length`.
+**Verification:** `go vet ./...` clean · `go vet -tags integration ./internal/integration/` clean · `go test ./internal/handlers/chat/... -count=1` ok · `go test -tags integration ./internal/integration/ -count=1` ok (3.6s) · 6 new tests (5 handler + 1 integration through the production router), all of which fail without the fix — including the cycle test that never finished before · live smoke against the binary on :29201 with a throwaway `DATA_DIR`: 4 combos created via `POST /api/combos`, `GET /v1/models` returns `wide-combo` 128000/16384, `outer-combo` 128000/8192, the web-only and self-loop combos without either key, 1302 entries, 0 providers lost `context_length`.
 
-**Utang teknis yang diketahui:** `models_list.go` kini 1060 baris, sudah melewati anjuran 300/400 sebelum perubahan ini (885). Penambahan netral ~110 baris; ekstraksi ke `combo_limits.go` adalah follow-up mekanis.
+**Known technical debt:** `models_list.go` is now 1060 lines, already past the 300/400 recommendation before this change (885). The net addition is ~110 lines; extraction to `combo_limits.go` is a mechanical follow-up.
 
-**Tidak terkait:** `TestApplyConnectionStrategy_KeepsRotatingPastFirstCycle` gagal intermittent di `origin/main` juga — dipisah ke #107.
+**Unrelated:** `TestApplyConnectionStrategy_KeepsRotatingPastFirstCycle` also fails intermittently on `origin/main` — separated out to #107.
 
-### 🐛 Codex: cegah refresh-token reuse dan pulihkan hosted web search — issue #94 (PR #113)
+### 🐛 Codex: prevent refresh-token reuse and restore hosted web search — issue #94 (PR #113)
 
 Upstream parity `decolua/9router` `0bc7f86e`, `7bf93178`:
-- **Pencegahan refresh-token reuse:** Jeda `RefreshLead` per provider diselaraskan (`oauth.refreshLeadMs` upstream). Untuk Codex dikurangi dari 5 hari (432.000.000 ms) menjadi 10 menit (600.000 ms) agar tidak memicu rotasi token pada setiap panggilan yang berujung pencabutan sesi OpenAI. Baris koneksi di-refresh langsung dari DB sesaat sebelum exchange.
-- **Hosted web search pada model Lite:** Body yang meminta `web_search` diteruskan via lane reguler Responses — tools di-lift ke level teratas tanpa duplikasi, prefix `additional_tools` dibuang dari input, dan model Lite di-bypass untuk payload maupun header `x-openai-internal-codex-responses-lite`.
+- **Refresh-token reuse prevention:** The per-provider `RefreshLead` delay is aligned (`oauth.refreshLeadMs` upstream). For Codex it is reduced from 5 days (432,000,000 ms) to 10 minutes (600,000 ms) so it does not trigger a token rotation on every call that ends in an OpenAI session revocation. The connection row is refreshed straight from the DB just before the exchange.
+- **Hosted web search on Lite models:** A body requesting `web_search` is forwarded via the regular Responses lane — tools are lifted to the top level without duplication, the `additional_tools` prefix is stripped from the input, and Lite models are bypassed for both the payload and the `x-openai-internal-codex-responses-lite` header.
 
-**Verifikasi:** `go vet ./...` bersih, `go test -race ./internal/proxy/executor/...` dan golden responses byte-for-byte lolos.
+**Verification:** `go vet ./...` clean, `go test -race ./internal/proxy/executor/...` and golden responses pass byte-for-byte.
 
-### ⬆️ Katalog Codex disinkronkan dengan upstream v0.5.95 — issue #93
+### ⬆️ Codex catalog synced with upstream v0.5.95 — issue #93
 
-Tujuh model yang upstream hapus masih dipublish di `/v1/models`, sementara model yang upstream konfirmasi hidup belum ada sama sekali. Dua-duanya 400.
+Seven models that upstream removed were still published in `/v1/models`, while the models upstream confirmed live were not there at all. Both answer 400.
 
-- **Ghost model dihapus.** `gpt-5.4`, `gpt-5.4-review`, `gpt-5.4-mini`, `gpt-5.4-mini-review`, `gpt-5.3-codex-spark`, `gpt-5.3-codex-spark-review`, dan `gpt-5.4-image` tidak ada di `backend-api/codex/models` untuk akun ChatGPT Plus/Pro — semuanya menjawab HTTP 400 "model is not supported" (upstream #4202). Dihapus dari `registry_models.go` dan katalog dashboard. Entri `gpt-5.4` milik provider lain (`openai`, `tokenrouter`) tidak disentuh.
-- **Model hidup ditambahkan.** `gpt-6.1-sol`, `gpt-daybreak-blue-latest`, `gpt-reserve`, dan enam varian konteks ekstended `[1m]`.
-- **Id katalog bukan id wire.** Varian `[1m]` dan `-review` adalah id katalog; ChatGPT menjawab 400 kalau keduanya diteruskan apa adanya. `providers.CodexUpstreamModelID` memetakan ke model dasar (setara `getModelUpstreamId` upstream), dipanggil dari `rewriteCodexUpstreamModel` **setelah** `buildResponsesBody` — sufiks "(level)" harus sudah dilepas lebih dulu. `codex-auto-review` sengaja tidak dipangkas (#1398), dan id berawalan vendor tidak ditulis ulang karena prefix itu menandai provider lain.
-- **Bare slug route ke codex.** `gpt-5.*`, `gpt-6.*`, `gpt-6-*`, `gpt-daybreak-*`, dan `gpt-reserve` sekarang resolve ke codex, bukan jatuh ke aturan generik `gpt-*` → openai dan 404 untuk akun codex-only (#4405). Posisinya di luar guard `Repo` supaya jalur katalog statis (Repo nil) tetap jalan. `gpt-4*` / `gpt-3.5*` / `gpt-4o*` tetap openai.
-- **Context window per model.** Codex OAuth melaporkan jendela sendiri, bukan milik OpenAI API: 272k untuk GPT-6 dan Terra/Luna, 372k untuk Sol, 872k untuk varian `[1m]`. `codexGpt56Caps` membangun blok kapabilitas bersama, dan `providerCapabilities["cx"]` sekarang mewarisi blok codex seperti upstream (`PROVIDER_CAPABILITIES.cx = PROVIDER_CAPABILITIES.codex`).
-- **Harga.** `gpt-6-astra` dikoreksi ke 10/50/1/50/12.5 (sebelumnya 5/30 — setengah nilai sebenarnya); `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna` ditambahkan.
-- **Lite + thinking levels.** `gpt-6.1-sol` dan varian `[1m]` yang berbasis lite masuk ke `codexResponsesLiteModels` dan `codexModelThinkingLevels`.
+- **Ghost models removed.** `gpt-5.4`, `gpt-5.4-review`, `gpt-5.4-mini`, `gpt-5.4-mini-review`, `gpt-5.3-codex-spark`, `gpt-5.3-codex-spark-review`, and `gpt-5.4-image` do not exist in `backend-api/codex/models` for ChatGPT Plus/Pro accounts — all answer HTTP 400 "model is not supported" (upstream #4202). Removed from `registry_models.go` and the dashboard catalog. The `gpt-5.4` entries belonging to other providers (`openai`, `tokenrouter`) are untouched.
+- **Live models added.** `gpt-6.1-sol`, `gpt-daybreak-blue-latest`, `gpt-reserve`, and the six extended-context `[1m]` variants.
+- **Catalog ids are not wire ids.** The `[1m]` and `-review` variants are catalog ids; ChatGPT answers 400 if either is forwarded as-is. `providers.CodexUpstreamModelID` maps to the base model (equivalent to upstream `getModelUpstreamId`), called from `rewriteCodexUpstreamModel` **after** `buildResponsesBody` — the "(level)" suffix must already be stripped first. `codex-auto-review` is deliberately not trimmed (#1398), and vendor-prefixed ids are not rewritten because that prefix marks another provider.
+- **Bare slugs route to codex.** `gpt-5.*`, `gpt-6.*`, `gpt-6-*`, `gpt-daybreak-*`, and `gpt-reserve` now resolve to codex instead of falling to the generic `gpt-*` rule → openai and 404 for codex-only accounts (#4405). Their position is outside the `Repo` guard so the static catalog path (nil Repo) still works. `gpt-4*` / `gpt-3.5*` / `gpt-4o*` stay openai.
+- **Context window per model.** Codex OAuth reports its own window, not the OpenAI API's: 272k for GPT-6 and Terra/Luna, 372k for Sol, 872k for the `[1m]` variants. `codexGpt56Caps` builds a shared capability block, and `providerCapabilities["cx"]` now inherits the codex block like upstream (`PROVIDER_CAPABILITIES.cx = PROVIDER_CAPABILITIES.codex`).
+- **Pricing.** `gpt-6-astra` corrected to 10/50/1/50/12.5 (previously 5/30 — half the real value); `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna` added.
+- **Lite + thinking levels.** `gpt-6.1-sol` and the `[1m]` variants that are lite-based go into `codexResponsesLiteModels` and `codexModelThinkingLevels`.
 
-**Verifikasi:** `go vet ./...` bersih · `go test -race ./internal/providers/... ./internal/proxy/... ./internal/pricing/...` hijau · 15 kasus baru (`TestCodexUpstreamModelID`, `TestCodexCatalogWireIDsResolve`, `TestCodexOnlyModelSlug`, `TestResolveModel_BareCodexSlugWithoutRepo`, `TestRewriteCodexUpstreamModel` + 4 kasus body tak usable) · `bun run build` (`tsc -b` + vite) bersih.
+**Verification:** `go vet ./...` clean · `go test -race ./internal/providers/... ./internal/proxy/... ./internal/pricing/...` green · 15 new cases (`TestCodexUpstreamModelID`, `TestCodexCatalogWireIDsResolve`, `TestCodexOnlyModelSlug`, `TestResolveModel_BareCodexSlugWithoutRepo`, `TestRewriteCodexUpstreamModel` + 4 unusable-body cases) · `bun run build` (`tsc -b` + vite) clean.
 
-Satu test yang tersisa rapuh **bukan** hasil perubahan ini: `TestApplyConnectionStrategy_KeepsRotatingPastFirstCycle` gagal intermittent di `origin/main` juga (terbukti lewat `git stash` + `-count=20`), jadi di luar cakupan issue ini.
+One remaining flaky test is **not** a result of this change: `TestApplyConnectionStrategy_KeepsRotatingPastFirstCycle` also fails intermittently on `origin/main` (proven via `git stash` + `-count=20`), so it is out of scope for this issue.
 
-### ⬆️ Identitas client: bump Codex CLI 0.159.0 & Grok CLI 1.0.44 — issue #103
+### ⬆️ Client identity: bump Codex CLI 0.159.0 & Grok CLI 1.0.44 — issue #103
 
 Upstream parity `decolua/9router` `ca6e8407`, `6b9dc54d`:
-- `cli-chat-proxy.grok.com` menolak identitas di bawah 1.0.13 dengan HTTP 426. Versi Grok CLI diperbarui ke `1.0.44` dan Codex CLI ke `0.159.0`.
-- Versi literal dipusatkan di `internal/providers/client_identity.go` dengan konstanta tunggal untuk menghindari drift.
-- Codex kini mengirimkan header `version` bersama dengan `User-Agent`.
+- `cli-chat-proxy.grok.com` rejects identities below 1.0.13 with HTTP 426. The Grok CLI version was updated to `1.0.44` and the Codex CLI to `0.159.0`.
+- The literal versions are centralized in `internal/providers/client_identity.go` with a single constant to avoid drift.
+- Codex now sends a `version` header alongside the `User-Agent`.
 
-**Verifikasi:** `TestClientIdentity` dan `grokcli_handler_test` lolos mengunci floor versi identitas.
-
+**Verification:** `TestClientIdentity` and `grokcli_handler_test` pass, locking the identity version floor.
 ## [v1.9.7] - 2026-10-02
 
-### 🐛 Egress di log tercetak UUID, bukan nama pool
+### 🐛 Egress printed in log as UUID, not pool name
 
-Baris `egress=` dari entri sebelumnya membawa **UUID** pool
-(`06a2c494-ef06-4d3f-a034-dad29ff3aebf`). Itu benar, tapi tidak menjawab
-pertanyaan yang muncul saat grep log: *pool yang mana?* — dashboard menampilkan
-pool berdasarkan nama, jadi operator harus membuka daftar proxy pool untuk
-mencocokkan UUID sebelum tahu request-nya keluar lewat mana.
+The `egress=` line from the previous entry carried the pool **UUID**
+(`06a2c494-ef06-4d3f-a034-dad29ff3aebf`). That is correct, but it does not answer
+the question that comes up when grepping the log: *which pool?* — the dashboard
+shows pools by name, so an operator has to open the proxy pool list in order to
+match the UUID before knowing which way the request went out.
 
-Kini nama pool yang dicetak, di-resolve **tanpa query tambahan**:
-`getClientForConnection` sudah membaca baris pool untuk membangun transport,
-jadi nama diambil dari objek yang sama dan ditaruh di
-`ConnectionData.ResolvedProxyPool` (`json:"-"`, per request, tidak dipersist —
-sehingga rename di dashboard langsung terlihat di log berikutnya).
+Now the pool name is printed, resolved **without any additional query**:
+`getClientForConnection` already reads the pool row to build the transport,
+so the name is taken from that same object and placed in
+`ConnectionData.ResolvedProxyPool` (`json:"-"`, per request, not persisted —
+so a rename in the dashboard shows up directly in the next log line).
 
-Nama yang difilter newline: nilainya diisi operator dan masuk ke setiap baris
-usage, jadi newline akan memalsukan baris log — dan log itulah jejak audit
-"egress mana yang melayani request ini".
+The name is newline-filtered: its value is filled in by operators and enters
+every usage line, so a newline would falsify the log line — and that log is the
+audit trail of "which egress served this request".
 
-**Verifikasi:** `TestResolveEgress_ReportsThePathARequestLeftBy` mengunci delapan
-bentuk, termasuk "pool tanpa nama → jatuh ke UUID" dan "proxy legacy → URL".
-`TestResolveEgress_KeepsTheLabelSingleLine` menutup kasus pemalsuan baris log.
+**Verification:** `TestResolveEgress_ReportsThePathARequestLeftBy` locks down
+eight shapes, including "pool without name → falls back to UUID" and "legacy
+proxy → URL".
+`TestResolveEgress_KeepsTheLabelSingleLine` covers the log-line falsification
+case.
 
-**Live (`:20151`, DB sama dengan `main`):**
+**Live (`:20151`, same DB as `main`):**
 
 ```
 INF [usage] logged provider=opencode model=space-bunny-free … egress=vercel-relay
@@ -2042,41 +1716,42 @@ INF [usage] logged provider=opencode-zen model=space-bunny-free …
   conn=80d9c65d-… egress=vercel-relay
 ```
 
-Tiga baris itu sekaligus menunjukkan dropdown proxy di dashboard berfungsi:
-baris `direct` tepat setelah `PUT /api/connections/…` yang melepas binding, dan
-baris berikutnya kembali `vercel-relay` setelah pool di-bind ulang.
+Those three lines together show the dashboard's proxy dropdown works:
+the `direct` line right after `PUT /api/connections/…` that releases the binding,
+and the next line back to `vercel-relay` after the pool is re-bound.
 
-### 🐛 Log tidak bisa menjawab "request ini lewat proxy atau bukan"
+### 🐛 Log cannot answer "did this request go through a proxy or not"
 
-Setelah kebocoran egress diperbaiki (entri sebelumnya), pertanyaan paling
-natural berikutnya — *apakah request ini benar-benar lewat proxy?* — tetap tidak
-bisa dijawab dari log. Satu-satunya baris proxy (`logProxyOnce`) memakai
-`sync.Map.LoadOrStore`: **sekali per pool per proses**, dan hanya di level
-`debug`. Request kedua dan seterusnya lewat pool yang sama tidak mencetak apa
-pun, dan `LOG_LEVEL` default `info` emballage menyembunyikannya. Baris
-`[usage] logged` juga tidak punya kolom proxy sama sekali.
+After the egress leak was fixed (previous entry), the most natural next
+question — *did this request actually go through a proxy?* — still could not
+be answered from the log. The only proxy line (`logProxyOnce`) uses
+`sync.Map.LoadOrStore`: **once per pool per process**, and only at `debug`
+level. The second and subsequent requests through the same pool print nothing,
+and the default `LOG_LEVEL` `info` hides it. The `[usage] logged` line also
+has no proxy column at all.
 
-Dampaknya persis pada kelas masalah yang diperbaiki: dua gateway berbagi satu
-database (branch `main` di `:20130` dan build uji di `:20151`) menghasilkan log
-yang identik meski salah satunya diam-diam keluar direct — dan `429`/blokir
-berbasis IP mustahil dianalisis tanpa tahu egress-nya.
+The impact is exactly on the class of problem that was fixed: two gateways
+sharing one database (branch `main` at `:20130` and the test build at `:20151`)
+produce identical logs even though one of them silently goes direct — and
+IP-based `429`/blocks are impossible to analyze without knowing the egress.
 
-Kini setiap baris `[usage] logged` dan setiap baris kegagalan
-`[fallback] upstream failed` membawa `egress=`. Nilainya adalah pool yang
-ditugaskan (bukan URL relay), karena itulah yang dicari operator di dashboard;
-request tanpa proxy dan tanpa pool lama tercetak `direct`.
+Now every `[usage] logged` line and every failure line
+`[fallback] upstream failed` carries `egress=`. Its value is the assigned pool
+(not the relay URL), because that is what operators look for in the dashboard;
+requests without a proxy and without a legacy pool print `direct`.
 
-Resolver-nya membaca bentuk yang sudah ada di `providerCfg`, jadi tidak ada
-query pool tambahan di hot path: relay terdeteksi dari `x-relay-target`, proxy
-HTTP dari field proxy koneksi (yang tidak terlihat di config).
+The resolver reads shapes that already exist in `providerCfg`, so there is no
+extra pool query in the hot path: relays are detected from `x-relay-target`,
+HTTP proxies from the connection's proxy field (which is not visible in the
+config).
 
-**Verifikasi:** `TestResolveEgress_ReportsThePathARequestLeftBy` mengunci tujuh
-bentuk (direct, relay, proxy legacy, proxy aktif-tanpa-URL, koneksi nil,
-relay tanpa baris koneksi, `providerSpecificData`). Diuji mutation: mengembalikan
-`Target` ke `x-relay-target` membuat test gagal tepat di assertion "Target must
-be the relay host".
+**Verification:** `TestResolveEgress_ReportsThePathARequestLeftBy` locks down
+seven shapes (direct, relay, legacy proxy, active-proxy-without-URL, nil
+connection, relay without a connection line, `providerSpecificData`).
+Mutation-tested: restoring `Target` to `x-relay-target` makes the test fail
+right at the assertion "Target must be the relay host".
 
-**Live (build di `:20151`, DB sama dengan `main`):**
+**Live (build at `:20151`, same DB as `main`):**
 
 ```
 WRN [fallback] upstream failed provider=opencode-zen model=muse-spark-1.3 status=401
@@ -2088,198 +1763,204 @@ INF [usage] logged provider=opencode model=muse-spark-1.3-contributor-free …
   conn=default egress=direct
 ```
 
-Dua baris itu sekaligus membuktikan arahnya: `ocz/muse-spark-1.3` melalui koneksi
-ber-pool dan keluar lewat pool Vercel, sedangkan
-`oc/muse-spark-1.3-contributor-free` memakai fast path no-auth dan memang
-`direct` — jadi log menunjukkan tidak ada kebocoran yang tersisa di jalur free-tier.
+Those two lines together prove the direction: `ocz/muse-spark-1.3` through a
+pooled connection and out via the Vercel pool, while
+`oc/muse-spark-1.3-contributor-free` uses the no-auth fast path and is indeed
+`direct` — so the log shows no remaining leak on the free-tier path.
 
-### 🔴 Request yang harus lewat proxy pool dijawab dari IP asli — semua tipe proxy
+### 🔴 Request that must go through a proxy pool is answered from the original IP — all proxy types
 
-Audit jalur proxy setelah 503 `service_overloaded` (entri sebelumnya)
-memunculkan bug yang berlaku untuk **semua** proxy, bukan cuma Vercel: ada dua
-kebocoran egress, satu di jalur HTTP dan satu di jalur relay.
+Auditing the proxy path after the 503 `service_overloaded` (previous entry)
+surface a bug that applies to **all** proxies, not just Vercel: there are two
+egress leaks, one on the HTTP path and one on the relay path.
 
-**1. Pool proxy mati tetap dijawab dari IP sendiri.** `doRequestOnce` me-dial
-ulang secara direct setiap kali proxy menolak tunnel (`isProxyFailure`). Itu
-benar untuk proxy ambient (`HTTP_PROXY`, sandbox lokal) yang tidak pernah dipilih
-operator, dan salah untuk pool yang ditugaskan: request dijawab dari IP asli,
-padahal dashboard masih menampilkan koneksi sebagai "proxied". Dibuktikan
-sebelum diperbaiki:
+**1. A dead proxy pool is still answered from one's own IP.** `doRequestOnce`
+re-dials directly every time a proxy rejects the tunnel (`isProxyFailure`). That
+is correct for ambient proxies (`HTTP_PROXY`, local sandbox) that are never
+chosen by the operator, and wrong for an assigned pool: the request is answered
+from the original IP, even though the dashboard still shows the connection as
+"proxied". Proven before the fix:
 
 ```
-err=<nil>  directHits=1     ← request lewat pool mati, dijawab dari IP asli
+err=<nil>  directHits=1     ← request through a dead pool, answered from original IP
 ```
 
-Sekarang `proxiesViaAssignment` membedakan keduanya berdasarkan identitas
-transport: proxy yang nilainya `http.ProxyFromEnvironment` (satu-satunya yang
-dipasang environment) diperlakukan ambient dan boleh jatuh ke direct; pool yang
-ditugaskan **gagal** — pesan errornya menyebut alasannya, bukan diam-diam
-mengambil jalur lain.
+Now `proxiesViaAssignment` distinguishes the two by transport identity: a proxy
+whose value is `http.ProxyFromEnvironment` (the only one installed by the
+environment) is treated as ambient and may fall back to direct; an assigned pool
+**fails** — its error message names the reason instead of silently taking
+another path.
 
-**2. "Test Connection" tidak pernah lewat relay.** `probeHTTPClient` mengembalikan
-client `nil` untuk pool `vercel`/`cloudflare`/`deno`, jadi probe berjalan
-langsung ke provider dari IP host. Itu salah dua arah: bisa hijau sementara
-traffic produksi lewat relay gagal, dan bisa merah sementara jalur relay sehat —
-plus membocorkan IP di request yang justru dijalankan untuk memastikan proxy
-pasang. Pool relay kini dapat `probeRelayRoundTripper` yang mengarahkan request
-ke host relay sambil membawa `x-relay-target`/`x-relay-path`, kontrak yang sama
-dengan pipeline chat.
+**2. "Test Connection" never goes through the relay.** `probeHTTPClient`
+returns a `nil` client for `vercel`/`cloudflare`/`deno` pools, so the probe
+runs straight to the provider from the host IP. That is wrong in two ways: it
+can be green while production traffic through the relay fails, and it can be
+red while the relay path is healthy — plus it leaks the IP on the very request
+that is run to confirm the proxy is in place. Relay pools can now use a
+`probeRelayRoundTripper` that directs the request to the relay host while
+carrying `x-relay-target`/`x-relay-path`, the same contract as the chat
+pipeline.
 
-**3. Satu daftar tipe relay, bukan tiga.** `vercel`/`cloudflare`/`deno` tertulis
-ulang di `connections.go`, `proxypools.go`, dan `connection_probe.go`. Runtime
-edge keempat akan diarahkan satu arah di satu tempat dan arah lain di tempat
-lain — persis kelas bug yang menyebabkan #2. Sekarang `ProxyPool.IsEdgeRelay()`
-(`internal/db`) adalah satu-satunya definisi, dan `proxy_egress_test.go` +
-`probe_relay_test.go` mengunci kedua jalur agar tidak bisa berbeda lagi.
+**3. One list of relay types, not three.** `vercel`/`cloudflare`/`deno` are
+written out again in `connections.go`, `proxypools.go`, and
+`connection_probe.go`. A fourth edge runtime would be routed one way in one
+place and another way in another — exactly the class of bug that caused #2.
+Now `ProxyPool.IsEdgeRelay()` (`internal/db`) is the single definition, and
+`proxy_egress_test.go` + `probe_relay_test.go` lock both paths so they can no
+longer diverge.
 
-**Verifikasi:** `proxy_egress_test.go` membuktikan pool yang ditugaskan tidak
-lagi jatuh ke direct (`directHits=0`) dan proxy ambient tetap boleh fallback
-direct, jadi perbaikan ini tidak mematikan instalasi yang berada di belakang
-proxy sistem. Diuji mutation: menghapus cek `proxiesViaAssignment` mengembalikan
-`directHits=1` dan test gagal tepat di assertion itu. `probe_relay_test.go`
-membuktikan probe benar-benar mendarat di host relay dengan header yang benar
-dan `Host` bukan provider.
+**Verification:** `proxy_egress_test.go` proves an assigned pool no longer falls
+back to direct (`directHits=0`) and ambient proxies may still fall back to
+direct, so this fix does not kill installations sitting behind a system proxy.
+Mutation-tested: removing the `proxiesViaAssignment` check returns
+`directHits=1` and the test fails right at that assertion. `probe_relay_test.go`
+proves the probe actually lands on the relay host with the correct headers and
+the `Host` is not the provider.
 
-**Known limit:** kebocoran #1 menutup jalur yang **sudah terkonfigurasi**. Pool
-yang menyimpan `vercelRelayUrl` di `providerSpecificData` lama tanpa `proxyPoolId`
-tetap relay lewat `getProviderConfig` seperti sebelumnya — jalur itu tidak
-disentuh perubahan ini karena tidak punya flag `strictProxy` untuk dihormati.
+**Known limit:** leak #1 closes the **already-configured** path. Pools that hold
+an old `vercelRelayUrl` in `providerSpecificData` without a `proxyPoolId` still
+relay via `getProviderConfig` as before — that path is not touched by this
+change because it has no `strictProxy` flag to honor.
 
-### 🐛 503 `service_overloaded` gagalkan satu turn penuh padahal attempt berikutnya dilayani
+### 🐛 503 `service_overloaded` fails an entire turn even though the next attempt is served
 
-Laporan: `opencode-zen`/`muse-spark-1.3-contributor-free` lewat proxy pool Vercel
-sering `503 service_overloaded`, sedangkan tanpa proxy "aman".
+Report: `opencode-zen`/`muse-spark-1.3-contributor-free` through the Vercel proxy
+pool frequently hits `503 service_overloaded`, whereas without the proxy they
+are "safe".
 
-**Proxy bukan penyebabnya.** Diuji dengan body dan header fingerprint yang sama
-persis, bergantian langsung ke `opencode.ai` vs lewat relay:
+**The proxy is not the cause.** Tested with the exact same body and header
+fingerprint, alternating directly to `opencode.ai` vs through the relay:
 
 ```
 direct: {503: 16, 200: 12, ERR: 2}   ok 12/30
 relay:  {504: 3,  503: 14, 200: 13}   ok 13/30
 ```
 
-Both `503` muncul di kedua jalur dengan rate serupa — itu kapasitas
-`opencode.ai` sendiri, bukan kerusakan relay. Relay yang terpasang juga terbukti
-lossless: seluruh header (`User-Agent`, `x-opencode-session/request/project`,
-`Authorization`) melewati hop, hanya `x-relay-*` yang di-strip seperti
-template-nya, dan response header upstream ikut diteruskan.
+Both `503` appear on both paths at similar rates — that is `opencode.ai`'s own
+capacity, not a broken relay. The installed relay is also proven lossless: all
+headers (`User-Agent`, `x-opencode-session/request/project`,
+`Authorization`) pass through the hop, only `x-relay-*` is stripped as its
+template prescribes, and the upstream response headers are forwarded along.
 
-**Satu temuan relay yang nyata (bukan penyebab 503):** relay menjawab
-`504` pada **25.09s persis** dengan header
-`X-Vercel-Error: FUNCTION_INVOCATION_TIMEOUT`, yang tidak pernah terjadi di jalur
-direct. Vercel Edge mensyaratkan respons awal di bawah 25 detik; TTFT direct
-yang terukur 28–55s membuat relay melewati batas itu. Jadi relay tidak
-membuat turn cepat jadi gagal — relay justru mengorbankan turn lambat: setiap
-turn yang token pertamanya tiba setelah ~25s akan berakhir 504 di relay.
+**One real relay finding (not the cause of the 503):** the relay answers `504`
+at **exactly 25.09s** with the header `X-Vercel-Error:
+FUNCTION_INVOCATION_TIMEOUT`, which never happens on the direct path. Vercel
+Edge requires the initial response within 25 seconds; the measured direct TTFT
+of 28–55s makes the relay exceed that limit. So the relay does not make fast
+turns fail — the relay sacrifices slow turns instead: every turn whose first
+token arrives after ~25s will end in 504 on the relay.
 
-**Akar masalah yang tersisa:** gateway mengirim **satu** attempt, lalu
-menyurfacekan 503 ke klien dan lock koneksi — padahal attempt berikutnya
-dilayani. Upstream sudah mengulang 502x3/503x3/504x2 di `BaseExecutor.execute`
-(`open-sse/executors/base.js:107-125` + `config/runtimeConfig.js:78-83`); port
-Go tidak punya padanannya sama sekali. Diukur langsung dengan kebijakan
-upstream (3x @2s):
+**The remaining root cause:** the gateway sends **one** attempt, then surfaces
+the 503 to the client and locks the connection — even though the next attempt
+is served. The upstream already retries 502x3/503x3/504x2 in
+`BaseExecutor.execute` (`open-sse/executors/base.js:107-125` +
+`config/runtimeConfig.js:78-83`); the Go port has no counterpart at all.
+Measured directly with the upstream policy (3x @2s):
 
 ```
-1 attempt (sekarang)     served  9/15 (60%)
+1 attempt (now)          served  9/15 (60%)
 3 attempts @2s (upstream) served 15/15 (100%)
 ```
 
-Kini `proxy.DoRequest` — titik choke yang diwarisi semua provider, sama seperti
-`BaseExecutor` upstream — mengulang transient 502/503/504 sesuai kebijakan itu
-sebelum melaporkan kegagalan. 429 **tidak** di-retry di sini: itu jendela kuota
-per akun yang harus diserahkan ke account fallback, sesuai kontrak upstream.
-Backoff terikat `ctx`, jadi klien yang sudah pergi tidak ditahan Rugi penuh.
+Now `proxy.DoRequest` — the choke point inherited by all providers, just like
+the upstream `BaseExecutor` — retries transient 502/503/504 per that policy
+before reporting a failure. 429 is **not** retried here: that is a per-account
+quota window that must be handed to the account fallback, per the upstream
+contract. The backoff is bound to `ctx`, so a client that has already left is
+not held the full span.
 
-**Verifikasi:** `internal/proxy/retry_test.go` mengunci tabel kebijakan,
-hitung attempt, status asli yang diteruskan ke failover, penghentian saat
-status berubah, dan klien yang pergi. Diuji mutation: mengembalikan 429 ke
-tabel retry menggagalkan `TestTransientRetryPolicy_MatchesUpstreamDefaults`.
-`internal/integration/transient_retry_test.go` menutupnya melalui router
-produksi dengan upstream palsu: 503 lalu dilayani → klien dapat `200` berisi
-teks upstream; 400/429 → tepat satu request upstream.
+**Verification:** `internal/proxy/retry_test.go` locks down the policy table,
+attempt counts, the original status forwarded to failover, the stop when the
+status changes, and the client that has left. Mutation-tested: putting 429 back
+into the retry table fails `TestTransientRetryPolicy_MatchesUpstreamDefaults`.
+`internal/integration/transient_retry_test.go` covers it through the production
+router with a fake upstream: 503 then served → the client gets a `200` carrying
+the upstream text; 400/429 → exactly one upstream request.
 
-**Known limit (jujur):** ini menutup gap parity, bukan membuat upstream yang
-penuh menjadi tidak penuh. Saat `opencode.ai` benar-benar jenuh, ketiga attempt
-tetap 503 dan klien tetap menerima 503 — sekarang setelah menunggu sesuai
-kebijakan upstream, bukan langsung. Batas 25s edge relay juga tidak hilang:
-turn dengan TTFT di atas 25s masih perlu direct atau pool non-edge.
+**Honest known limit:** this closes a parity gap, not making a full upstream
+not full. When `opencode.ai` is genuinely saturated, all three attempts remain
+503 and the client still receives 503 — now after waiting per the upstream
+policy rather than immediately. The 25s edge-relay limit is also not gone:
+turns with a TTFT above 25s still need direct or a non-edge pool.
 
-### 🐛 Manifest tanpa checksum membuat auto-update mati total — issue #72
+### 🐛 Manifest without checksum kills auto-update entirely — issue #72
 
-#72 membuat digest SHA256 **wajib**: `PerformSelfUpdate` menolak sebelum request
-jaringan apa pun kalau `expectedSHA256` kosong. Tapi `CheckUpdate` mencoba
-manifest lebih dulu dan langsung mengembalikan jawabannya kalau sukses
-(`updater.go:158-163`), sedangkan `version.json` yang benar-benar terbit hanya
-punya tiga key — `downloadUrl`, `latestVersion`, `releaseNotes` — tanpa `sha256`
-sama sekali. Akibatnya `checkManifest` selalu menghasilkan digest kosong,
-`checkGitHubReleases` **tidak pernah dijalankan**, dan `lookupAssetSHA256` yang
-justru menutup gap #72 tidak pernah menyentuh release sungguhan.
+#72 makes the SHA256 digest **mandatory**: `PerformSelfUpdate` rejects before
+any network request when `expectedSHA256` is empty. But `CheckUpdate` tries the
+manifest first and immediately returns its answer if it succeeds
+(`updater.go:158-163`), whereas the `version.json` actually published has only
+three keys — `downloadUrl`, `latestVersion`, `releaseNotes` — with no `sha256`
+at all. As a result `checkManifest` always produces an empty digest,
+`checkGitHubReleases` is **never run**, and `lookupAssetSHA256`, which is what
+actually closes gap #72, never touches a real release.
 
-Terbukti: dengan manifest berbentuk sama persis seperti yang diterbitkan repo,
-`CheckUpdate` mengembalikan `Source="manifest"`, `SHA256=""`, sementara fallback
-GitHub yang punya `SHA256SUMS.txt` tidak pernah dihubungi. Semua instalasi
-berakhir `release carries no checksum` — fail-closed dan aman, tapi
-`9router-go update` praktis mati.
+Proven: with a manifest shaped exactly like the one the repo publishes,
+`CheckUpdate` returns `Source="manifest"`, `SHA256=""`, while the GitHub
+fallback that has `SHA256SUMS.txt` is never contacted. Every installation ends
+up `release carries no checksum` — fail-closed and safe, but `9router-go
+update` is practically dead.
 
-Manifest kini hanya boleh menjawab kalau memang bisa menghasilkan update yang
-dapat diinstal: digestnya ada, atau memang tidak ada update yang ditawarkan.
-Selain itu ia diperlakukan sebagai petunjuk dan turun ke GitHub Releases API;
-metadata manifest disimpan sebagai fallback supaya catatan rilis tetap tampil
-saat API-nya sedang mati.
+The manifest may now only answer if it can actually produce an installable
+update: its digest exists, or it really offers no update. Otherwise it is
+treated as a hint and falls through to the GitHub Releases API; the manifest
+metadata is kept as a fallback so the release notes still display while the API
+is down.
 
-**Verifikasi:** `TestCheckUpdate_ManifestWithoutDigestFallsThroughToReleaseDigest`
-menyajikan `version.json` tanpa `sha256` dan menegaskan release API benar-benar
-dihubungi serta digestrelease yang dipakai. Diuji mutation: mengembalikan
-syarat ke "manifest selalu menang" membuat test itu gagal tepat di assertion
-release API tidak pernah ditanya. Dua test lain mengunci agar fallthrough tidak
-menjadi regresi sendiri — manifest yang **sudah** punya digest tetap dijawab
-tanpa menyentuh GitHub, dan manifest yang melaporkan sudah mutakhir tetap
-dijawab walau tanpa digest.
+**Verification:**
+`TestCheckUpdate_ManifestWithoutDigestFallsThroughToReleaseDigest` serves a
+`version.json` without `sha256` and asserts the release API is genuinely
+contacted and the release digest is the one used. Mutation-tested: restoring
+the condition to "the manifest always wins" makes that test fail right at the
+assertion that the release API is never queried. Two other tests lock down
+that the fallthrough does not become a regression of its own — a manifest that
+**already** has a digest is still answered without touching GitHub, and a
+manifest reporting it is already up to date is still answered even without a
+digest.
 
-### 🔴 Header password dashboard hanya diverifikasi di satu handler — auth bypass
+### 🔴 Dashboard password header verified in only one handler — auth bypass
 
-`RequireAdminAuth` dan `RequireDashboardAuth` mengizinkan request yang membawa
-header `x-9r-password` dengan memeriksa **keberadaan** header itu saja:
-`r.Header.Get(DashboardPasswordHeader) != ""`. Nilai yang dipakai tidak pernah
-diverifikasi di middleware — memang tidak bisa, karena ceknya butuh hash bcrypt
-yang tersimpan di repo yang tidak dipegang gate.
+`RequireAdminAuth` and `RequireDashboardAuth` allow requests that carry the
+`x-9r-password` header by checking only the **presence** of that header:
+`r.Header.Get(DashboardPasswordHeader) != ""`. The value used is never verified
+in the middleware — indeed it cannot be, because the check needs a bcrypt hash
+stored in a repo the gate does not hold.
 
-Asumsi di balik itu — "handler di belakang gate memverifikasi sendiri" — hanya
-benar untuk **1 dari 7** path yang dilindungi. Handler lain sama sekali tidak
-memeriksa kredensial apa pun, sehingga siapa pun yang bisa memasang satu header
-acak cukup untuk lewat: `/api/version/shutdown` (`HandleShutdown`),
+The assumption behind that — "the handler behind the gate verifies itself" — is
+only true for **1 of 7** protected paths. The other handlers do not check any
+credential at all, so anyone able to set a single random header is enough to get
+through: `/api/version/shutdown` (`HandleShutdown`),
 `/api/version/update` (`HandleTriggerUpdate`), `/admin/health/reset`,
-`/api/oauth/cursor/auto-import`, dan `/api/oauth/kiro/auto-import`.
+`/api/oauth/cursor/auto-import`, and `/api/oauth/kiro/auto-import`.
 
-Yang paling berbahaya `/api/version/shutdown`: `shutdown.RequestStop()`
-dijadwalkan 500 ms setelah response (`internal/handlers/shutdown.go:29-32`),
-jadi efeknya selalu terjadi dan klien melihat 200 yang bersih — DoS remote
-tanpa autentikasi. `/api/version/update` mencapai penggantian binary dan restart.
+The most dangerous is `/api/version/shutdown`: `shutdown.RequestStop()` is
+scheduled 500 ms after the response (`internal/handlers/shutdown.go:29-32`), so
+the effect always happens and the client sees a clean 200 — remote DoS without
+authentication. `/api/version/update` reaches binary replacement and restart.
 
-Pengecualian header kini dibatasi ke `PasswordHeaderCarriesOwnAuth`
-(`/api/settings/database`) — satu-satunya handler yang memanggil
-`verifyDashboardPassword` (`settings.go:374-382`), dan alasannya tetap ada:
-tanpa pengecualian itu, jalur step-up untuk backup hanya hidup di test yang
-mem-mount handler langsung (#47). Kredensial lain tidak berubah: session dan
-CLI token tetap berlaku di semua path.
+The header exception is now limited to `PasswordHeaderCarriesOwnAuth`
+(`/api/settings/database`) — the only handler that calls
+`verifyDashboardPassword` (`settings.go:374-382`), and the reason remains: 
+without that exception, the step-up path for backup only lives in a test that
+mounts the handler directly (#47). Other credentials are unchanged: sessions
+and the CLI token remain valid on all paths.
 
-**Verifikasi:** `TestPasswordHeaderIsHonouredOnlyWhereTheHandlerVerifiesIt`
-menolak header ngawur pada keenam path lain lewat kedua gate, dan memastikan
-header tetap sampai ke handler export. Diuji mutation: mengembalikan
-`allowsPasswordHeader(...)` ke pemeriksaan keberadaan membuat keenam subtest
-gagal dengan 200 di handler yang seharusnya 401.
-`TestPasswordHeaderScopeKeepsOtherCredentialsWorking` mengunci session dan
-CLI token tetap berlaku setelah pembatasan ini. 12 test
-`HandleExportDatabase`/`HandleImportDatabase` lolos tanpa perubahan — #47
-tidak rusak.
+**Verification:** `TestPasswordHeaderIsHonouredOnlyWhereTheHandlerVerifiesIt`
+rejects a random header on the other six paths through both gates, and confirms
+the header still reaches the export handler. Mutation-tested: restoring
+`allowsPasswordHeader(...)` to a presence check makes all six subtests fail
+with a 200 at a handler that should be 401.
+`TestPasswordHeaderScopeKeepsOtherCredentialsWorking` locks down that session
+and CLI tokens remain valid after this restriction. The 12
+`HandleExportDatabase`/`HandleImportDatabase` tests pass unchanged — #47 is
+not broken.
 
-### 🐛 CI gagal karena free tier opencode sedang overload — skip set tidak lengkap
+### 🐛 CI failed because the opencode free tier was overloaded — incomplete skip set
 
-`internal/handlers/chat/muse_spark_e2e_test.go` memanggil endpoint opencode
-sungguhan, jadi status yang datang kapan saja ditentukan beban provider — bukan
-kekurangan gateway. Empat dari lima test di file itu sudah `t.Skip` untuk 429
-dan 403; `TestIntegration_OpenCode_MuseSpark13_ChatCompletions` hanya
-memperlakukan 429, sehingga 503 lolos dan menggagalkan CI #82 dengan:
+`internal/handlers/chat/muse_spark_e2e_test.go` calls the real opencode
+endpoint, so the status that comes back at any time is determined by the
+provider's load — not a gateway deficiency. Four of the five tests in that file
+already `t.Skip` for 429 and 403; `TestIntegration_OpenCode_MuseSpark13_ChatCompletions`
+only treated 429, so 503 leaked through and failed CI #82 with:
 
 ```
 WRN [fallback] upstream failed provider=opencode model=muse-spark-1.3-contributor-free
@@ -2287,413 +1968,416 @@ WRN [fallback] upstream failed provider=opencode model=muse-spark-1.3-contributo
 expected HTTP 200 for muse-spark-1.3, got 503
 ```
 
-Kelimanya kini memakai satu helper `upstreamUnavailable`: 429, 403, dan 503
-berarti "belum sekarang" dan di-skip; 400/401/500 tetap `Fatalf` supaya cacat
-nyata tidak ikut tertutupi. Test yang selama ini bergantung pada ketersediaan
-provider pihak ketiga tidak boleh gagal hanya karena satu status belum dicatat.
+All five now use one helper `upstreamUnavailable`: 429, 403, and 503 mean
+"not now" and are skipped; 400/401/500 still `Fatalf` so genuine defects are not
+also covered up. Tests that have always depended on third-party provider
+availability must not fail merely because one status has not been recorded.
 
-**Verifikasi:** `TestUpstreamUnavailable_SkipsOnlyProviderAvailabilityStatuses`
-mengunci isi himpunan itu — memindahkan 500 ke dalamnya akan menggagalkan test
-dengan pesan yang menyebut status itu adalah bug kita. Rerun suite setelah
-perubahan: upstream sudah pulih dan test tersebut kembali 200; `go vet` bersih,
-`go test -race ./internal/handlers/chat/` hijau.
+**Verification:** `TestUpstreamUnavailable_SkipsOnlyProviderAvailabilityStatuses`
+locks down the contents of that set — moving 500 into it would fail the test
+with a message stating that status is our bug. Reran the suite after the
+change: the upstream had recovered and those tests returned 200 again;
+`go vet` clean, `go test -race ./internal/handlers/chat/` green.
+### 🐛 Quota credential refresh: one attempt, skip without refresher, mark dead grant — regression #83
 
-### 🐛 Refresh kredensial quota: satu percobaan, skip tanpa refresher, tandai grant mati — regresi #83
-
-PR #83 menambah refresh kredensial ke `/api/usage/{id}` dan langsung memunculkan
-dua warning per akun yang setiap kali panel dibuka:
+PR #83 added credential refresh to `/api/usage/{id}` and immediately surfaced
+two warnings per account each time the panel was opened:
 
 ```
 WRN [usage] credential refresh failed         provider=grok-cli … invalid_grant
 WRN [usage] forced credential refresh failed  provider=grok-cli … invalid_grant
 ```
 
-Audit upstream (`open-sse/services/tokenRefresh.js isUnrecoverableRefreshError`)
-menunjukkan upstream **juga** retry sekali pada pesan auth-expired
-(`open-sse/services/usage/grok-cli.js:372` mengembalikan "…authentication
-expired. Please re-authorize."), tapi tidak pernah mengulang refresh yang **baru
-saja ditolak** — itu celah yang diisi sendiri oleh #83.
+Auditing upstream (`open-sse/services/tokenRefresh.js isUnrecoverableRefreshError`)
+shows upstream **also** retries once on an auth-expired message
+(`open-sse/services/usage/grok-cli.js:372` returns "…authentication
+expired. Please re-authorize."), but never repeats a refresh that was **just
+rejected** — that is the gap #83 filled itself.
 
-- **Satu percobaan refresh per request.** Retry dipindah ke jalur yang belum
-  mencoba, dan dilewati kalau percobaan yang baru saja gagal. Pair warning dan
-  satu slot `fetchgate` yang terbuang per akun hilang.
-- **Provider tanpa refresher dilewati.** `oauth.Refresh` hanya bisa berhasil
-  untuk provider yang terdaftar di `oauth.Get`; qoder tidak punya satu pun
+- **One refresh attempt per request.** The retry moved to a path that hasn't
+  tried yet, and is skipped if the attempt that just failed was that one. The
+  warning pair and one wasted `fetchgate` slot per account are gone.
+- **Providers without a refresher are skipped.** `oauth.Refresh` can only
+  succeed for providers registered in `oauth.Get`; qoder does not have one
   (upstream: `open-sse/executors/qoder.js` → `refreshCredentials() { return null }`),
-  jadi setiap Panel Open sebelumnya dijamin gagal dan masuk log.
-- **Grant yang mati ditandai di DB.** `providers.IsRefreshGrantDead` memperluas
-  `IsRefreshUnauthorized` (401) ke 400 `invalid_grant` /
-  `refresh_token_reused` / `unrecoverable_refresh_error` — bentuk yang
-  dikembalikan xAI untuk refresh token grok-cli yang dicabut. Akun yang ditolak
-  sekarang di-park lewat `RecordConnectionOAuthFailure` sehingga dashboard
-  menampilkan akun yang perlu di-re-auth, bukan warning yang tidak dibaca siapa pun.
-  500/transport error tetap **tidak** di-park: itu bukti provider blip, bukan
-  bukti kredensial mati.
-- **`oauth.Unregister`** ditambahkan untuk 테스트 yang memasang stub di bawah
-  provider id asli; stub yang bocor diam-diam mengubah perilaku kode produksi
-  yang diuji.
+  so every previous Open Panel was guaranteed to fail and hit the log.
+- **Dead grants are flagged in the DB.** `providers.IsRefreshGrantDead`
+  extends `IsRefreshUnauthorized` (401) to 400 `invalid_grant` /
+  `refresh_token_reused` / `unrecoverable_refresh_error` — the forms xAI
+  returns for a revoked grok-cli refresh token. Rejected accounts are now
+  parked via `RecordConnectionOAuthFailure` so the dashboard shows accounts
+  that need re-auth instead of warnings nobody reads.
+  500/transport errors are still **not** parked: those are evidence of a
+  provider blip, not evidence of dead credentials.
+- **`oauth.Unregister`** was added for tests that install a stub under the
+  real provider id; leaking stubs silently changed the behavior of the
+  production code being tested.
 
-### 🐛 Quota tracker tidak fetch semua akun + refresh kredensial Kiro — issue #78 (butir 3 & 4)
+### 🐛 Quota tracker does not fetch all accounts + Kiro credential refresh — issue #78 (items 3 & 4)
 
-#### Audit upstream sebelum/sesudah
+#### Upstream audit before/after
 
-| Aspek | Upstream `decolua/9router` | 9router-go sebelum | 9router-go sesudah |
+| Aspect | Upstream `decolua/9router` | 9router-go before | 9router-go after |
 |:--|:--|:--|:--|
-| Refresh sebelum baca quota | ada (`refreshAndUpdateCredentials`, `src/app/api/usage/[connectionId]/route.js`) | **tidak ada** | ada (`usage_credentials.go`) |
-| Retry saat pesan auth-expired | ada (sekali) | **tidak ada** | ada (sekali) |
-| Pola auth-expired | `["expired","authentication","unauthorized","401","re-authorize"]` | — | identik |
-| Fetch kredensial Kiro | `open-sse/services/usage/kiro.js` | port 1:1 sudah benar | tidak diubah |
-| Throttle fetch quota | **tidak ada** (deliberate gap, lihat `usage.go`) | 250ms + 120ms jitter | tidak diubah |
-| Fan-out di halaman quota | `Promise.all` tanpa batas | `Promise.allSettled` tanpa batas | terikat + bisa dibatalkan |
+| Refresh before reading quota | present (`refreshAndUpdateCredentials`, `src/app/api/usage/[connectionId]/route.js`) | **absent** | present (`usage_credentials.go`) |
+| Retry on auth-expired message | present (once) | **absent** | present (once) |
+| Auth-expired patterns | `["expired","authentication","unauthorized","401","re-authorize"]` | — | identical |
+| Kiro credential fetch | `open-sse/services/usage/kiro.js` | 1:1 port already correct | unchanged |
+| Quota fetch throttle | **absent** (deliberate gap, see `usage.go`) | 250ms + 120ms jitter | unchanged |
+| Fan-out on quota page | unbounded `Promise.all` | unbounded `Promise.allSettled` | bounded + cancellable |
 
-Butir 4 ternyata **sudah ter-port penuh** di sisi fetcher: `fetchKiroUsage`
-mencoba tiga endpoint (`codewhisperer-get`, `codewhisperer-post`, `q-get`) dengan
-header `tokentype`/`TokenType` dan profil ARN yang benar, dan `sawAuthError`
-menghasilkan pesan yang dilaporkan. Yang hilang adalah **dua langkah yang
-membuat token basi itu pernah sampai ke fetcher**: route `/api/usage/{id}` tidak
-pernah menyegarkan kredensial sebelum membaca, dan tidak pernah mencoba lagi
-saat provider menjawab dengan pesan auth-expired. Keduanya ada di upstream.
+Item 4 turned out to be **already fully ported** on the fetcher side:
+`fetchKiroUsage` tries three endpoints (`codewhisperer-get`,
+`codewhisperer-post`, `q-get`) with the correct `tokentype`/`TokenType`
+headers and ARN profile, and `sawAuthError` produces the reported message.
+What was missing were the **two steps that ever got that stale token to the
+fetcher**: the `/api/usage/{id}` route never refreshed credentials before
+reading, and never retried when the provider answered with an auth-expired
+message. Both exist upstream.
 
-#### Perubahan
+#### Changes
 
-- **`internal/handlers/dashboard/usage_credentials.go` (baru).** Refresh
-  kredensial OAuth sebelum baca quota bila `expiresAt` sudah melewati lead
-  window 5 menit, penyimpanan token yang sudah dirotasi (OpenAI memutar refresh
-  token tiap refresh), dan satu percobaan ulang setelah refresh paksa bila
-  provider menjawab dengan pola auth-expired upstream.
-- **`apiKey` ikut dirotasi bila ia cerminan `accessToken`.** Login Kiro menulis
-  token OAuth ke kedua field (`HandleKiroAPIKey`, `HandleKiroImport`), jadi
-  hanya mengubah `accessToken` meninggalkan salinan basi untuk pembaca mana pun
-  yang memakai `apiKey`. Koneksi `api_key` dengan key yang berbeda tidak
-  ditimpa.
-- **`web/src/components/quota/fetch.ts` (baru).** Fan-out kuota terikat
-  (6 baca bersamaan — jumlah yang sama dengan yang dijaga browser per origin)
-  dengan `AbortSignal` yang dimiliki pemanggil. Pass yang disusul langsung
-  membatalkan pass sebelumnya, sehingga jawaban yang terlambat tidak lagi
-  menimpa baris halaman baru dan baris yang masih dalam antrean tidak lagi
-  tampil sebagai "selesai tapi kosong".
+- **`internal/handlers/dashboard/usage_credentials.go` (new).** Refreshes OAuth
+  credentials before reading quota when `expiresAt` has passed the 5-minute lead
+  window, stores rotated tokens (OpenAI rotates the refresh token on every
+  refresh), and does one retry after a forced refresh if the provider answers
+  with the upstream auth-expired patterns.
+- **`apiKey` is rotated too when it mirrors `accessToken`.** Kiro login writes
+  the OAuth token to both fields (`HandleKiroAPIKey`, `HandleKiroImport`), so
+  changing only `accessToken` leaves a stale copy for any reader that uses
+  `apiKey`. `api_key` connections with a different key are not overwritten.
+- **`web/src/components/quota/fetch.ts` (new).** Bounded quota fan-out
+  (6 concurrent reads — the same number browsers keep per origin)
+  with an `AbortSignal` owned by the caller. A newer pass immediately aborts
+  the previous pass, so late answers no longer overwrite the new page's rows
+  and rows still in the queue no longer appear as "done but empty".
 
-#### Bukti
+#### Evidence
 
-- Repro (diulang): 50 koneksi lewat gate produksi butuh **15,07s** dan
-  **50/50** terbaca — jadi pemotongan terjadi di state klien, bukan di server.
-- Smoke live ke binary yang dibangun: 12 koneksi dalam satu pass tracker →
-  **12/12 baris live**, **12 read upstream**, 12 key berbeda. Bundle yang
-  dilayani memuat helper terikat (`Math.min(concurrency, targets.length)`).
+- Repro (repeated): 50 connections through the production gate took **15.07s**
+  and **50/50** were read — so the truncation happened in the client state, not
+  the server.
+- Live smoke against the built binary: 12 connections in one tracker pass →
+  **12/12 live rows**, **12 upstream reads**, 12 distinct keys. The served
+  bundle loads the bounded helper (`Math.min(concurrency, targets.length)`).
 - `go vet ./...` · `go test -race ./internal/...` · `go test -tags=integration -race ./internal/integration/...` · `bun test` 120/120 · `tsc -b` · `oxlint` · `make build`.
 
-### 🐛 OpenCode Zen (`ocz`) paritas dengan upstream — issue #78
+### 🐛 OpenCode Zen (`ocz`) parity with upstream — issue #78
 
-Halaman `/dashboard/providers/opencode-zen` hampir tidak punya perilaku upstream:
-`opencode-zen` **tidak terdaftar sebagai executor**, jadi `executor.Get` mengembalikan
-`nil` dan semua request jatuh ke `forwardRequest` generik — satu POST ke
-`/zen/v1/chat/completions` tanpa session/request header, tanpa quartet fingerprint,
-dan tanpa routing per-model. Akibatnya model Claude dan Qwen (yang hanya hidup di
-`/zen/v1/messages`) serta GPT/Grok/Muse Spark (`/zen/v1/responses`) tidak pernah
-menyentuh endpoint yang benar, dan `NoAuth: true` + `DefaultAPIKey: "public"`
-membuat lane PAYG diam-diam memakai key free-tier.
+The `/dashboard/providers/opencode-zen` page had almost no upstream behavior:
+`opencode-zen` is **not registered as an executor**, so `executor.Get` returns
+`nil` and every request falls into the generic `forwardRequest` — one POST to
+`/zen/v1/chat/completions` with no session/request headers, no fingerprint
+quartet, and no per-model routing. As a result Claude and Qwen models (which
+only live under `/zen/v1/messages`) and GPT/Grok/Muse Spark
+(`/zen/v1/responses`) never touched the right endpoint, and `NoAuth: true` +
+`DefaultAPIKey: "public"` made the PAYG lane silently use the free-tier key.
 
-- **Executor `ForwardOpencodeZen` + tiga transport.** `internal/proxy/executor/opencode_zen.go`
-  mengimplementasikan `open-sse/executors/opencode-zen.js`: `/chat/completions`,
-  `/messages` (auth `x-api-key` mentah), `/responses`, plus fingerprint headers,
-  quartet `bash/glob/grep/read`, `stream:true` paksa, dan `store:false`.
-- **Metadata format per model.** `internal/providers/model_formats.go` mem-port
-  `targetFormat` / `supportedFormats` dari registry upstream plus fallback keluarga
-  (`open-sse/providers/models/helpers.js OPENCODE_FAMILIES`) untuk id dari
-  `modelsFetcher`/`passthroughModels` yang belum pernah dilihat. Katalog
-  `web/src/lib/models.ts` untuk `ocz` disinkronkan ke 74 entri (termasuk
-  `union-alpha` yang sebelumnya hilang) dengan medan format yang sama.
-- **Claude client boleh loseless.** `tryForwardWithConnection` hanya mengonversi
-  body `/v1/messages` untuk provider tanpa endpoint Messages
-  (`executor.ServesMessagesEndpoint`), jadi `claude-*` dan `qwen*` kini dikirim
-  apa adanya ke `/zen/v1/messages` alih-alih OpenAI → Claude bolak-balik.
-- **Lane Responses.** `UpstreamSpeaksResponses` kini membedakan
-  `opencode-zen` dan hanya meloloskan passthrough untuk model yang target
-  format-nya `openai-responses`; model chat-lane yang diminta klien Responses
-  diterjemahkan masuk, bukan diteruskan mentah.
-- **Quota tracker.** `GET /zen/v1/usage` (Rolling / Weekly / Monthly, persentase
-  → used/total 0..100) di-port ke `usage_opencode_zen.go`, dan `opencode-zen`
-  masuk `usageSupportedProviders` + `usageApikeyProviders` — sebelumnya tidak
-  eligible sehingga halaman tidak menampilkan akun sama sekali. URL usage
-  diturunkan dari `baseUrl` koneksi, jadi endpoint self-hosted/relay dibaca
-  dari host-nya sendiri.
-- **Konfigurasi provider.** `NoAuth` dan `DefaultAPIKey: "public"` dihapus
-  (koneksi tanpa key kini ditolak, bukan diam-diam memakai free tier), dan
-  `UsageURL` ditambahkan ke `ProviderConfig`.
-- **Verifikasi:** `go vet ./...`, `go test -race ./...`,
-  `go test -tags=integration -race ./internal/integration/...` (7 kasus zen baru
-  lewat router produksi dengan upstream palsu), `bun test` 115/115, `bun run build`,
-  plus smoke live ke binary terhadap upstream palsu ketiga lane.
+- **`ForwardOpencodeZen` executor + three transports.**
+  `internal/proxy/executor/opencode_zen.go` implements
+  `open-sse/executors/opencode-zen.js`: `/chat/completions`, `/messages` (raw
+  `x-api-key` auth), `/responses`, plus fingerprint headers, the
+  `bash/glob/grep/read` quartet, forced `stream:true`, and `store:false`.
+- **Per-model format metadata.** `internal/providers/model_formats.go` ports
+  `targetFormat` / `supportedFormats` from the upstream registry plus the
+  family fallbacks (`open-sse/providers/models/helpers.js OPENCODE_FAMILIES`)
+  for ids from `modelsFetcher`/`passthroughModels` never seen before. The
+  `web/src/lib/models.ts` catalog for `ocz` is synced to 74 entries (including
+  the previously missing `union-alpha`) with the same format fields.
+- **Claude client may be lossless.** `tryForwardWithConnection` only converts
+  `/v1/messages` bodies for providers without a Messages endpoint
+  (`executor.ServesMessagesEndpoint`), so `claude-*` and `qwen*` are now sent
+  as-is to `/zen/v1/messages` instead of an OpenAI → Claude round-trip.
+- **Responses lane.** `UpstreamSpeaksResponses` now distinguishes
+  `opencode-zen` and only lets passthrough through for models whose target
+  format is `openai-responses`; chat-lane models that the client asked for via
+  Responses are translated in, not forwarded raw.
+- **Quota tracker.** `GET /zen/v1/usage` (Rolling / Weekly / Monthly, with the
+  percentage → used/total 0..100) is ported to `usage_opencode_zen.go`, and
+  `opencode-zen` joins `usageSupportedProviders` + `usageApikeyProviders` —
+  previously it wasn't eligible so the page showed no accounts at all. The
+  usage URL is derived from the connection's `baseUrl`, so self-hosted/relay
+  endpoints are read from their own host.
+- **Provider configuration.** `NoAuth` and `DefaultAPIKey: "public"` were
+  removed (keyless connections are now rejected instead of silently using the
+  free tier), and `UsageURL` was added to `ProviderConfig`.
+- **Verification:** `go vet ./...`, `go test -race ./...`,
+  `go test -tags=integration -race ./internal/integration/...` (7 new zen cases
+  pass through the production router against a fake upstream), `bun test`
+  115/115, `bun run build`, plus a live smoke against the binary against a fake
+  upstream for all three lanes.
 
-### 🐛 Console log named the provider but not the account — issue #78 (butir 2)
+### 🐛 Console log named the provider but not the account — issue #78 (item 2)
 
-Pada multi-akun, baris `[usage] logged` hanya menyebut `provider` + `model` + token.
-Tidak ada jejak akun mana yang melayani — padahal itu satu-satunya informasi yang
-berguna saat 20 koneksi berotasi di balik satu provider. `connIdentityKV` sudah
-ada, tapi hanya terpakai di jalur gagal (`upstream failed`, `connection locked`),
-karena `forwardRequestParams` tidak membawa nama akun.
+On multi-account, the `[usage] logged` line only named `provider` + `model` + token.
+There was no trace of which account served — even though that is the only
+useful information when 20 connections rotate behind a single provider.
+`connIdentityKV` already existed, but was only used on the failure paths
+(`upstream failed`, `connection locked`), because `forwardRequestParams` did
+not carry the account name.
 
-- **`forwardRequestParams.ConnName` / `.ConnEmail`** diisi di ketiga call site
-  picker (pinned, rotasi, combo) dari baris koneksi yang sudah dipegang, jadi
-  jalur sukses tidak perlu query database tambahan untuk format log.
-- **`UsageLogInfo` dapat `ConnName`/`ConnEmail`** plus `ConnIdentityKV()`, dan
-  `connIdentityKVOr()` menyelesaikan identitas sekali per attempt lalu dipakai
-  ulang oleh `logUsage`, `LogFailure`, dan ketiga baris `fallback` — tidak ada
-  permintaan yang membaca baris koneksi dua kali.
-- **Konsekuensi yang terlihat:** baris sukses kini berbunyi
-  `... cost=… conn=conn-a connName=Account A`; permintaan tanpa koneksi tersimpan
-  (no-auth) melapor `account=Public / Direct` alih-alih diam saja.
-- **Verifikasi:** 2 kasus integrasi lewat router produksi (rotasi dua akun harus
-  menghasilkan dua nama berbeda di console log), 3 unit test untuk resolusi
-  identitas, `go vet ./...`, `go test -race ./internal/...`,
+- **`forwardRequestParams.ConnName` / `.ConnEmail`** are filled in at all three
+  picker call sites (pinned, rotation, combo) from the connection row already
+  held, so the success path needs no extra database query to format the log.
+- **`UsageLogInfo` gets `ConnName`/`ConnEmail`** plus `ConnIdentityKV()`, and
+  `connIdentityKVOr()` resolves the identity once per attempt then reuses it in
+  `logUsage`, `LogFailure`, and all three `fallback` lines — no request reads
+  the connection row twice.
+- **Visible consequence:** success lines now read
+  `... cost=… conn=conn-a connName=Account A`; requests without a stored
+  connection (no-auth) report `account=Public / Direct` instead of staying
+  silent.
+- **Verification:** 2 integration cases through the production router (rotating
+  two accounts must produce two distinct names in the console log), 3 unit
+  tests for identity resolution, `go vet ./...`,
+  `go test -race ./internal/...`,
   `go test -tags=integration -race ./internal/integration/...`.
 
-### 🐛 Proxy pool ter-assign tapi tidak pernah dipakai — issue #78 (butir 1)
+### 🐛 Proxy pool assigned but never used — issue #78 (item 1)
 
-Pool yang terpasang di dashboard **tidak pernah dipakai** untuk sebagian besar
-provider. UI menulis `proxyPoolId` dan menampilkan badge "Proxy" — request-nya
-tetap keluar lewat IP asli. Tiga sebab, ketiganya diperbaiki.
+The pool attached in the dashboard was **never used** for most providers. The
+UI writes `proxyPoolId` and shows a "Proxy" badge — the requests still went
+out through the real IP. Three causes, all three fixed.
 
-- **`forwardRequest` mengabaikan client koneksi.** Signature-nya tidak punya
-  client, jadi selalu `h.Client`: **setiap provider tanpa executor kustom**
-  (deepseek, openai, openrouter, groq, mistral, …) melompati proxy. Jalur Gemini
-  native punya masalah yang sama. Client hasil resolusi sekarang diteruskan
-  (`forwardRequest` + `forwardGeminiNativeRequest`).
-- **Pool level provider hanya dibaca koneksi virtual no-auth.**
-  `settings.providerStrategies[...].proxyPoolId` baru dipakai di
-  `getBestConnection` untuk koneksi hasil sintetis, jadi koneksi yang punya API
-  key sendiri keluar langsung. `applyProviderProxyPool` kini menjadikannya
-  fallback ketika koneksi tidak punya binding sendiri (binding eksplisit tetap
-  menang).
-- **Alias vs id kanonik.** UI menyimpan pool di bawah `storageAlias` (mis.
-  `mmf`, `cl`, `ocg`, `ocz`) sedangkan request membawa id kanonik
+- **`forwardRequest` ignored the connection client.** Its signature had no
+  client, so it was always `h.Client`: **every provider without a custom
+  executor** (deepseek, openai, openrouter, groq, mistral, …) skipped the
+  proxy. The native Gemini path had the same problem. The resolved client is
+  now forwarded (`forwardRequest` + `forwardGeminiNativeRequest`).
+- **Provider-level pools were only read for virtual no-auth connections.**
+  `settings.providerStrategies[...].proxyPoolId` was only used in
+  `getBestConnection` for synthetic connections, so connections with their own
+  API key went out directly. `applyProviderProxyPool` now makes it a fallback
+  when a connection has no binding of its own (an explicit binding still wins).
+- **Alias vs canonical id.** The UI stores the pool under `storageAlias` (e.g.
+  `mmf`, `cl`, `ocg`, `ocz`) while the request carries the canonical id
   (`mimo-free`, `clinepass`, `opencode-go`, `opencode-zen`).
-  `ResolveProviderProxyPoolID` hanya mengingat tiga pasangan, jadi sisanya
-  membaca "tidak ada". Sekarang kunci dicari lewat `providerStrategyKeys`:
-  id → alias terpublikasi → id kanonik → pasangan upstream (cline ↔ clinepass).
-- **Pool tak terpakai gagal diam-diam.** Pool yang terhapus, nonaktif, tanpa
-  URL, atau URL-nya tidak bisa diparse sebelumnya membuat request pergi
-  langsung. Sekarang `getClientForConnection` mengembalikan error dan
-  `tryForwardWithConnection` gagal **sebelum** ada byte yang terkirim — tidak
-  ada request pertama yang bocor ke IP asli.
-- **Verifikasi:** 4 kasus integrasi lewat router produksi dengan proxy palsu
-  yang menghitung setiap tunnel (termasuk satu yang membuktikan hop lewat
-  header yang di-stamp proxy), 6 unit test untuk resolusi alias pool,
+  `ResolveProviderProxyPoolID` only remembered three pairs, so the rest read
+  "none". Keys are now resolved via `providerStrategyKeys`:
+  id → published alias → canonical id → upstream pair (cline ↔ clinepass).
+- **Unusable pools failed silently.** A deleted, inactive, URL-less pool, or
+  one whose URL could not be parsed previously let the request go direct. Now
+  `getClientForConnection` returns an error and `tryForwardWithConnection`
+  fails **before** any byte is sent — no first request leaks to the real IP.
+- **Verification:** 4 integration cases through the production router with a
+  fake proxy that counts every tunnel (including one proving the hop via the
+  header stamped by the proxy), 6 unit tests for pool alias resolution,
   `go vet ./...`, `go test -race ./internal/...`,
   `go test -tags=integration -race ./internal/integration/...`.
 
-### 🐛 Edge relay kehilangan `x-relay-target` di lane Zen
+### 🐛 Edge relay lost `x-relay-target` on the Zen lane
 
-Dengan pool bertipe `vercel`/`cloudflare`/`deno`, `getProviderConfig` menukar
-tujuan upstream menjadi header relay (`BuildEdgeRelayHeaders`) lalu mengganti
-`BaseURL` dengan host relay. `ForwardOpencodeZen` membangun ulang header dari
-nol, jadi `x-relay-target` hilang dan relay menjawab
-`400 {"error":"Missing x-relay-target header"}` — **semua** request gagal begitu
-pool edge dipasang.
+With a `vercel`/`cloudflare`/`deno`-typed pool, `getProviderConfig` swaps the
+upstream destination for a relay header (`BuildEdgeRelayHeaders`) then
+replaces `BaseURL` with the relay host. `ForwardOpencodeZen` rebuilds headers
+from scratch, so `x-relay-target` was lost and the relay answered
+`400 {"error":"Missing x-relay-target header"}` — **all** requests failed the
+moment an edge pool was attached.
 
-- **`zenHeaders` kini membawa `x-relay-target` / `x-relay-path` /
-  `x-opencode-project`** dari config koneksi. Fingerprint UA tetap menang
-  atas `User-Agent` yang dikirim koneksi.
-- **`zenRelayPath` menentukan lane dari satu tempat.** Nilai `x-relay-path`
-  di-stamp dari `baseUrl` koneksi, jadi untuk koneksi default isinya
-  `/zen/v1/chat/completions` — penting saat modelnya butuh lane lain.
-- **Lane `/messages` juga.** Jalur itu membangun set header sendiri
-  (`x-api-key` + `anthropic-version`), jadi ikut kehilangan header relay; sekarang
-  sama seperti dua lane lain, tujuan ada di header dan `BaseURL` yang dipanggil
-  adalah host relay.
-- **Verifikasi:** 5 kasus test memakai relay palsu yang meniru perilaku
-  deployment (`internal/handlers/media/deploy.go`) dan membalas 400 seperti
-  aslinya — ketiganya **gagal dengan pesan yang sama seperti laporan Anda**
-  sebelum fix, lalu hijau sesudahnya.
+- **`zenHeaders` now carries `x-relay-target` / `x-relay-path` /
+  `x-opencode-project`** from the connection config. The fingerprint UA still
+  wins over the `User-Agent` sent by the connection.
+- **`zenRelayPath` determines the lane from one place.** The `x-relay-path`
+  value is stamped from the connection's `baseUrl`, so for a default connection
+  it holds `/zen/v1/chat/completions` — important when the model needs a
+  different lane.
+- **The `/messages` lane too.** That path builds its own header set
+  (`x-api-key` + `anthropic-version`), so it also lost the relay header; now it
+  is like the other two lanes — the destination is in the header and the
+  `BaseURL` invoked is the relay host.
+- **Verification:** 5 test cases use a fake relay that mimics deployment
+  behavior (`internal/handlers/media/deploy.go`) and replies 400 like the real
+  one — all three **failed with the same message as your report** before the
+  fix, then went green after.
 
-### 🐛 Batch perbaikan issue terbuka (#72, #73, #74, #75, #76, #77, #78, #79, #47, #61)
+### 🐛 Batch fix of open issues (#72, #73, #74, #75, #76, #77, #78, #79, #47, #61)
 
-Sepuluh issue yang masih terbuka ditutup di satu batch. Yang sudah benar di
-`main` (#48) tidak disentuh; yang butuh PR terpisah masih tercatat di issue.
+Ten still-open issues were closed in one batch. Those already correct in
+`main` (#48) were not touched; those needing a separate PR remain tracked in
+the issue.
 
-- 🔴 **Self-update bisa mengganti binary tanpa verifikasi checksum (#72).**
-  `PerformSelfUpdate` hanya memverifikasi SHA256 *kalau* manifest menyediakannya,
-  padahal di jalur yang benar-benar dipakai `expectedSHA256` selalu kosong:
-  `checkManifest` membaca field `sha256` yang tidak ada di `version.json`, dan
-  `checkGitHubReleases` tidak pernah mengisinya. Rangkaian download → tulis →
-  rename menimpa binary yang sedang berjalan tanpa cek integritas. Sekarang
-  checksum **wajib**: tanpa itu `PerformSelfUpdate` menolak sebelum request
-  jaringan apa pun dan binary yang berjalan tidak tersentuh. Untuk menutup
-  gap-nya, `checkGitHubReleases` membaca aset `SHA256SUMS.txt` yang memang
-  sudah diterbitkan `release.yml` (tidak ada kode Go yang membacanya) dan
-  memilih entri yang cocok dengan aset platform aktif. Kegagalan lookup tidak
-  mematikan pengecekan update; `SHA256` kosong dan instalasi ditolak dengan
-  pesan yang menyebut tidak ada checksum.
-- 🔴 **`parseSemver` membuang suffix prerelease (#73).** `1.9.7-rc1` dan
-  `1.9.7` sama-sama jadi `[1,9,7]`, jadi RC tidak pernah ditawarkan sebagai
-  update — dan begitu `1.9.8-rc1` terbit, user di `1.9.7` auto-update ke RC.
-  Precedence semver sebenarnya sekarang dipakai (versi final menang atas
-  prereleasenya sendiri, `rc2 > rc1`, build metadata diabaikan), plus guard
-  kedua di `runCheckCycle`: jalur otomatis tidak pernah memasang tag
-  ber-prerelease ke proses yang sedang berjalan di versi final. RC tetap bisa
-  dipasang manual lewat `9router-go update` maupun tombol dashboard.
-- 🔴 **PID daur-ulang bisa membuat `stop` membunuh proses lain (#74).**
-  `RunningPID` hanya percaya PID telanjang plus `proc.Alive`, jadi file pid
-  yang ditinggalkan daemon yang mati bisa dilaporkan hidup setelah OS memakai
-  ulang nomornya — lalu `Stop` mengirim SIGTERM/SIGKILL ke orang tak
-  bersalah. Klaim pid kini mencatat `<pid> <exe>`, dan `proc.Executable(pid)`
+- 🔴 **Self-update could replace the binary without checksum verification (#72).**
+  `PerformSelfUpdate` only verified SHA256 *if* the manifest provided it, yet
+  on the path actually used `expectedSHA256` was always empty:
+  `checkManifest` reads the `sha256` field that does not exist in `version.json`,
+  and `checkGitHubReleases` never filled it. The download → write →
+  rename sequence overwrote the running binary with no integrity check. Now
+  the checksum is **mandatory**: without it `PerformSelfUpdate` refuses before
+  any network request and the running binary is untouched. To close the gap,
+  `checkGitHubReleases` reads the `SHA256SUMS.txt` asset that `release.yml`
+  already publishes (no Go code read it) and selects the entry matching the
+  active platform asset. A lookup failure does not kill the update check;
+  an empty `SHA256` and installation is rejected with a message saying there
+  is no checksum.
+- 🔴 **`parseSemver` discarded the prerelease suffix (#73).** `1.9.7-rc1` and
+  `1.9.7` both became `[1,9,7]`, so an RC was never offered as an update —
+  and once `1.9.8-rc1` shipped, users on `1.9.7` auto-updated to the RC.
+  Real semver precedence is now used (a final version wins over its own
+  prerelease, `rc2 > rc1`, build metadata is ignored), plus a second guard in
+  `runCheckCycle`: the automatic path never installs a prerelease-tagged
+  version onto a process running a final version. RCs can still be installed
+  manually via `9router-go update` or the dashboard button.
+- 🔴 **PID reuse could make `stop` kill another process (#74).**
+  `RunningPID` only trusted the bare PID plus `proc.Alive`, so a pid file left
+  by a dead daemon could be reported alive after the OS reused its number —
+  then `Stop` sent SIGTERM/SIGKILL to an innocent party. PID claims now record
+  `<pid> <exe>`, and `proc.Executable(pid)`
   (Windows `QueryFullProcessImageName`, Linux `/proc/<pid>/exe`, BSD
-  `kern.proc.pathname`) memverifikasinya sebelum sinyal dikirim. Klaim yang
-  tidak bisa diverifikasi **bukan** daemon yang hidup, jadi tidak pernah
-  berwenang atas sinyal. `Stop` juga tidak lagi menghapus file pid di jalur
-  force-kill, sehingga keadaan "ada klaim tapi prosesnya sudah mati" bisa
-  terwakili.
-- 🔴 **`gateway.log` tumbuh tanpa batas dan dibaca utuh tiap 150 ms (#75).**
-  Log di-append tanpa cap, `LogTail` memuat seluruh file per panggilan
-  `logs`, dan `bindFailureSeen` melakukan `os.ReadFile` + `bytes.Contains`
-  pada setiap iterasi polling 150 ms. Log sekarang di-trim ke 16 MiB saat
-  dibuka (ekor dipertahankan, kepala dipindah ke `gateway.log.1`), `LogTail`
-  hanya membaca jendela 256 KiB dari belakang, dan pemindaian bind failure
-  dibatasi ke ekor log.
-- **`tools[].toolSpec.name` (Bedrock Converse) dilewati dua arah (#77).**
-  `visitTools`/`replaceInTools` hanya mengenal `name`, `function.name`, dan
-  `functionDeclarations`, sehingga request berbentuk Converse tetap membawa
-  nama > 64 karakter ke upstream dan tidak ada apa pun yang memulihkannya di
-  respons. Issue menyebut ini "direkam tapi tidak ditulis"; yang sebenarnya
-  adalah keduanya tidak disentuh —adding `toolSpec` ke sisi request saja
-  akan membuat respons mengembalikan nama yang tidak pernah dideklarasikan.
-  Bentuk Converse kini ditangani simetris di request **dan** respons
-  (`contentBlockStart.start.toolUse` dan `output.message.content[].toolUse`).
-- **`signalSelfShutdown` dead code di kedua varian build (#76) — BELUM dihapus.**
-  Kedua file `signal_unix.go`/`signal_windows.go` memang tidak punya call site
-  sejak rewrite `RestartSelf` pindah ke `shutdown.RestartAfterStop`, dan isinya
-  identik. Penghapusan file-nya **tidak termasuk batch ini**; issue #76 tetap
-  terbuka.
-- **Kredensial Kiro tidak pernah sampai ke quota tracker (#78).**
-  `fetchProviderUsage` mengirim `accessToken` ke `fetchKiroUsage`, padahal
-  koneksi Kiro menyimpan kredensialnya di `apiKey` — jadi request-nya
-  membawa `Authorization: Bearer ` dan dashboard menampilkan *"Kiro quota API
-  rejected the current token. Chat may still work."* sementara chat-nya
-  sendiri sukses memakai kredensial yang tidak pernah dibaca quota path.
-  Presedensinya sekarang sama dengan `resolveProviderAuthToken` di jalur chat,
-  dan token kosong dilaporkan sebagai "kredensial tidak tersimpan" — bukan
-  penolakan token yang menyesatkan.
-- **Antigravityqueue dua kali di gate quota (#78).** `HandleGetConnectionUsage`
-  mengambil slot `quotaFetchGate` sekali sebelum dispatch lalu sekali lagi
-  di cabang Antigravity, jadi tiap akun Antigravity menunggu dua gap 250 ms
-  berturut-turut untuk satu burst request. Slot kedua dihapus.
-- **Dropdown periode usage dengan `all` + window kustom (#79).**
-  Selector periode berupa deretan tombol pill hardcoded yang tidak punya
->  `all`, padahal backend sudah menerimanya. Sekarang dropdown dengan preset
->  (Today, 24h, 7D, 30D, 60D, All time) plus input kustom, dan backend
->  `/api/usage/stats` menerima bentuk `<n>d` / `<n>h` apa pun —
->  `resolveUsagePeriod` mengganti rantai `if/else` yang diam-diam memakai
->  365 hari untuk `all` dan 7 hari untuk nilai yang tidak dikenal.
-- **Download database ditolak padahal sudah login (#47).**
->  `HandleExportDatabase` tidak menerima session dashboard — hanya header
->  `x-9r-password` atau token CLI — sehingga link browser biasa selalu 401
->  dan ekspor terlihat permanen terblokir. Session sekarang cukup dengan
->  sendirinya seperti baca dashboard lain, sementara header password tetap
->  jalan untuk skrip. Jalur zip yang diminta sudah ada di backend dan kini
->  bisa dijangkau.
-- **Picker model tidak lagi menyortir ulang seluruh katalog per klik (#61).**
-  `resolveFilteredGroups` menerima `addedModelValues` yang tidak pernah
-  dibaca, tapi karena argumennya ada di signature, Svelte menjadikannya bagian
-  dari graf reaktif: setiap klik satu pill memicu filter + sort ulang seluruh
-  grup dan rekonsiliasi ulang ratusan/ribuan pill. Argumen itu dihapus; logika
-  filter/sort tidak berubah sama sekali.
+  `kern.proc.pathname`) verifies it before any signal is sent. A claim that
+  cannot be verified is **not** a live daemon, so it never authorizes signals.
+  `Stop` also no longer deletes the pid file on the force-kill path, so the
+  "claim exists but the process is dead" state can be represented.
+- 🔴 **`gateway.log` grew unbounded and was read whole every 150 ms (#75).**
+  The log was appended with no cap, `LogTail` loaded the entire file per
+  `logs` call, and `bindFailureSeen` did an `os.ReadFile` + `bytes.Contains`
+  on every 150 ms polling iteration. The log is now trimmed to 16 MiB when
+  opened (tail kept, head moved to `gateway.log.1`), `LogTail` reads only a
+  256 KiB window from the back, and the bind-failure scan is limited to the
+  log tail.
+- **`tools[].toolSpec.name` (Bedrock Converse) was skipped in both directions (#77).**
+  `visitTools`/`replaceInTools` only knew `name`, `function.name`, and
+  `functionDeclarations`, so a Converse-shaped request still carried a name >
+  64 characters upstream and nothing restored it in the response. The issue
+  called this "recorded but not written"; what actually happened was that both
+  were untouched — adding `toolSpec` to the request side alone would have made
+  the response return a name that was never declared.
+  The Converse shape is now handled symmetrically in the request **and** the
+  response (`contentBlockStart.start.toolUse` and
+  `output.message.content[].toolUse`).
+- **`signalSelfShutdown` is dead code in both build variants (#76) — NOT removed.**
+  Both `signal_unix.go`/`signal_windows.go` files indeed have no call site
+  since the `RestartSelf` rewrite moved to `shutdown.RestartAfterStop`, and
+  their contents are identical. Deleting the files is **not part of this
+  batch**; issue #76 stays open.
+- **Kiro credentials never reached the quota tracker (#78).**
+  `fetchProviderUsage` sent `accessToken` to `fetchKiroUsage`, even though a
+  Kiro connection stores its credentials in `apiKey` — so the request carried
+  `Authorization: Bearer ` and the dashboard showed *"Kiro quota API
+  rejected the current token. Chat may still work."* while the chat itself
+  succeeded using credentials the quota path never read.
+  Precedence is now the same as `resolveProviderAuthToken` on the chat path,
+  and an empty token is reported as "credentials not stored" — not a
+  misleading token rejection.
+- **Antigravity queued twice on the quota gate (#78).** `HandleGetConnectionUsage`
+  took the `quotaFetchGate` slot once before dispatch and then once more in
+  the Antigravity branch, so each Antigravity account waited two back-to-back
+  250 ms gaps for a single request burst. The second slot was removed.
+- **Usage period dropdown with `all` + custom window (#79).**
+  The period selector was a row of hardcoded pill buttons with no
+>  `all`, even though the backend already accepted it. Now it is a dropdown
+>  with presets (Today, 24h, 7D, 30D, 60D, All time) plus a custom input, and
+>  the backend `/api/usage/stats` accepts any `<n>d` / `<n>h` form —
+>  `resolveUsagePeriod` replaces the `if/else` chain that silently used
+>  365 days for `all` and 7 days for unknown values.
+- **Database download was rejected even when logged in (#47).**
+>  `HandleExportDatabase` did not accept a dashboard session — only the
+>  `x-9r-password` header or a CLI token — so a normal browser link always 401'd
+>  and export looked permanently blocked. A session is now enough on its own,
+>  like other dashboard reads, while the password header still works for
+>  scripts. The requested zip path already existed in the backend and is now
+>  reachable.
+- **Model picker no longer re-sorts the whole catalog per click (#61).**
+  `resolveFilteredGroups` accepted an `addedModelValues` argument that was
+  never read, but because the argument was in the signature, Svelte made it
+  part of the reactive graph: every click on one pill triggered a filter +
+  re-sort of all groups and a re-reconciliation of hundreds/thousands of
+  pills. The argument was removed; the filter/sort logic is completely
+  unchanged.
 
-**Di luar cakupan:** #78 butir 1–2 (executor `opencode-zen`) sudah dikerjakan
-di PR #80 dan #48 sudah benar di `main` (`stripCodexUnsupportedTokenParams`
-berjalan setelah `buildResponsesBody`, bukan sebelumnya) — keduanya tidak
-disentuh di sini.
-
+**Out of scope:** #78 items 1–2 (the `opencode-zen` executor) were already done
+in PR #80 and #48 is correct on `main` (`stripCodexUnsupportedTokenParams`
+runs after `buildResponsesBody`, not before) — neither was touched here.
 ## [v1.9.6] - 2026-10-01
 
-### 🐛 Pre-release review: 5 blocker yang lolos semua gate (#70)
+### 🐛 Pre-release review: 5 blockers that slipped through every gate (#70)
 
-Audit 42 commit `v1.9.5..main` sebelum rilis menemukan lima cacat yang **tidak**
-tertangkap `go vet`, `bun test`, maupun `-race`, karena test yang ada memock
-hal yang sama persis dengan jalur kodenya. Kelimanya sudah diperbaiki dan
-diuji dengan uji regresi yang gagal bila fix-nya dibalik (*mutation-checked*).
+Auditing 42 commits of `v1.9.5..main` before release found five defects that were **not**
+caught by `go vet`, `bun test`, or `-race`, because the existing tests mock
+exactly the same thing as the code path. All five have been fixed and
+tested with regression tests that fail when the fix is reverted (*mutation-checked*).
 
-- 🔴 **`9router-go status|stop|logs` buta terhadap `DATA_DIR` dari `.env`.**
-  `daemonURL()` dan `daemon.Dir()` membaca `os.Getenv`, sedangkan server
-  menyelesaikannya lewat viper yang membaca `.env`. Pada deployment yang
-  dikonfigurasi lewat `.env` saja — termasuk setiap docker compose — proses CLI
-  melihat direktori berbeda dari daemon yang sedang jalan: `status` melaporkan
-  *"not running"* padahal ada listener hidup, `stop` menolak untuk halt, dan
-  `logs` mengklaim tidak ada log padahal file-nya 50 KB. `ResolveDataDir()`
-  kini membaca `.env` (dengan urutan env → `.env` → default platform) dan
-  `daemonURL()` memakai `config.LoadConfig()` sehingga port yang diprobe sama
-  dengan yang di-bind.
-- 🔴 **Nama tool ter-fit bocor ke client di lane Claude `TranslateResp`.**
-  `handleClaudeMessagesStream` `return` di baris 19–46, **sebelum**
-  `decloaker := NewClaudeStreamDecloaker(req.ToolNameMap)` di baris 78. Request
-  sudah di-fit di `fallback.go:362`, jadi `content_block_start` tool_use sampai
-  ke client dengan nama 64 karakter dan tidak bisa di-dispatch. Non-stream
-  punya cacat serupa (passthrough di `claude_messages.go:191` keluar sebelum
-  decloak) — keduanya sekarang decloak sebelum branch mana pun. Decloaker
-  di-hoist ke atas `TranslateResp`.
-- 🔴 **Lane Responses: request tidak konsisten dengan dirinya sendiri.**
-  `FitToolNames` tidak punya walker `input[]` (hanya `tools`/`functions`/
-  `messages`/`contents`/`tool_choice`), padahal `RestoreToolNames` tetap
-  me-restore `output[]` (`fingerprint.go:282-311`). Akibatnya deklarasi tool
-  ter-fit ke 64 karakter sementara history masih memanggil nama aslinya 71
-  karakter — upstream menerima request yang bertentangan dengan dirinya, dan
-  fix 400-nya sendiri tidak benar-benar terpakai, karena nama panjang tetap
-  dibawa lewat `input`. Ditambahkan `visitInput`/`replaceInInput`
-  (`tool_fit.go`) yang berbagi satu walker untuk kedua arah, dan
-  `passthroughResponses` kini menerapkan `req.ToolNameMap` pada body non-stream
-  maupun lewat `sseStreamOpts` pada stream.
-- 🔴 **Idempotency key reset-credit kosong — proteksi double-redeem tidak
-  pernah ada.** `resetCreditIdempotencyKey` dideklarasikan tapi tidak pernah
-  di-assign di mana pun (`newIdempotencyKey()` adalah dead code), sehingga
-  tiap request mengirim `idempotencyKey: ""` dan server memint key baru per
-  request (`usage_codex_reset.go:176-178`) → dua submit innocuous =
-  dua kredit terbuang. Key kini di-mint saat modal dibuka, di-reset saat ditutup,
-  dan `confirmResetCredit` menolak mengirim key kosong. Helper-nya dipindah ke
-  `lib/codexResetCredit.ts` agar unit-testable sesuai konvensi repo.
-- 🔴 **`9router-go stop` di Windows tidak pernah graceful.** `stopGraceMS = 5000`
-  dideklarasikan, tapi `requestStop` di `proc_windows.go` selalu
-  `ErrStopUnsupported`, jadi `proc.Terminate` langsung `ForceKill` — drain
-  `server.Shutdown` 5 detik yang dirancang di `server.go:99-101` **tidak pernah
-  jalan** di Windows: setiap `stop`/`restart`/auto-update memotong SSE
-  in-flight dan SQL transaction setengah jalan. `Stop()` kini POST ke
-  `/api/version/shutdown` lebih dulu **dengan CLI token** (endpoint-nya
-  always-protected; tanpa token selalu 401 dan jatuh ke force-kill), dengan
-  `proc.Terminate` sebagai fallback untuk daemon yang tidak menjawab. Terverifikasi
-  live: log `Server stopped gracefully` pada 4 siklus restart beruntun.
-- 🔴 **Data race `usagetracker`** (ketemu saat rerun `-race`, pre-existing dan
-  tidak terkait 5 fix di atas): `scheduleBroadcastLocked` menyalin daftar
-  subscriber lalu melepas lock **sebelum** send, sedangkan `unsubscribe` menutup
-  channel di bawah write lock → *send on closed channel*. Map-nya terbaca aman,
-  channel-nya tidak. Kirim dipindah ke bawah `RLock`. Catatan: `8520e4e`
-  mengklaim "fix data race in usagetracker" tetapi hanya menambal ring seeding.
-- **Batas 64 karakter sekarang benar-benar diuji.** Fixture lama adalah 63 dan
-  65 karakter, jadi tidak ada yang mem-*pin* tepat di batas — dan batas itulah
-  yang jadi inti fitur ini. Ditambah `TestFitToolNames_ExactBoundary`.
-- **Verifikasi:** `go vet ./...` + `-tags=integration` 0 warning;
+- 🔴 **`9router-go status|stop|logs` were blind to the `DATA_DIR` from `.env`.**
+  `daemonURL()` and `daemon.Dir()` read `os.Getenv`, while the server
+  resolves it through viper, which reads `.env`. On a deployment
+  configured only via `.env` — including every docker compose — the CLI process
+  sees a different directory from the running daemon: `status` reports
+  *"not running"* even though there is a live listener, `stop` refuses to halt, and
+  `logs` claims there is no log even though the file is 50 KB. `ResolveDataDir()`
+  now reads `.env` (in the order env → `.env` → platform default) and
+  `daemonURL()` uses `config.LoadConfig()` so the probed port is the same
+  as the bound one.
+- 🔴 **The fitted tool name leaked to the client in the Claude lane `TranslateResp`.**
+  `handleClaudeMessagesStream` `return`s at lines 19–46, **before**
+  `decloaker := NewClaudeStreamDecloaker(req.ToolNameMap)` at line 78. The request
+  is already fitted in `fallback.go:362`, so the `content_block_start` tool_use reaches
+  the client with a 64-character name and cannot be dispatched. The non-stream
+  path has a similar flaw (the passthrough in `claude_messages.go:191` exits before
+  decloak) — both now decloak before any branch. The decloaker
+  was hoisted above `TranslateResp`.
+- 🔴 **Responses lane: request not consistent with itself.**
+  `FitToolNames` had no walker for `input[]` (only `tools`/`functions`/
+  `messages`/`contents`/`tool_choice`), while `RestoreToolNames` still
+  restores `output[]` (`fingerprint.go:282-311`). As a result the tool declaration
+  was fitted to 64 characters while the history still calls its original name, 71
+  characters — upstream received a request contradicting itself, and
+  the 400 fix itself was not really used, because the long name was still
+  carried through `input`. Added `visitInput`/`replaceInInput`
+  (`tool_fit.go`) that share one walker for both directions, and
+  `passthroughResponses` now applies `req.ToolNameMap` to the non-stream body
+  as well as through `sseStreamOpts` on the stream.
+- 🔴 **The reset-credit idempotency key was empty — the double-redeem protection
+  never existed.** `resetCreditIdempotencyKey` was declared but never
+  assigned anywhere (`newIdempotencyKey()` is dead code), so
+  each request sent `idempotencyKey: ""` and the server minted a new key per
+  request (`usage_codex_reset.go:176-178`) → two innocuous submits =
+  two credits wasted. The key is now minted when the modal opens, reset when it closes,
+  and `confirmResetCredit` refuses to send an empty key. Its helper moved to
+  `lib/codexResetCredit.ts` to be unit-testable per the repo's conventions.
+- 🔴 **`9router-go stop` on Windows was never graceful.** `stopGraceMS = 5000`
+  was declared, but `requestStop` in `proc_windows.go` always
+  `ErrStopUnsupported`, so `proc.Terminate` goes straight to `ForceKill` — the 5-second
+  `server.Shutdown` drain designed in `server.go:99-101` **never
+  ran** on Windows: every `stop`/`restart`/auto-update cuts SSE in-flight and
+  SQL transactions halfway. `Stop()` now POSTs to
+  `/api/version/shutdown` first **with the CLI token** (the endpoint is
+  always-protected; without a token it always 401s and falls back to force-kill), with
+  `proc.Terminate` as the fallback for a daemon that does not answer. Verified
+  live: log `Server stopped gracefully` across 4 consecutive restart cycles.
+- 🔴 **`usagetracker` data race** (found when re-running `-race`, pre-existing and
+  unrelated to the 5 fixes above): `scheduleBroadcastLocked` copies the subscriber
+  list then releases the lock **before** send, while `unsubscribe` closes the
+  channel under the write lock → *send on closed channel*. The map reads safely,
+  the channel does not. The send was moved under `RLock`. Note: `8520e4e`
+  claims "fix data race in usagetracker" but only patched ring seeding.
+- **The 64-character boundary is now actually tested.** The old fixtures were 63 and
+  65 characters, so nothing pinned exactly at the boundary — and that boundary
+  is the core of this feature. Added `TestFitToolNames_ExactBoundary`.
+- **Verification:** `go vet ./...` + `-tags=integration` 0 warnings;
   `go test -race -count=1 ./...` exit 0; `go test -tags=integration` ok;
-  `bun test` 115/115; `tsc -b`/`oxlint`/`bun run build` bersih;
-  `make build` + `make cross` (5 platform) sukses. Live: lifecycle daemon
-  start/status/restart/stop tanpa `DATA_DIR` ter-export, tool 71 karakter
-  kembali ke client sebagai 71 karakter, 7 route dashboard tanpa console
+  `bun test` 115/115; `tsc -b`/`oxlint`/`bun run build` clean;
+  `make build` + `make cross` (5 platforms) success. Live: daemon lifecycle
+  start/status/restart/stop without `DATA_DIR` exported, a 71-character tool
+  returned to the client as 71 characters, 7 dashboard routes without console
   error.
-- **Ditunda (bukan blocker, tidak ikut PR ini):** self-update bisa memasang
-  binary tanpa verifikasi saat manifest tidak punya `sha256` (`updater.go:411`;
-  `release.yml` sudah menerbitkan `SHA256SUMS.txt` tapi tidak ada kode Go yang
-  membacanya); `parseSemver` membuang suffix prerelease sehingga RC bisa
-  terbaca lebih baru dari final dan di-auto-apply; `RunningPID` hanya percaya
-  PID telanjang sehingga PID daur-ulang bisa membuat `stop` membunuh proses
-  lain; `gateway.log` tidak pernah dirotasi dan dibaca utuh tiap 150 ms;
+- **Deferred (not blockers, not part of this PR):** self-update can install a
+  binary without verification when the manifest has no `sha256` (`updater.go:411`;
+  `release.yml` already publishes `SHA256SUMS.txt` but no Go code
+  reads it); `parseSemver` drops the prerelease suffix so an RC could
+  read as newer than final and be auto-applied; `RunningPID` only trusts a
+  bare PID so a recycled PID can make `stop` kill another
+  process; `gateway.log` is never rotated and is read whole every 150 ms;
   `tools[].toolSpec.name`
-  (Bedrock Converse) direkam tapi tidak ditulis.
+  (Bedrock Converse) is recorded but not written.
 
-### 🐛 MCP tools dengan nama fungsi > 64 karakter mental dengan HTTP 400 (#68)
+### 🐛 MCP tools with a function name > 64 characters died with HTTP 400 (#68)
 
-- **Masalah:** Spesifikasi fungsi OpenAI / OpenAI-compatible membatasi panjang `function.name` maksimal 64 karakter (`^[a-zA-Z0-9_-]{1,64}$`). Coding agent dengan integrasi server MCP sering kali menggunakan nama namespaced (misal `mcp__server_name__action_detail_something`) yang melebihi 64 karakter, menyebabkan upstream provider (OpenAI, Console, Responses API, dll.) menolak request dengan status 400 Bad Request (`name must be at most 64 characters, got XX`).
-- **Perbaikan:**
-  - Ditambahkan `translator.FitToolNames` yang secara deterministik memangkas nama fungsi yang melebihi 64 karakter menjadi maksimal 64 karakter dengan sufiks unik `_1`, `_2`, dst (memperhitungkan panjang sufiks sehingga total panjang tidak pernah melebihi 64 karakter dan tidak bentrok dengan tools lain).
-  - Mengganti seluruh referensi nama fungsi di deklarasi `tools`, `functions`, conversation history (`messages` assistant `tool_calls`, `function_call`, `role: "tool"`/`role: "function"`, Claude `tool_use`), dan `tool_choice`.
-  - Mengintegrasikan pemulihan nama via `NewToolNameRestoringWriter` dan `RestoreToolNamesInPayload`, sehingga respons dari upstream (baik streaming SSE maupun non-streaming JSON, OpenAI/Claude/Responses/Gemini) dikembalikan ke nama asli yang panjang sebelum diteruskan ke client.
-  - Sesi multi-turn percakapan tetap sinkron karena pemotongan nama bersifat deterministik.
-- **Verifikasi:** Unit test `TestFitToolNames_*`, `TestRestoreToolNames_*` di `internal/translator/tool_fit_test.go` dan end-to-end integration test `TestE2E_FitToolNames_*` (non-streaming, SSE streaming, multi-turn) di `internal/handlers/chat/tool_fit_e2e_test.go` lolos dengan `go test -race` dan `go vet`.
+- **The problem:** The OpenAI / OpenAI-compatible function spec limits the `function.name` length to a maximum of 64 characters (`^[a-zA-Z0-9_-]{1,64}$`). Coding agents with MCP server integration often use namespaced names (e.g. `mcp__server_name__action_detail_something`) that exceed 64 characters, causing upstream providers (OpenAI, Console, Responses API, etc.) to reject the request with status 400 Bad Request (`name must be at most 64 characters, got XX`).
+- **The fix:**
+  - Added `translator.FitToolNames` which deterministically trims function names that exceed 64 characters down to a maximum of 64 characters with unique suffixes `_1`, `_2`, etc. (accounting for the suffix length so the total never exceeds 64 characters and never collides with other tools).
+  - Replaced every function-name reference in the `tools`, `functions`, conversation history (`messages` assistant `tool_calls`, `function_call`, `role: "tool"`/`role: "function"`, Claude `tool_use`), and `tool_choice` declarations.
+  - Integrated name restoration via `NewToolNameRestoringWriter` and `RestoreToolNamesInPayload`, so responses from upstream (both streaming SSE and non-streaming JSON, OpenAI/Claude/Responses/Gemini) are returned to the original long name before being forwarded to the client.
+  - Multi-turn conversation sessions stay in sync because the name trimming is deterministic.
+- **Verification:** Unit tests `TestFitToolNames_*`, `TestRestoreToolNames_*` in `internal/translator/tool_fit_test.go` and end-to-end integration tests `TestE2E_FitToolNames_*` (non-streaming, SSE streaming, multi-turn) in `internal/handlers/chat/tool_fit_e2e_test.go` pass with `go test -race` and `go vet`.
 
 ### 🐛 Fix dashboard feedback issues: login lockout, remote password rotation, proxy dropdown, combo model drag-and-drop, and zip database backup (#50)
 
@@ -2714,59 +2398,59 @@ diuji dengan uji regresi yang gagal bila fix-nya dibalik (*mutation-checked*).
   - Added support for importing `.zip` archives in `POST /api/settings/database`, automatically extracting and restoring the JSON payload.
   - Updated `ProfileSettingsView.svelte` to download `.zip` by default and accept `.zip` as well as `.json` imports.
 
-### ✅ Binary bisa jalan di background — `9router-go start` / `stop` / `restart` / `status` / `logs`
+### ✅ The binary can run in the background — `9router-go start` / `stop` / `restart` / `status` / `logs`
 
-- **Opsi baru:** `--background` (alias `-d`) dan sub-command `start` menjalankan gateway sebagai proses terpisah yang tidak menempel ke terminal, lalu langsung kembali. Sub-command baru: `stop`, `restart`, `status`, `logs -n <baris>`. Perilaku lama (`9router-go` tanpa flag) **tidak berubah** — tetap jalan di foreground dan berhenti saat `^C`.
-- **PID file & log:** proses yang terpisah mencatat dirinya di `DATA_DIR/run/gateway.pid` dan menulis stdout/stderr ke `DATA_DIR/run/gateway.log`. File PID basi dibersihkan saat command berikutnya jalan, sehingga daemon yang dibunuh paksa dari Task Manager tidak meninggalkan jejak yang menyesatkan.
-- **`Start` menolak saat port sudah dipakai** — pre-flight TCP connect, bukan sekadar mengandalkan PID file. Diuji dengan server Python yang memegang port: `start` gagal dengan pesan yang menyebut port dan sumbernya, bukan melombakan dua proses untuk satu bind.
-- **Dua bug Windows nyata yang ketemu dan diperbaiki di jalur yang sama.** (1) `HandleShutdown` (tombol Shutdown di dashboard) self-signal `SIGTERM`, dan `os.Process.Signal(syscall.SIGTERM)` di Windows mengembalikan `not supported by windows` — tombolnya tidak pernah menghentikan server. (2) `RestartSelf()` melakukan `os.Exit(0)` sebelum listener ditutup, lalu spawn spawn replacement, sehingga proses baru bisa rebut port sebelum yang lama melepaskannya. Keduanya kini lewat `shutdown.RequestStop()` / `shutdown.RunAfterStop()`: main menunggu tiga sumber (`SIGINT`, `SIGTERM`, stop request), menjalankan `fxApp.Stop`, baru menjalankan hook spawn. Terbukti: `POST /api/version/shutdown` dengan session cookie → proses mati, port `20197` benar-benar lepas.
-- **Detail restart yang sempat bikin bug:** `Restart` harus **stop dulu baru pre-flight**. Kalau pre-flight dijalankan lebih dulu, ia menemukan daemon lama yang masih listen dan reported "already running"; kalau dijalankan sesudah `TerminateProcess`, socket-nya baru diedit sangat sedikit. Urutan stop → tunggu port bebas (maks 10 dtk) → start sudah teruji: pid `21700` → restart → pid `17628`, `/health` tetap `{"status":"ok"}`.
-- **Baru `internal/proc`:** primitif proses portabel ( Alive / Terminate / Detached / SelfExecutable ) dipakai bersama oleh daemon **dan** headroom; `internal/headroom/sig_unix.go` + `sig_windows.go` yang menduplikasi logika yang sama dihapus.
-- **Yang berubah di API shutdown:** `shutdown.RequestStop()` menutup channel baru `StopRequested()` sekaligus memicu `Cancel()` (SSE berhenti). `Cancel()` saja **tidak** menutup `StopRequested()` — `^C` bukan permintaan keluar dari operator, dan main harus terus menunggu sinyal asli. Dipin di `internal/shutdown/shutdown_test.go`.
-- **Verifikasi:** `go vet ./...` bersih, `go build ./...` bersih, `go test ./internal/...` semua paket hijau kecuali `TestApplyConnectionStrategy_KeepsRotatingPastFirstCycle` yang **sudah gagal sebelum perubahan ini** (dibuktikan di worktree bersih pada `HEAD` `9323d21`, bukan efek samping). Smoke penuh di Windows: start → `/health` `{"status":"ok"}` → `/login` 200 → status → restart (pid baru) → health → stop → pid file hilang → port tidak lagi `LISTENING`; `-d` identik dengan `start`; start kedua refused "already running"; foreground tidak menulis pid file sama sekali.
+- **New options:** `--background` (alias `-d`) and the sub-command `start` run the gateway as a separate process that does not attach to the terminal, then return immediately. New sub-commands: `stop`, `restart`, `status`, `logs -n <lines>`. The old behaviour (`9router-go` without flags) is **unchanged** — it still runs in the foreground and stops on `^C`.
+- **PID file & log:** the detached process records itself in `DATA_DIR/run/gateway.pid` and writes stdout/stderr to `DATA_DIR/run/gateway.log`. Stale PID files are cleaned up when the next command runs, so a daemon force-killed from Task Manager does not leave a misleading trace.
+- **`Start` refuses when the port is already taken** — a pre-flight TCP connect, not merely relying on the PID file. Tested with a Python server holding the port: `start` fails with a message naming the port and its source, instead of racing two processes over one bind.
+- **Two real Windows bugs found and fixed on the same path.** (1) `HandleShutdown` (the Shutdown button in the dashboard) self-signals `SIGTERM`, and `os.Process.Signal(syscall.SIGTERM)` on Windows returns `not supported by windows` — the button never stopped the server. (2) `RestartSelf()` called `os.Exit(0)` before the listener was closed, then spawned the replacement, so the new process could seize the port before the old one released it. Both now go through `shutdown.RequestStop()` / `shutdown.RunAfterStop()`: main waits on three sources (`SIGINT`, `SIGTERM`, stop request), runs `fxApp.Stop`, and only then runs the spawn hook. Proven: `POST /api/version/shutdown` with a session cookie → process dies, port `20197` truly released.
+- **A restart detail that once caused a bug:** `Restart` must **stop first, then pre-flight**. If the pre-flight runs first, it finds the old daemon still listening and reports "already running"; if it runs after `TerminateProcess`, the socket has barely been released. The order stop → wait for the port to be free (max 10 s) → start is tested: pid `21700` → restart → pid `17628`, `/health` still `{"status":"ok"}`.
+- **New `internal/proc`:** portable process primitives ( Alive / Terminate / Detached / SelfExecutable ) shared by the daemon **and** headroom; `internal/headroom/sig_unix.go` + `sig_windows.go`, which duplicated the same logic, were removed.
+- **What changed in the shutdown API:** `shutdown.RequestStop()` closes the new `StopRequested()` channel while also triggering `Cancel()` (SSE stops). `Cancel()` alone does **not** close `StopRequested()` — `^C` is not an operator exit request, and main must keep waiting for the real signal. Pinned in `internal/shutdown/shutdown_test.go`.
+- **Verification:** `go vet ./...` clean, `go build ./...` clean, `go test ./internal/...` all packages green except `TestApplyConnectionStrategy_KeepsRotatingPastFirstCycle`, which **already failed before this change** (proven on a clean worktree at `HEAD` `9323d21`, not a side effect). Full smoke on Windows: start → `/health` `{"status":"ok"}` → `/login` 200 → status → restart (new pid) → health → stop → pid file gone → port no longer `LISTENING`; `-d` identical to `start`; a second start refused "already running"; foreground writes no pid file at all.
 
-> ⚠️ **Perbedaan perilaku antar-platform yang disengaja:** di Windows tidak ada SIGTERM, jadi `stop` memakai `TerminateProcess` (proses langsung mati, drain SSE dilewati). Di POSIX, stop mengirim SIGTERM sehingga hook Fx berjalan dan `runServer` keluar bersih. Yang butuh drain (update via dashboard, restart) sebaiknya lewat `restart` atau tombol Shutdown, bukan `stop` di Windows.
+> ⚠️ **Deliberate cross-platform behaviour difference:** on Windows there is no SIGTERM, so `stop` uses `TerminateProcess` (the process dies immediately, the SSE drain is skipped). On POSIX, stop sends SIGTERM so the Fx hook runs and `runServer` exits cleanly. Anything that needs the drain (update via dashboard, restart) should go through `restart` or the Shutdown button, not `stop` on Windows.
 
-### 🐛 Makefile hanya jalan di POSIX shell — di Windows setiap target build/run rusak
+### 🐛 Makefile only worked in a POSIX shell — on Windows every build/run target was broken
 
-- 🔴 **Semua gejala berasal dari sintaks POSIX di dalam recipe.** `VERSION ?= $(shell cat VERSION 2>/dev/null …)` mengembalikan string kosong di shell non-POSIX (`/dev/null` tidak ada), jadi `-X …CurrentVersion=` meng-embed versi **kosong** ke binary. `PORT=20130 ./9router-go` membuat cmd.exe mencoba menjalankan program bernama `PORT`. `run`/`version`/`update`/`mitm-*` memanggil `./$(BINARY_NAME)`, dan cmd.exe menjawab `'.' is not recognized as an internal or external command` karena `.` tidak ada di PATH (PATHEXT hanya menyertakan `.EXE`). `LDFLAGS` diapit tanda kutip tunggal, dan cmd.exe memperlakukan `'` sebagai karakter literal sehingga linker menerima nama simbol yang sudah ter-quote. `DATA_DIR ?= $(HOME)/.9router` expandable jadi kosong di native Windows → path literal `/.9router` → `C:/Program Files/Git/.9router`, sehingga **setiap** `make run` menulis DB sementara yang baru dan dashboard membalas 401 terus-menerus.
-- **Perbaikan:** `VERSION` dibaca lewat `$(file <VERSION))` (Make native, tanpa shell) dengan fallback berurutan ke `version.json` lalu `git describe` lalu `1.0.0`; binary dipanggil sebagai `$(BINARY)` tanpa `./` (ditemukan lewat PATHEXT di cmd.exe, tetap jalan di sh/POSIX); `LDFLAGS` memakai tanda kutip ganda; `DATA_DIR ?=` dibiarkan kosong agar binary menerapkan default per-platform-nya sendiri (`%APPDATA%\9router` / `~/.9router`).
-- **`PORT`/`DATA_DIR`/`RTK`/`CAVEMAN`/`PONYTAIL` hanya diekspor kalau asalnya bukan `file`.** `make run` polled tidak boleh menimpa config: nilai `?=` punya origin `file`, sedangkan yang datang dari environment atau command line punya origin `environment`/`command line`. Yang di-set operator tetap diteruskan; yang tidak di-set dilewati agar binary membaca `.env` (viper) sendiri seperti biasa. Ini menggantikan prefix `VAR=value` yang tidak bisa di-parse cmd.exe.
-- **`web-build` dan `cross` tidak lagi butuh POSIX.** Guard `[ ! -f web/dist/index.html ]` mati di cmd.exe (`! was unexpected at this time.`), jadi seluruh pemeriksaan-keberadaan dan build didelegasikan ke `bun -e` — Bun sudah jadi prasyarat setiap jalur yang lewat target ini. `cross` tidak lagi menulis `GOOS=… GOARCH=…` di depan `go build`; per-target OS/ARCH masuk lewat direktif `export` yang identik di sh maupun cmd, dan `export`-nya di-scope ke subgoal `cross-one` supaya `GOARCH` kosong tidak pernah bocor ke `build` biasa.
-- **Verifikasi:** `make version` menghasilkan `9router-go version 1.9.5 (windows/amd64)` baik saat make dipanggil dari sh maupun dari `cmd.exe /c`; `make cross-one CROSS_OS=linux CROSS_ARCH=amd64` dari Windows menghasilkan binary ELF sungguhan (magic `\x7fELF`), jadi plumbing `export GOOS/GOARCH` terbukti bukan sekadar lolos parse. Recipe `cross` (loop `for`), `clean` (`rm -f`), `help` (`grep|sed`), dan `bench` masih POSIX-saja — di mesin tanpa `sh.exe` di PATH, recipe itulah yang pertama gagal.
-- 🔴 **Follow-up: `BINARY_NAME` tidak punya ekstensi, jadi di Windows build baru tidak pernah dijalankan.** `go build -o 9router-go` di native Windows menulis file bernama `9router-go` (PE tanpa ekstensi), sementara `make run` memanggil `9router-go`, yang cmd.exe resolve lewat `PATHEXT` ke **`9router-go.exe` milik build sebelumnya**. Akibatnya `make run` diam-diam menjalankan binary lama: aset `go:embed` tetap bundle SPA yang sudah usang, dan perbaikan frontend tampak "tidak masuk" padahal sudah di-build. Diperbaiki dengan `BINARY_SUFFIX := $(if $(findstring Windows_NT,$(OS)),.exe,)` sehingga target build menulis persis file yang dieksekusi. `BINARY` juga dipisah per-OS: bare name di Windows (PATHEXT), `./$(BINARY_NAME)` di macOS/Linux (`.` tidak ada di PATH).
-- **`web-build` bisa dipaksa rebuild.** Kondisi `existsSync('web/dist/index.html')` membuat SPA hanya dibangun sekali; sekarang `FORCE=1 make web-build` (atau `FORCE=1 make build`) membangun ulang `web/dist`. Docker (`Dockerfile` stage `web-builder`) dan GitHub Actions (`ci.yml`, `release.yml`) **tidak** terpengaruh: keduanya sudah memanggil `bun run build` secara eksplisit di build context bersih, jadi tidak pernah melewati cache ini.
-
-
-### 🐛 Dua error console dashboard: tombol "Add Model" tidak pernah membuka picker, dan event install dipakai ulang
-
-- **Gejalanya satu, root cause-nya lain, dan keduanya sudah terukur di browser.** Membuka modal Create/Edit Combo lalu menekan **Add Model** melempar `effect_update_depth_exceeded` — picker tidak pernah tampil, tidak ada input pencarian di DOM. Efek reset di `CombosView.svelte` menulis `modalNameResetKey`, nilai yang dibaca blok `{#key}` di bawahnya; blok itu membuat ulang `CreateComboModal`, dan itu mengantrekan ulang efeknya. Svelte membuang seluruh flush setelah **1001** putaran (terhitung di dev build: `window.__resetRuns = 1001` tepat saat modal Create terbuka, sebelum "Add Model" ditekan). Efeknya kini dijaga `createSessionOpen`, jadi reset terjadi sekali per sesi — diverifikasi di build production: picker terbuka, search 77 → 36 pill → kembali 77, klik pill toggle, **0 error console**.
-- **Bukan regression dari #61.** Bug ini direproduksi juga dengan kode pra-#61 (`git show a8b1556^`), dan dibisect: menghapus `modalNameResetKey += 1` saja (sambil membiarkan `modalModels = []`) membuat efek berhenti di **1** putaran dan error hilang. Jadi penyebabnya terukur, bukan dugaan.
-- **Event `beforeinstallprompt` sekarang benar-benar sekali pakai.** `promptInstall()` lama menyimpan event setelah dialog di-*dismiss*, jadi klik berikutnya memanggil `prompt()` pada event yang sudah dipakai dan Chrome menolak dengan "Ignored bad install" di console. Sekarang event di-*spend* pada panggilan pertama (accepted maupun dismissed) dan CTA-nya mati sampai Chrome mengirim event baru; kalau app sudah berjalan standalone, event tidak lagi di-*preventDefault* karena tidak ada tombol custom yang memakainya. Dites di `web/src/lib/pwa.test.ts` (4 kasus) dan **mutation-checked**: menghapus guard standalone atau mengembalikan event ke keadaan "belum dipakai" membuat 3 dari 4 test gagal pada asersi yang tepat.
-- **`s.includes is not a function` — akhirnya terReproduksi dan diperbaiki.** Akar masalahnya ketemu: `internal/db/accounts.go:LockConnectionRateLimit` menulis `lastError` ke `providerConnections.data` sebagai **JSON object** (`{"status":429,"message":"…","timestamp":"…"}`, dipakai juga oleh `RecordConnectionOAuthFailure`), sedangkan halaman provider membaca `conn.lastError` lalu memanggil `.includes('429')`/`.toLowerCase().includes('quota')` di `getCooldownInfo`. Begitu sebuah koneksi kena rate limit, `s` adalah object dan `.includes` melempar `TypeError` — seluruh render halaman mati. Diperbaiki di tiga lapis: (1) **backend** `sanitizeProviderConnection` menormalkan `lastError` apa pun (object/string/lainnya) menjadi string sebelum keluar dari server; (2) **API client** `normalizeConnection`/`normalizeLastError` melakukan hal yang sama pada semua jalur ambil koneksi (`getConnections`, `getProvidersClient`, `getProvidersClientPage`); (3) **komponen** memakai helper yang sama, jadi halaman provider tidak pernah memanggil method string pada nilai non-string. Diuji dengan `TestSanitizeProviderConnection_LastErrorString` (backend) dan dua kasus `client.test.ts` yang menutup ketiga jalur fetch.
-- **`/api/models/caps` tidak lagi 404 untuk compatible node.** Halaman `openai-compatible-*` / `anthropic-compatible-*` dan custom provider node selalu meminta caps; backend menjawab `404 unknown provider or no static models` karena node itu memang tidak punya katalog statis, jadi tiap pembukaan halaman menambah request merah di console. Handler kini menjawab `200 {"provider":…,"caps":{}}` untuk id yang ditandai sebagai node, dan halaman provider tidak lagi memanggil endpoint itu sama sekali bila provider-nya bukan katalog statis. Alias dan id katalog tetap ikut ter-cover: seluruh provider Go yang punya model statis (92 id kanonis) ada di `PROVIDER_CATALOG`, jadi ikon kapabilitas dan picker thinking tidak hilang.
-- **Combo `Auto Free Tier` tidak lagi terkunci permanen — bisa diedit, di-rename, dan dihapus.** Alasannya: feature ini berasal dari PR #58 dan **tidak ada di upstream**. `src/app/api/combos/` upstream hanya punya `[id]` dan `presets`, tidak ada `auto-free`; route `DELETE /api/combos/[id]` upstream juga **tidak** punya guard apa pun. Sementara itu di port ini combo-nya di-lock di tiga tempat: `validateLockedReorder` menolak rename/kind/ubah model set (`combos.go`), `HandleDeleteCombo` menolak `DELETE` dengan 403, dan `ComboCard` menonaktifkan checkbox/Edit/Delete. Akibatnya begitu tombol **Auto Free Tier** diklik sekali, baris `auto-free-tier` ada selamanya dan tidak bisa dilepas dari dashboard.
-- **Yang dihapus:** `validateLockedReorder` + `sameModelSet` + guard di `HandleUpdateCombo`/`HandleDeleteCombo` (backend), `isAutoFreeCombo` beserta filter `deletableCombos` dan guard `toggleSelect` (frontend), badge "reorder only" beserta tombol Edit/Delete yang mati, dan jalur `onReorder` yang sekarang mati — panah Move up/down di kartu dihapus karena Edit modal sudah menyediakan reorder yang sama untuk semua combo. `isAutoFreeCombo` digantikan `isAutoGenerated` yang hanya menandai kind `auto-*` untuk badge "Auto-generated", sama seperti `auto-family-*` yang sejak awal memang editable.
-- **Yang dipertahankan:** `POST /api/combos/auto-free` tetap upsert pada id stabil `auto-free-tier`, jadi menghapus combo lalu klik lagi akan membuatnya kembali dengan isi registry terkini. Tipe `kind = "auto-free"` tetap ditulis agar kartu bisa menandainya sebagai machine-generated.
-- **Verifikasi:** `TestAutoFreeComboCreateRebuildAndEdit` (menggantikan `TestAutoFreeComboCreateAndLock`) menjalankan route sungguhan lewat `HandleAutoFreeCombo` → rename 200 + nama tersimpan → edit model set 200 + 2 member tersimpan → update strategy-only tidak menimpa model set → `DELETE` 200 + baris hilang → rebuild 200 + nama & model set kembali ke isi registry. Live di `localhost:20130`: `DELETE` menjawab 200 (sebelumnya 403), rename 200, edit model set 200, dan rebuild mengembalikan combo ke keadaan semula. Browser di `localhost:5173/dashboard/combos`: kartu Auto Free Tier kini ber-badge "Auto-generated", checkbox/Edit/Delete aktif, modal Edit dan modal konfirmasi Delete keduanya terbuka, 0 error console. `go vet`, `go test ./...` (32 paket), integration suite, `bun test` 113/113, build bersih.
-- **Model embedding tidak lagi masuk rantai fallback `Auto Free Tier`.** Penanda free-tier hanyalah konvensi penamaan — `IsFreeTierModel` mencocokkan sufiks `:free` / `/free` / `-free`, dan sufiks itu juga menempel pada model embedding, image, tts, dan stt. `openrouter` punya tepat satu model free-suffix, yaitu `nvidia/llama-nemotron-embed-vl-1b-v2:free`, yang registry sudah tandai `"embedding"` di `ProviderModelKinds` — tapi `freeTierComboModels` tidak pernah memanggil `GetProviderModelKind`, sehingga model yang tidak bisa menjawab satu turn chat pun tetap masuk daftar. Sekarang satu baris gate `kind != "" && kind != "llm"` membuangnya, persis seperti yang sudah dilakukan `usableModelFamilies` untuk combo auto-family. Census registry: 40 model free-suffix, 35 di antaranya chat-capable, tersebar di 12 kunci provider — jadi fitur ini bukan formalitas, combo untuk/setup yang punya 6 provider gratis berisi belasan model chat.
-- **Tombol "Auto Group by Model" dan "Auto Free Tier" dihapus dari header halaman Combo.** Keduanya adalah generator massal yang sekali klik menulis puluhan baris `combos` — 40 model free-suffix di registry, dikelompokkan per keluarga, sudah menghasilkan 80 combo `Auto: …` di satu dashboard. `CombosHeader` kehilangan keempat prop auto-builder, `CombosView` kehilangan `handleBuildAutoFamily` beserta `isBuildingAutoFamily`, dan `api.buildAutoFamilyCombos` ikut dibuang karena tidak lagi dipanggil siapa pun.
-- **Halaman Combo disamakan dengan upstream v0.5.91 (`localhost:20128/dashboard/combos`).** Yang dibandingkan langsung di browser, bukan dari reading kode. Upstream memakai **satu** tombol di header — `Create Combo` — dan memindahkan seluruh aksi massal ke *selection bar* di bawah daftar: checkbox `Select all (N)` di kiri yang berubah menjadi `N selected` begitu ada yang dipilih, lalu di kanan `Set strategy…`, `Delete (N)`, dan `Clear` yang **hanya muncul saat ada selection**. Port ini sebelumnya menyimpan `Delete Selected` dan `Delete All (N)` sebagai tombol toolbar permanen, tidak punya selection bar sama sekali, dan punya tombol Rebuild per kartu yang tidak ada di upstream.
-- **Apa yang berubah:** `CombosHeader` sekarang hanya menerima `onCreateClick`. `CombosView` mendapat `selectedCombos`/`allSelected`/`toggleSelectAll`, `handleApplyBulkStrategy` (menulis `comboStrategies` sebagai satu patch lalu satu `updateCombo` per baris, karena key-nya adalah *nama* combo sehingga patch terpisah akan menimpa dirinya sendiri), dan selection bar yang meniru markup upstream. `handleDeleteAll` dan `deletableCombos` dihapus. `ComboCard` kehilangan `onRebuild`/`rebuilding` dan tombol Rebuild; `RefreshCw` import ikut dibuang. `api.buildAutoFreeCombo` ikut terhapus karena tidak ada lagi pemanggilnya.
-- **Konsekuensi yang disengaja:** `POST /api/combos/auto-free` dan `POST /api/combos/auto-family` kini tidak terjangkau dari dashboard sama sekali. Endpoint-nya tetap ada di backend — yang hilang hanya tombolnya.
-- **Selisih yang BELUM dispatched:** daftar strategy port ini 5 (Fallback, Round Robin, **Sticky**, **Capacity**, Fusion) sedangkan upstream 3 (tanpa Sticky dan Capacity). Itu divergence fungsional pada routing, bukan soal tampilan, jadi dibiarkan — perlu keputusan terpisah kalau memang mau disamakan.
-- **Verifikasi:** browser `:5173` — toolbar `aria-label="Combo actions"` berisi persis `Create Combo`; selection bar idle berbunyi `Select all (84)`; setelah diklik berbunyi `84 selected` dan memunculkan `Apply Strategy` (disabled sampai strategy dipilih), `Delete (84)`, `Clear`; tombol per kartu `Copy combo name` / `Edit` / `Delete`, tanpa Rebuild; 0 error console. `bun test` 113/113, `tsc -b && vite build` bersih, oxlint tidak menambah warning.
+- 🔴 **All symptoms came from POSIX syntax inside the recipe.** `VERSION ?= $(shell cat VERSION 2>/dev/null …)` returns an empty string in a non-POSIX shell (`/dev/null` does not exist), so `-X …CurrentVersion=` embeds an **empty** version into the binary. `PORT=20130 ./9router-go` makes cmd.exe try to run a program named `PORT`. `run`/`version`/`update`/`mitm-*` call `./$(BINARY_NAME)`, and cmd.exe answers `'.' is not recognized as an internal or external command` because `.` is not on PATH (PATHEXT only includes `.EXE`). `LDFLAGS` is wrapped in single quotes, and cmd.exe treats `'` as a literal character so the linker receives an already-quoted symbol name. `DATA_DIR ?= $(HOME)/.9router` expands to empty on native Windows → the literal path `/.9router` → `C:/Program Files/Git/.9router`, so **every** `make run` writes a fresh temporary DB and the dashboard keeps answering 401.
+- **The fix:** `VERSION` is read via `$(file <VERSION))` (Make-native, no shell) with successive fallbacks to `version.json`, then `git describe`, then `1.0.0`; the binary is invoked as `$(BINARY)` without `./` (found via PATHEXT in cmd.exe, still works in sh/POSIX); `LDFLAGS` uses double quotes; `DATA_DIR ?=` is left empty so the binary applies its own per-platform default (`%APPDATA%\9router` / `~/.9router`).
+- **`PORT`/`DATA_DIR`/`RTK`/`CAVEMAN`/`PONYTAIL` are only exported when their origin is not `file`.** The `make run` probe must not clobber config: a `?=` value has origin `file`, while values coming from environment or the command line have origin `environment`/`command line`. Operator-set values are still passed through; unset ones are skipped so the binary reads `.env` (viper) itself as usual. This replaces the `VAR=value` prefix that cmd.exe cannot parse.
+- **`web-build` and `cross` no longer need POSIX.** The `[ ! -f web/dist/index.html ]` guard dies in cmd.exe (`! was unexpected at this time.`), so all existence checks and the build are delegated to `bun -e` — Bun was already a prerequisite for every path through this target. `cross` no longer writes `GOOS=… GOARCH=…` in front of `go build`; the per-target OS/ARCH go in via `export` directives identical in both sh and cmd, and the `export` is scoped to the `cross-one` subgoal so an empty `GOARCH` never leaks into the ordinary `build`.
+- **Verification:** `make version` produces `9router-go version 1.9.5 (windows/amd64)` both when make is invoked from sh and from `cmd.exe /c`; `make cross-one CROSS_OS=linux CROSS_ARCH=amd64` from Windows produces a real ELF binary (magic `\x7fELF`), so the `export GOOS/GOARCH` plumbing is proven to be more than merely parsing. The `cross` recipe (a `for` loop), `clean` (`rm -f`), `help` (`grep|sed`), and `bench` remain POSIX-only — on a machine without `sh.exe` on PATH, those are the recipes that fail first.
+- 🔴 **Follow-up: `BINARY_NAME` had no extension, so the new build was never run on Windows.** `go build -o 9router-go` on native Windows writes a file named `9router-go` (a PE without extension), while `make run` calls `9router-go`, which cmd.exe resolves via `PATHEXT` to **the previous build's `9router-go.exe`**. As a result `make run` silently ran the old binary: the `go:embed` assets stayed the stale SPA bundle, and frontend fixes looked like they "did not land" even though they were built. Fixed with `BINARY_SUFFIX := $(if $(findstring Windows_NT,$(OS)),.exe,)` so the build target writes exactly the file that gets executed. `BINARY` is also split per-OS: bare name on Windows (PATHEXT), `./$(BINARY_NAME)` on macOS/Linux (`.` is not on PATH).
+- **`web-build` can be forced to rebuild.** The `existsSync('web/dist/index.html')` condition meant the SPA was only built once; now `FORCE=1 make web-build` (or `FORCE=1 make build`) rebuilds `web/dist`. Docker (`Dockerfile` stage `web-builder`) and GitHub Actions (`ci.yml`, `release.yml`) are **not** affected: both already call `bun run build` explicitly in a clean build context, so they never hit this cache.
 
 
-### 🐛 Issue #61 (partial) — picker combo: satu flush untuk tiga fetch metadata, bukan tiga
+### 🐛 Two dashboard console errors: the "Add Model" button never opened the picker, and the install event was reused
 
-- **Status jujurnya: #61 BELUM selesai.** Angka utamanya masih hidup. Diukur ulang di build production memakai komponen aslinya (`ModelPickerModal` + katalog asli, 997 pill / 5.561 node di dalam satu `max-h-[400px] overflow-y-auto` + `flex flex-wrap`), median 14 iterasi bergantian di satu sesi Chromium: **clear search → full list 146ms Task / 72ms Script**, dan itu tetap setelah perubahan di bawah.
-- **Yang diubah: `web/src/components/combos/pickerExtras.ts` (baru) + `ModelPickerModal.svelte`.** Tiga fetch metadata (`/api/models/alias`, `/api/models/custom`, `/api/models/disabled`) dulu dirantai dengan tiga `.then()` yang masing-masing menulis `$state` sendiri, jadi tiap settle membangun ulang seluruh daftar pill. Sekarang ketiganya dibatch ke satu `Promise.all` dengan catch per-endpoint, dan modal menerbitkan **satu** objek extras dalam satu write. Kontrak per-endpoint dijaga: satu endpoint 500 tidak boleh membuang dua yang berhasil (dipin di `pickerExtras.test.ts`).
-- **Juga: `ModelPill.svelte` tidak lagi menerima closure per baris.** `onClick={() => handleToggle(model.value)}` dibuat ulang tiap render, dan `caps` datang sebagai objek yang identitasnya berubah tiap rebuild daftar. Sekarang pill menerima `onToggle` yang stabil plus `vision`/`reasoning` boolean, dan membangun handler-nya sendiri dari `value`.
-- **Yang benar-benar bergerak: jalur buka.** 30 iterasi strict-alternating (posisi dibalik tiap giliran): `Task` **149,6ms → 130,1ms (−13%)**, `Script` **105,0ms → 84,3ms (−20%)** — sesuai prediksi, dua rebuild yang hilang ≈ 2 × 13ms. Transisi search (ketik / clear) **tidak** bergerak: masih di dalam noise.
-- **Kenapa angka utama tidak bisa dikejar dari sisi ini.** Isolated probe (rebuild data group tanpa menyentuh DOM) menunjukkan biaya rebuild di **kedua** versi identik: **13,15ms vs 13,00ms Script** — jadi closure per baris dan caps objek tidak menyentuh biaya yang dominan. Dan logic aplikasi sendiri cuma **0,14ms**: `resolveFilteredGroups` atas 915 pill / 80 group terukur 0,14ms di Bun dengan katalog asli. Biayanya adalah pembuatan ~1.000 instance komponen + ~5.500 node DOM sekali per render — cocok dengan profil di issue (`props.js` 19,3ms + `attributes.js` 11,4ms + `Icon.svelte` 4,0ms).
-- **Prototipe yang TIDAK dikirim (silakan minta kalau mau).** Collapsed-by-default per group — pill baru mount saat grup diklik, otomatis terbuka begitu ada query — diukur di harness yang sama: **open 196ms → 12,8ms Task**, **clear 146ms → 36ms**. Hanya pendekatan ini yang tidak pernah membuat 1.000 pill itu. Tidak ikut dikirim karena (a) opsi tanpa divergensi upstream yang dipilih, dan (b) upstream `v0.5.91` merender list penuh; perlu keputusan eksplisit dulu, lalu dicatat di changelog sebagai divergensi.
-- **Verifikasi:** `bun test` 107/107, `tsc -b` + `vite build` bersih, `oxlint` tanpa warning baru (2 warning yang ada sudah pre-existing di `TerminalView.svelte` dan `CreateComboModal.svelte`). Semua angka di atas diukur A/B pada bundle production yang dibangun dua-duanya (HEAD vs perubahan) dan disajikan bergantian supaya drift mesin tidak mengarang selisih. Smoke run di browser juga memverifikasi toggle add/remove pill lintas baris dan grup tanpa page error.
+- **One symptom, a different root cause, and both are already measured in the browser.** Opening the Create/Edit Combo modal and pressing **Add Model** throws `effect_update_depth_exceeded` — the picker never appears, there is no search input in the DOM. The reset effect in `CombosView.svelte` writes `modalNameResetKey`, a value read by the `{#key}` block below it; that block recreates `CreateComboModal`, and that re-queues the effect. Svelte discards the entire flush after **1001** turns (measured in the dev build: `window.__resetRuns = 1001` exactly when the Create modal is open, before "Add Model" is pressed). The effect is now guarded by `createSessionOpen`, so the reset happens once per session — verified in the production build: the picker opens, search 77 → 36 pills → back to 77, clicking a pill toggles, **0 console errors**.
+- **Not a regression from #61.** This bug reproduces with pre-#61 code too (`git show a8b1556^`), and it was bisected: removing only `modalNameResetKey += 1` (while leaving `modalModels = []`) makes the effect stop at **1** turn and the error disappear. So the cause is measured, not guessed.
+- **The `beforeinstallprompt` event is now genuinely single-use.** The old `promptInstall()` kept the event after the dialog was *dismissed*, so the next click called `prompt()` on an already-used event and Chrome refused with "Ignored bad install" in the console. Now the event is *spent* on the first call (accepted or dismissed) and the CTA stays dead until Chrome sends a new event; if the app is already running standalone, the event is no longer *preventDefault*ed because there is no custom button using it. Tested in `web/src/lib/pwa.test.ts` (4 cases) and **mutation-checked**: removing the standalone guard or returning the event to the "not yet used" state makes 3 of the 4 tests fail at the right assertion.
+- **`s.includes is not a function` — finally reproduced and fixed.** The root cause was found: `internal/db/accounts.go:LockConnectionRateLimit` writes `lastError` into `providerConnections.data` as a **JSON object** (`{"status":429,"message":"…","timestamp":"…"}`, also used by `RecordConnectionOAuthFailure`), while the provider page reads `conn.lastError` and then calls `.includes('429')`/`.toLowerCase().includes('quota')` in `getCooldownInfo`. As soon as a connection is rate limited, `s` is an object and `.includes` throws a `TypeError` — the whole page render dies. Fixed in three layers: (1) **backend** `sanitizeProviderConnection` normalizes any `lastError` (object/string/other) into a string before it leaves the server; (2) **API client** `normalizeConnection`/`normalizeLastError` does the same on every connection-fetching path (`getConnections`, `getProvidersClient`, `getProvidersClientPage`); (3) **components** use the same helper, so the provider page never calls a string method on a non-string value. Tested with `TestSanitizeProviderConnection_LastErrorString` (backend) and two `client.test.ts` cases covering all three fetch paths.
+- **`/api/models/caps` no longer 404s for compatible nodes.** The `openai-compatible-*` / `anthropic-compatible-*` pages and custom provider nodes always request caps; the backend answers `404 unknown provider or no static models` because that node genuinely has no static catalogue, so every page open adds a red request to the console. The handler now answers `200 {"provider":…,"caps":{}}` for ids marked as nodes, and the provider page no longer calls that endpoint at all when its provider is not a static catalogue. Aliases and catalogue ids remain covered: every Go provider with static models (92 canonical ids) is in `PROVIDER_CATALOG`, so the capability icon and the thinking picker do not disappear.
+- **The `Auto Free Tier` combo is no longer permanently locked — it can be edited, renamed, and deleted.** The reason: this feature comes from PR #58 and **does not exist upstream**. Upstream `src/app/api/combos/` only has `[id]` and `presets`, no `auto-free`; upstream's `DELETE /api/combos/[id]` route also has **no** guard at all. Meanwhile in this port the combo was locked in three places: `validateLockedReorder` rejects rename/kind/model-set changes (`combos.go`), `HandleDeleteCombo` rejects `DELETE` with 403, and `ComboCard` disables the checkbox/Edit/Delete. As a result, the moment the **Auto Free Tier** button was clicked once, the `auto-free-tier` row existed forever and could not be removed from the dashboard.
+- **What was removed:** `validateLockedReorder` + `sameModelSet` + the guard in `HandleUpdateCombo`/`HandleDeleteCombo` (backend), `isAutoFreeCombo` along with the `deletableCombos` filter and the `toggleSelect` guard (frontend), the "reorder only" badge along with the dead Edit/Delete buttons, and the now-dead `onReorder` path — the Move up/down arrows on the card were removed because the Edit modal already provides the same reordering for all combos. `isAutoFreeCombo` is replaced by `isAutoGenerated`, which only flags the `auto-*` kind for the "Auto-generated" badge, just like `auto-family-*`, which was always editable.
+- **What was preserved:** `POST /api/combos/auto-free` still upserts on the stable id `auto-free-tier`, so deleting the combo and clicking again recreates it with the latest registry content. The `kind = "auto-free"` type is still written so the card can mark it as machine-generated.
+- **Verification:** `TestAutoFreeComboCreateRebuildAndEdit` (replacing `TestAutoFreeComboCreateAndLock`) drives the real routes via `HandleAutoFreeCombo` → rename 200 + name stored → edit model set 200 + 2 members stored → strategy-only update does not overwrite the model set → `DELETE` 200 + row gone → rebuild 200 + name & model set back to the registry content. Live at `localhost:20130`: `DELETE` answers 200 (previously 403), rename 200, edit model set 200, and rebuild returns the combo to its previous state. In the browser at `localhost:5173/dashboard/combos`: the Auto Free Tier card now carries the "Auto-generated" badge, checkbox/Edit/Delete are active, both the Edit modal and the Delete confirmation modal open, 0 console errors. `go vet`, `go test ./...` (32 packages), the integration suite, `bun test` 113/113, and the build are clean.
+- **Embedding models no longer enter the `Auto Free Tier` fallback chain.** The free-tier marker is merely a naming convention — `IsFreeTierModel` matches the suffixes `:free` / `/free` / `-free`, and those suffixes also stick to embedding, image, tts, and stt models. `openrouter` has exactly one free-suffix model, namely `nvidia/llama-nemotron-embed-vl-1b-v2:free`, which the registry already marks `"embedding"` in `ProviderModelKinds` — but `freeTierComboModels` never called `GetProviderModelKind`, so models that cannot answer a single chat turn still made the list. Now a single gate line `kind != "" && kind != "llm"` drops it, exactly as `usableModelFamilies` already does for auto-family combos. Registry census: 40 free-suffix models, 35 of them chat-capable, spread across 12 provider keys — so this feature is not a formality; the combo for someone who has 6 free providers contains a dozen chat models.
+- **The "Auto Group by Model" and "Auto Free Tier" buttons were removed from the Combo page header.** Both are bulk generators that write dozens of `combos` rows in one click — 40 free-suffix models in the registry, grouped by family, had already produced 80 `Auto: …` combos on a single dashboard. `CombosHeader` lost all four auto-builder props, `CombosView` lost `handleBuildAutoFamily` along with `isBuildingAutoFamily`, and `api.buildAutoFamilyCombos` was discarded too since no one calls it any more.
+- **The Combo page was aligned with upstream v0.5.91 (`localhost:20128/dashboard/combos`).** Compared directly in the browser, not by reading code. Upstream uses **one** button in the header — `Create Combo` — and moves all bulk actions to the *selection bar* below the list: a `Select all (N)` checkbox on the left that becomes `N selected` as soon as anything is selected, then on the right `Set strategy…`, `Delete (N)`, and `Clear`, which **only appear when there is a selection**. This port previously kept `Delete Selected` and `Delete All (N)` as permanent toolbar buttons, had no selection bar at all, and had a per-card Rebuild button that does not exist upstream.
+- **What changed:** `CombosHeader` now only takes `onCreateClick`. `CombosView` gains `selectedCombos`/`allSelected`/`toggleSelectAll`, `handleApplyBulkStrategy` (writing `comboStrategies` as a single patch followed by one `updateCombo` per row, because its key is the combo *name*, so separate patches would overwrite each other), and a selection bar that mimics the upstream markup. `handleDeleteAll` and `deletableCombos` were removed. `ComboCard` lost `onRebuild`/`rebuilding` and the Rebuild button; the `RefreshCw` import was discarded too. `api.buildAutoFreeCombo` was removed as well because it no longer has a caller.
+- **The intended consequence:** `POST /api/combos/auto-free` and `POST /api/combos/auto-family` are now unreachable from the dashboard entirely. The endpoints remain in the backend — only the buttons are gone.
+- **A difference NOT yet dispatched:** this port's strategy list has 5 entries (Fallback, Round Robin, **Sticky**, **Capacity**, Fusion) while upstream has 3 (without Sticky and Capacity). That is a functional divergence in routing, not a cosmetic matter, so it was left alone — a separate decision is needed if they really want to match.
+- **Verification:** browser `:5173` — the `aria-label="Combo actions"` toolbar contains exactly `Create Combo`; the idle selection bar reads `Select all (84)`; after clicking it reads `84 selected` and reveals `Apply Strategy` (disabled until a strategy is chosen), `Delete (84)`, `Clear`; per-card buttons `Copy combo name` / `Edit` / `Delete`, without Rebuild; 0 console errors. `bun test` 113/113, `tsc -b && vite build` clean, oxlint adds no warnings.
+
+
+### 🐛 Issue #61 (partial) — combo picker: one flush for three metadata fetches, not three
+
+- **Honest status: #61 is NOT done.** Its headline number is still alive. Re-measured in the production build using the original components (`ModelPickerModal` + the real catalogue, 997 pills / 5.561 nodes inside a single `max-h-[400px] overflow-y-auto` + `flex flex-wrap`), median of 14 alternating iterations in one Chromium session: **clear search → full list 146ms Task / 72ms Script**, and that is unchanged after the work below.
+- **What changed: `web/src/components/combos/pickerExtras.ts` (new) + `ModelPickerModal.svelte`.** The three metadata fetches (`/api/models/alias`, `/api/models/custom`, `/api/models/disabled`) were previously chained with three `.then()` calls that each wrote their own `$state`, so every settle rebuilt the entire pill list. Now all three are batched into a single `Promise.all` with a per-endpoint catch, and the modal publishes **one** extras object in one write. The per-endpoint contract is kept: one endpoint returning 500 must not discard the two that succeeded (pinned in `pickerExtras.test.ts`).
+- **Also: `ModelPill.svelte` no longer takes a per-row closure.** `onClick={() => handleToggle(model.value)}` was recreated on every render, and `caps` arrives as an object whose identity changes with every list rebuild. Now the pill takes a stable `onToggle` plus `vision`/`reasoning` booleans and builds its own handler from `value`.
+- **What actually moved: the open path.** 30 strict-alternating iterations (position flipped every turn): `Task` **149,6ms → 130,1ms (−13%)**, `Script` **105,0ms → 84,3ms (−20%)** — as predicted, two eliminated rebuilds ≈ 2 × 13ms. The search transition (typing / clear) does **not** move: still within noise.
+- **Why the headline number cannot be chased from this side.** An isolated probe (rebuilding the group data without touching the DOM) shows the rebuild cost is identical in **both** versions: **13,15ms vs 13,00ms Script** — so the per-row closure and the caps object do not touch the dominant cost. The application logic itself is only **0,14ms**: `resolveFilteredGroups` over 915 pills / 80 groups measured at 0,14ms in Bun with the real catalogue. The cost is creating ~1.000 component instances + ~5.500 DOM nodes once per render — matching the profile in the issue (`props.js` 19,3ms + `attributes.js` 11,4ms + `Icon.svelte` 4,0ms).
+- **A prototype that was NOT shipped (ask if you want it).** Collapsed-by-default per group — new pills only mount when the group is clicked, automatically expanded as soon as there is a query — measured in the same harness: **open 196ms → 12,8ms Task**, **clear 146ms → 36ms**. Only this approach never creates those 1.000 pills. Not shipped because (a) it is an option with no upstream divergence chosen, and (b) upstream `v0.5.91` renders the full list; it needs an explicit decision first, then a changelog note as a divergence.
+- **Verification:** `bun test` 107/107, `tsc -b` + `vite build` clean, `oxlint` with no new warnings (the 2 existing warnings were already pre-existing in `TerminalView.svelte` and `CreateComboModal.svelte`). All the numbers above were measured A/B on production bundles built for both sides (HEAD vs the change) and presented in alternating order so machine drift cannot invent a difference. A smoke run in the browser also verified pill add/remove toggling across rows and groups with no page error.
 
 ### 🐛 Issue #52 — `additionalItems` in a tool schema 400'd the whole Gemini request
 
@@ -2811,24 +2495,23 @@ diuji dengan uji regresi yang gagal bila fix-nya dibalik (*mutation-checked*).
 - **A missing reset stays missing.** With no cooldown information the upstream error is forwarded untouched and no field is invented. A `Retry-After` the router cannot parse still degrades to the header's 1s minimum but gets no `reset_at` — a year-1 timestamp is a worse answer than none, because clients schedule on it.
 - **Verified, not just green.** Table-driven `TestComboExhaustedCarriesResetTiming` drives both endpoints end-to-end against two mock upstreams that 429 with different cooldowns and asserts the response names the *earliest* candidate, not merely *a* candidate; `TestWriteExhaustedComboError_ResetFieldBoundaries` pins the envelope boundaries and the exact suffix. Mutation-checked: removing the two field assignments fails both tests with `error.reset_at = ""`, and restoring the millisecond division fails the suffix cases.
 
-### 🗑️ `union-alpha` dihapus total — model trial yang sudah tidak ada di upstream
+### 🗑️ `union-alpha` fully removed — a trial model that no longer exists upstream
 
-- **Bukan cuma satu string.** Model ini masih hidup di sembilan tempat, dan `docs/DASHBOARD_PROVIDER_PARITY.md` sudah menandainya **"MISS upstream ✅ dihapus 2026-09-21"** — ledger-nya sudah mencatat, kodenya tidak pernah menyusul. Yang dihapus: cabang routing Messages API khusus di `ForwardOpencode` (68 baris, `cleanModel == "union-alpha"`), entri `opencodeGoMessagesModels`, klausul `|| cleanModel == "union-alpha"` di dispatch `ForwardOpencodeGo`, daftar katalog `oc` / `ocz` / `opencode` / `opencode-zen` (`registry_models.go`), baris kapabilitas di `capabilities.go`, dan dua entri di `web/src/lib/models.ts` supaya dashboard tidak lagi menawarkan model mati. Dua test executor dan satu test live (`TestIntegration_OpenCode_UnionAlpha_Messages`) ikut dibuang karena hanya menguji cabang yang sudah tidak ada.
-- **Placeholder yang paling menyesatkan ikut dibetulkan.** `translator.TranslateClaudeChunkToOpenAI` memakai `state.Model = "union-alpha"` sebagai **fallback generik** untuk stream Messages yang tidak mengirim `model` — dan nilai itu bocor ke setiap chunk lewat `"model": state.Model`, jadi klien terus melihat model yang sudah di-pensiun diklaim sebagai yang menjawab. Sekarang `handleClaudeMessagesStream` mengisi state dengan model yang benar-benar diminta klien (`RequestedModelFromContext`), dan translator hanya jatuh ke placeholder `"unknown"` kalau upstream **dan** request sama-sama tidak menyebut model. Tiga kasus baru dipin di `TestTranslateClaudeChunkToOpenAI_ModelEcho`: model upstream mengalahkan seed, seed bertahan saat upstream diam, dan placeholder sebagai upaya terakhir.
-- **Test yang masih hidup tetap hidup.** `ensureMessagesMaxTokens` masih dipakai (jalur Anthropic + `opencode-go`), jadi test-nya tidak dihapus — hanya nama sampelnya diganti `claude-sonnet-4-5`, karena fungsi itu membangun payload Claude Messages dan memakai model yang sudah di-pensiun sebagai contoh tidak jujur. Sama di `models_list_scope_test.go`: sample model pada `ConnectionOwnsItsCatalog` diganti `big-pickle` (absen dari katalog statis, jadi memang efek yang diuji), sedangkan `jev-1.13-free` hanya boleh jadi model yang harus **tidak** muncul.
-- **Verifikasi:** `go build ./...`, `go vet ./...`, `go test -race ./...`, suite `integration` (`-race -count=1`), `bun test` 103/103, dan `bun run build` semuanya hijau. `TestHandleUsageStream` dan `TestApplyConnectionStrategy_KeepsRotatingPastFirstCycle` sempat muncul di beberapa run — keduanya sudah di-A/B di `5ba8aa0` (kode tanpa satu pun perubahan ini) dan gagal di sana juga, jadi pre-existing.
+- **Not just one string.** This model was still alive in nine places, and `docs/DASHBOARD_PROVIDER_PARITY.md` already flags it as **"MISS upstream ✅ removed 2026-09-21"** — the ledger recorded it, the code never followed. What was removed: the dedicated Messages API routing branch in `ForwardOpencode` (68 lines, `cleanModel == "union-alpha"`), the `opencodeGoMessagesModels` entry, the `|| cleanModel == "union-alpha"` clause in the `ForwardOpencodeGo` dispatch, the `oc` / `ocz` / `opencode` / `opencode-zen` catalogue lists (`registry_models.go`), the capability rows in `capabilities.go`, and two entries in `web/src/lib/models.ts` so the dashboard stops offering a dead model. Two executor tests and one live test (`TestIntegration_OpenCode_UnionAlpha_Messages`) were discarded too, because they only exercised a branch that no longer exists.
+- **The most misleading placeholder was corrected too.** `translator.TranslateClaudeChunkToOpenAI` uses `state.Model = "union-alpha"` as the **generic fallback** for Messages streams that do not send a `model` — and that value leaks into every chunk via `"model": state.Model`, so clients kept seeing a retired model claimed as the responder. Now `handleClaudeMessagesStream` seeds the state with the model the client actually asked for (`RequestedModelFromContext`), and the translator only falls back to the `"unknown"` placeholder if upstream **and** request both omit the model. Three new cases are pinned in `TestTranslateClaudeChunkToOpenAI_ModelEcho`: the upstream model beats the seed, the seed survives while upstream stays silent, and the placeholder as a last resort.
+- **Tests that are still alive stay alive.** `ensureMessagesMaxTokens` is still used (the Anthropic + `opencode-go` path), so its test was not removed — only the sample name changed to `claude-sonnet-4-5`, because that function builds a Claude Messages payload and using a retired model as the example is dishonest. Same in `models_list_scope_test.go`: the sample model for `ConnectionOwnsItsCatalog` changed to `big-pickle` (absent from the static catalogue, so that is indeed the effect under test), while `jev-1.13-free` may only be the model that must **not** appear.
+- **Verification:** `go build ./...`, `go vet ./...`, `go test -race ./...`, the `integration` suite (`-race -count=1`), `bun test` 103/103, and `bun run build` are all green. `TestHandleUsageStream` and `TestApplyConnectionStrategy_KeepsRotatingPastFirstCycle` appeared in a few runs — both were already A/B'd at `5ba8aa0` (code without any of these changes) and fail there too, so they are pre-existing.
 
 
+### 🐛 HTTP 200 with empty content is no longer treated as "success" — the router switches model
 
-### 🐛 HTTP 200 dengan isi kosong tidak lagi dianggap "sukses" — router pindah model
-
-- **Gejalanya.** Laporan: "round-robin tetap stay di satu model". Root cause-nya bukan strategi round-robin, tapi satu asumsi: status HTTP dianggap sama dengan jawaban. `providers.RetryableStatusCodes` (401/403/429/502/503/504) hanya memicu failover kalau upstream **menolak**. Kalau upstream membalas `200` dengan body kosong, halaman error HTML, atau amplop `{"error": …}`, `jsonResponse` / `handleJSONResponse` meneruskannya apa adanya, `tryForwardWithConnection` mengembalikan `nil`, dan `handleAccountFallback` menganggap turn itu served — termasuk **membuka** `LockConnectionModel` dan `ClearConnectionRateLimit` untuk koneksi tersebut. Efeknya lebih buruk dari sekadar stuck: combo berhenti di member pertama, akun yang bermasalah dinilai pulih, dan putaran berikutnya mengulang model yang sama.
-- **Yang sudah ada, dan kenapa tidak cukup.** `sseWithoutCompletionError` sudah mengubah event stream yang tidak membawa chunk completion menjadi 502 — tapi hanya untuk body berbentuk SSE, persis seperti dilaporkan. Body JSON biasa tidak pernah dicek. Jalur streaming lebih longgar lagi: `executor.ForwardOpenAI` langsung memanggil `execSSEStream` tanpa pernah membaca `Content-Type`, jadi halaman error HTML dengan 200 masuk ke SSE scanner, menghasilkan **nol frame**, lalu `SSECopy` menutupnya dengan `[DONE]` yang bersih. Client melihat turn selesai; router tidak pernah dapat kesempatan failover.
-- **Perbaikannya: `internal/proxy/empty_success.go`.** Satu validator (`EmptyUpstreamError`) yang membaca amplop ketiga wire shape yang dilayani gateway — Chat Completions (`choices`), Claude Messages (`content`), Responses (`output`) — dan mengembalikan `*UpstreamError{502}` untuk body kosong atau whitespace, body non-JSON (HTML error page diberi nama sendiri di log), amplop `{"error": …}` di balik 200, `choices: []`, choice tanpa content/tool_calls/reasoning/refusal, dan `output: []` dengan status `completed`. 502 dipilih karena sudah terdaftar di `RetryableStatusCodes`, jadi lock dan exclude combo jalan tanpa perubahan lain. Dua helper yang tadinya diduplikasi antar package ikut dirapatkan: `UpstreamFailure` menggantikan `sseWithoutCompletionError`, dan `LooksLikeSSE` menggantikan pasangan `executor.looksLikeSSE` / `chat.isSSEBody`.
-- **Dua fabrikasi jawaban kosong dihapus, bukan ditutup.** `handleCodexStream` menulis `{"choices":[…,"content":"","finish_reason":"stop"}}` sebagai "Fallback empty response", dan `ForwardOpencode` (union-alpha) mengirim buffer SSE kosong ke `jsonResponse`. Keduanya kini 502. Efek sampingnya terbukti: `TestE2E_Opencode_MuseSpark_Mock_Vision` sebelumnya hijau justru karena menerima completion fabrikasi itu — mock-nya kini mengembalikan event stream yang memang diminta (`buildResponsesBody` memaksa `stream:true`) dan test itu assert isi jawabannya.
-- **Streaming: klasifikasi sebelum header.** `executor.ForwardOpenAI` kini mengecek `Content-Type` sebelum menulis header apa pun. Body yang bukan event stream dibaca, dan karena **belum ada satu byte pun yang terkirim ke client**, request itu bisa diproses sebagai JSON dan gagal over persis seperti jalur non-streaming. Event stream yang salah label (`Content-Type: application/json` dengan body SSE) tetap diputar dari buffer, jadi tidak ada regresi untuk provider yang salah menulis content type.
-- **Batas yang jujur.** SSE asli yang terhubung lalu langsung EOF dengan nol frame **tidak** bisa di-failover: header sudah terkirim, jadi status tidak bisa berubah lagi. Client-nya sudah diberi tahu — `internal/proxy/sse_error.go` (#62) menutup stream itu dengan in-band error frame — tapi router-nya tetap tidak pindah model di kasus itu. Perbaikannya hanya berlaku selama belum ada satu byte pun yang terkirim ke client.
-- **Verifikasi.** `TestHandleChatCompletions_ComboMovesOnFromEmpty200`, `…FromHTML200WhileStreaming`, dan `…ComboAllEmpty200Fails` mutation-checked: dengan validator dimatikan, ketiganya gagal dengan gejala yang persis dilaporkan (body kosong sampai ke client, HTML mentah terpipa sebagai "stream", `content:""` dilayani sebagai turn selesai). Ditambah 25 subtest tabel untuk validator, 5 subtest untuk klasifikasi Content-Type di executor, `go vet ./...` bersih, `go test -race` hijau di `internal/proxy/...` dan `internal/handlers/chat`, serta suite `integration` hijau.
+- **The symptom.** The report: "round-robin still stays on one model". The root cause is not the round-robin strategy but one assumption: HTTP status is equated with an answer. `providers.RetryableStatusCodes` (401/403/429/502/503/504) only triggers failover when upstream **refuses**. If upstream replies `200` with an empty body, an HTML error page, or an envelope `{"error": …}`, `jsonResponse` / `handleJSONResponse` forwards it as-is, `tryForwardWithConnection` returns `nil`, and `handleAccountFallback` considers the turn served — including **opening** `LockConnectionModel` and `ClearConnectionRateLimit` for that connection. The effect is worse than merely being stuck: the combo halts on the first member, the problematic account is judged recovered, and the next round repeats the same model.
+- **What already existed, and why it is not enough.** `sseWithoutCompletionError` already turned an event stream carrying no completion chunk into a 502 — but only for SSE-shaped bodies, exactly as reported. Plain JSON bodies were never checked. The streaming path is looser still: `executor.ForwardOpenAI` calls `execSSEStream` directly without ever reading `Content-Type`, so a 200 HTML error page enters the SSE scanner, yields **zero frames**, and `SSECopy` closes it with a clean `[DONE]`. The client sees the turn finished; the router never gets a chance to fail over.
+- **The fix: `internal/proxy/empty_success.go`.** One validator (`EmptyUpstreamError`) that reads the envelope of the three wire shapes the gateway serves — Chat Completions (`choices`), Claude Messages (`content`), Responses (`output`) — and returns `*UpstreamError{502}` for an empty or whitespace-only body, a non-JSON body (an HTML error page is named on its own in the log), an `{"error": …}` envelope behind a 200, `choices: []`, a choice without content/tool_calls/reasoning/refusal, and `output: []` with status `completed`. 502 was chosen because it is already listed in `RetryableStatusCodes`, so the combo lock and exclusion work with no other change. Two helpers that were previously duplicated across packages were collapsed: `UpstreamFailure` replaces `sseWithoutCompletionError`, and `LooksLikeSSE` replaces the `executor.looksLikeSSE` / `chat.isSSEBody` pair.
+- **Two fabrications of empty answers removed, not papered over.** `handleCodexStream` wrote `{"choices":[…,"content":"","finish_reason":"stop"}` as a "Fallback empty response", and `ForwardOpencode` (union-alpha) sent an empty SSE buffer to `jsonResponse`. Both are now 502. The side effect is proven: `TestE2E_Opencode_MuseSpark_Mock_Vision` was previously green precisely because it accepted that fabricated completion — its mock now returns the event stream that was actually requested (`buildResponsesBody` forces `stream:true`) and the test asserts on the answer content.
+- **Streaming: classification before headers.** `executor.ForwardOpenAI` now checks `Content-Type` before writing any header. A body that is not an event stream is read, and because **not a single byte has been sent to the client yet**, that request can be processed as JSON and fail over exactly like the non-streaming path. A mislabelled event stream (`Content-Type: application/json` with an SSE body) is still replayed from the buffer, so there is no regression for providers that write the wrong content type.
+- **The honest limit.** A genuine SSE stream that connects and then immediately EOFs with zero frames **cannot** fail over: the header is already sent, so the status can no longer change. The client is told — `internal/proxy/sse_error.go` (#62) closes that stream with an in-band error frame — but the router still does not switch model in that case. The fix only applies while not a single byte has been sent to the client.
+- **Verification.** `TestHandleChatCompletions_ComboMovesOnFromEmpty200`, `…FromHTML200WhileStreaming`, and `…ComboAllEmpty200Fails` are mutation-checked: with the validator disabled, all three fail with exactly the reported symptom (empty body reaching the client, raw HTML piped as a "stream", `content:""` served as a finished turn). Plus 25 table subtests for the validator, 5 subtests for Content-Type classification in the executor, `go vet ./...` clean, `go test -race` green in `internal/proxy/...` and `internal/handlers/chat`, and the `integration` suite green.
 
 ### 🐛 The Tailscale dashboard test asserted on whatever was installed on the machine running it
 
@@ -2844,7 +2527,6 @@ diuji dengan uji regresi yang gagal bila fix-nya dibalik (*mutation-checked*).
 - **A timeout is distinguishable from a lost socket.** The stall watchdog now records that it fired (`stall.go` sets an atomic flag) and `Read` re-wraps the opaque closed-file error as `ErrStreamStall`, so the client gets a 504 `gateway_timeout` instead of a 502 `upstream_error`. Cancellation stays 499 rather than being reported as a gateway failure.
 - **Verified, not just green.** New unit tests cover the abort frame and all three classifications; a new integration test drives the real router against a fake upstream that hijacks and kills the socket mid-turn. Mutation-checked: restoring the old call site fails the integration test and the unit tests with exactly the reported symptom. Smoke-tested against the built binary with a socket reset mid-turn: the client receives the error frame plus [DONE], and a healthy stream is relayed unchanged with no error frame.
 - Also fixes a pre-existing data race in `mockResponseWriter` (the heartbeat goroutine appended to an embedded `bytes.Buffer` while the test read it), which `go test -race` flags on the untouched `TestHeartbeatWriter_EmitsKeepAliveWhenIdle`.
-
 
 
 ### ✨ Feature integration suite + `integration` CI job
@@ -2867,12 +2549,12 @@ diuji dengan uji regresi yang gagal bila fix-nya dibalik (*mutation-checked*).
 - **The refresher is wired as `nil`, deliberately.** `codexquota` supports a 401/403 refresh-and-retry, but the dashboard has no OAuth refresher of its own and importing the chat package's would drag provider-specific token persistence across package boundaries — the same reason `fetchCodexUsage` passes none today. The seam is implemented and tested; leaving it dormant is honest, where a half-wired refresher would silently fail to persist a rotated token.
 - **Verification:** 2060 Go tests across 35 packages, 87 web tests, gofmt + vet + `tsc -b` clean. 22 new Go tests cover the parsing contract (filtering, ordering, all eight payload shapes, count reporting), selection, every outcome code, the headers actually sent, the refresh-once-on-401, and that the consume body carries the chosen credit plus the idempotency key; 7 handler tests pin that the new routes are reachable past the `/usage/{connectionId}` parameter route and that a non-Codex or API-key connection is refused before any upstream call.
 
-### 🐛 Stream tanpa `finish_reason` membuat client gagal dengan "stream closed before a finish_reason was received"
+### 🐛 A stream without `finish_reason` made the client fail with "stream closed before a finish_reason was received"
 
-- 🔴 **`SSECopy` meneruskan bare `data: [DONE]` apa adanya.** Jalur passthrough OpenAI (`ForwardOpencode` rute `chat/completions` default, dan semua upstream OpenAI-compatible lain via `execSSEStream`) menulis chunk upstream mentah ke client lalu `return` begitu melihat substring `[DONE]` — tanpa memeriksa apakah terminal `finish_reason` pernah terkirim. Ketika upstream mengirim delta konten lalu `[DONE]` tanpa chunk terminal, client yang strict (Oh My Pi) melempar `OpenAI completions stream closed before a finish_reason was received` di setiap turn. Karena combo fallback mencoba akun berikutnya yang perilakunya sama, error yang sama muncul berulang (5x di laporan). Bentuk yang sama dilaporkan di `can1357/oh-my-pi#9433`: "streamed content deltas and then emitted the [DONE] sentinel without a terminal finish_reason chunk".
-- **Sintesis terminal dipindah ke sebelum `[DONE]`, bukan sesudahnya.** `SSECopy` ditulis ulang di `internal/proxy/sse_copy.go` sebagai `sseCopier` yang sadar batas baris: baris sentinel `[DONE]` yang asli selalu didahului frame `finish_reason: "stop"` bila belum ada terminal — `stop`, bukan `network_error`, karena `[DONE]` adalah akhir yang disengaja (trunkasi EOF/read-error tetap memakai `network_error` seperti sebelumnya, dan read error non-EOF kini juga menutup stream secara best-effort sebelum error dikembalikan). Deteksi terminal memakai rolling window 64B sehingga token yang terbelah antar read tetap ketahuan, dan nilai `null` eksplisit tidak dihitung sebagai terminal.
-- **Bonus: `[DONE]` di dalam konten tidak lagi memutus stream.** Deteksi lama (`bytes.Contains(checkBuf, "[DONE]")`) memotong stream begitu substring muncul di mana saja — termasuk di dalam string konten JSON. Sentinel kini hanya diakui sebagai baris event utuh (`data: [DONE]` / bare `[DONE]`), termasuk yang terbelah antar read dan yang tanpa newline di EOF.
-- **Tests:** `TestSSECopy_InjectsStopBeforeBareDone` (delta→DONE, chunk `finish_reason:null`→DONE, DONE tanpa newline di EOF, sentinel terbelah per-byte via `iotest.OneByteReader`, `[DONE]` di dalam konten, read-error tetap menutup stream + mengembalikan error). Mutation-checked: keenam subtest gagal di implementasi lama dengan tepat gejala yang dilaporkan. Suite lama `TestSSECopy_SynthesizesTerminalOnAbruptClose` tetap hijau tanpa perubahan.
+- 🔴 **`SSECopy` forwarded a bare `data: [DONE]` as-is.** The OpenAI passthrough path (`ForwardOpencode`'s default `chat/completions` route, and all other OpenAI-compatible upstreams via `execSSEStream`) writes the raw upstream chunk to the client and then `return`s as soon as it sees the substring `[DONE]` — without checking whether a terminal `finish_reason` was ever sent. When upstream sends content deltas and then `[DONE]` with no terminal chunk, a strict client (Oh My Pi) throws `OpenAI completions stream closed before a finish_reason was received` on every turn. Because combo fallback tries the next account, which behaves the same, the same error appears repeatedly (5x in the report). The same shape is reported in `can1357/oh-my-pi#9433`: "streamed content deltas and then emitted the [DONE] sentinel without a terminal finish_reason chunk".
+- **Terminal synthesis moved to before `[DONE]`, not after it.** `SSECopy` was rewritten in `internal/proxy/sse_copy.go` as a line-boundary-aware `sseCopier`: the original `[DONE]` sentinel line is always preceded by a `finish_reason: "stop"` frame if no terminal is present yet — `stop`, not `network_error`, because `[DONE]` is a deliberate end (EOF/read-error truncation still uses `network_error` as before, and a non-EOF read error now also closes the stream on a best-effort basis before the error is returned). Terminal detection uses a 64B rolling window so a token split across reads is still caught, and an explicit `null` value is not counted as a terminal.
+- **Bonus: `[DONE]` inside content no longer cuts the stream.** The old detection (`bytes.Contains(checkBuf, "[DONE]")`) cut the stream as soon as the substring appeared anywhere — including inside a JSON content string. The sentinel is now only recognised as a whole event line (`data: [DONE]` / bare `[DONE]`), including when split across reads and when there is no newline at EOF.
+- **Tests:** `TestSSECopy_InjectsStopBeforeBareDone` (delta→DONE, chunk `finish_reason:null`→DONE, DONE with no newline at EOF, sentinel split byte-by-byte via `iotest.OneByteReader`, `[DONE]` inside content, read-error still closes the stream + returns the error). Mutation-checked: all six subtests fail on the old implementation with exactly the reported symptom. The old suite `TestSSECopy_SynthesizesTerminalOnAbruptClose` stays green unchanged.
 
 ### 🐛 Issue #39 — accounts already in cooldown were still handed out by rotation
 
@@ -2891,11 +2573,11 @@ diuji dengan uji regresi yang gagal bila fix-nya dibalik (*mutation-checked*).
 - **Single source of truth for the options, and a normalizer.** `COMBO_STRATEGIES` (`types.ts`) now defines every strategy the backend speaks (`fallback`, `round-robin`, `sticky`, `capacity`, `fusion`). `resolveComboStrategy` maps `first-model` onto `fallback` (they describe the same try-in-order behaviour in different vocabularies) and falls back to `fallback` for an unrecognised value. The card's `<select>` renders from that list, so the resolved value is guaranteed to match an option.
 - **Verified:** 90 web tests pass (5 new in `types.test.ts` covering every value the server can send), and end-to-end through a real Chromium instance with `comboStrategy: 'first-model'` persisted in SQLite — the card renders `"Fallback — try in order"` with `selectedIndex: 0`, and the screenshot confirms the label is visible.
 
-### 🐛 Deteksi terminal di `SSECopy` tidak pernah aktif — tiap stream dapat terminal dobel
+### 🐛 Terminal detection in `SSECopy` never activated — every stream got a double terminal
 
-- 🔴 **Needle-nya dua kutip.** `sseHasNonNullValue` menyusun `needle := []byte(key + `":`)`, padahal `key` yang dipanggil sudah berakhir dengan kutip penutup (`"finish_reason"`). Hasilnya ia mencari `"finish_reason":` — dua kutip sebelum titik dua — yang tidak pernah muncul di JSON mana pun, jadi `bytes.Index` selalu mengembalikan `-1` dan `sseHasTerminalToken` selalu `false`. Akibatnya `sseCopier.hasTerminal` tidak pernah terisi: **setiap** stream yang upstream-nya sudah benar-benar menutup dengan `finish_reason` tetap mendapat frame terminal kedua yang disuntik tepat sebelum `[DONE]`. Bug ini ada sejak entri "inject stop terminal before bare [DONE]" dan membatalkan separuh klaimnya — "preservasi terminal native" tidak pernah dijalankan, hanya bagian sintesis yang bekerja. Needle sekarang `key + ":"`.
-- **Akibatnya tidak kelihatan di log.** Frame hasil injeksi ditulis `sseCopier.writeRaw` langsung ke `ResponseWriter`, bukan lewat `onChunk`, jadi tidak masuk `ResponseBuf` yang disimpan di `requestDetails`. Kalau stream yang terekam dibaca ulang dari DB, stream itu terlihat bersih walau ada terminal kedua tepat di depan `[DONE]`-nya — telusur dari sisi log saja tidak akan pernah menemukan bug ini.
-- **Tests:** `TestSSECopy_KeepsSingleTerminalOnCompliantStream` (tabel: OpenAI yang sudah `stop`, OpenAI yang sudah `tool_calls`, Claude yang sudah `end_turn` — semuanya harus relayed tanpa satu pun frame terminal yang disuntik, dan tanpa `network_error`), plus `TestSSECopy_QuotedTerminalInsideContentIsNotATerminal` yang mengunci konten berisi `\"finish_reason\": \"stop\"` ter-escape: kontennya harus utuh dan terminal tetap disuntik. Ketiga subtest pertama mutation-checked — mengembalikan needle ke `key + `":`` membuat ketiganya gagal dengan tepat satu terminal tambahan sebelum `[DONE]`.
+- 🔴 **The needle had two quotes.** `sseHasNonNullValue` builds `needle := []byte(key + `":`)`, but the `key` passed in already ends with a closing quote (`"finish_reason"`). As a result it searches for `"finish_reason":` — two quotes before the colon — which never appears in any JSON, so `bytes.Index` always returns `-1` and `sseHasTerminalToken` is always `false`. Consequently `sseCopier.hasTerminal` is never filled: **every** stream whose upstream already closed properly with `finish_reason` still gets a second terminal frame injected right before `[DONE]`. This bug has existed since the "inject stop terminal before bare [DONE]" entry and undoes half its claim — "preserving the native terminal" never ran, only the synthesis part ever worked. The needle is now `key + ":"`.
+- **As a result it is invisible in the logs.** The injected frames are written by `sseCopier.writeRaw` straight to the `ResponseWriter`, not through `onChunk`, so they do not enter the `ResponseBuf` stored in `requestDetails`. If a recorded stream is read back from the DB, the stream looks clean even though there is a second terminal right in front of its `[DONE]` — investigating from the log side alone would never find this bug.
+- **Tests:** `TestSSECopy_KeepsSingleTerminalOnCompliantStream` (table: OpenAI already `stop`, OpenAI already `tool_calls`, Claude already `end_turn` — all must be relayed without a single injected terminal frame, and without `network_error`), plus `TestSSECopy_QuotedTerminalInsideContentIsNotATerminal` which locks in content containing `\"finish_reason\": \"stop\"` escaped: its content must stay intact and the terminal must still be injected. The first three subtests are mutation-checked — restoring the needle to `key + `":`` makes all three fail with exactly one extra terminal before `[DONE]`.
 
 ### 🐛 Issue #41 — `stream:false` to kiro and qoder was answered with an event stream
 
@@ -2977,66 +2659,65 @@ diuji dengan uji regresi yang gagal bila fix-nya dibalik (*mutation-checked*).
 
 ### ✨ Chat Completions → OpenAI Responses streaming translator
 
-Diff 1–4 dari 4 (stacked), sudah digabung ke `main`. SHA di bawah adalah yang dipakai setelah rebase ke `main` (`63b3c14c`); sebelum rebase, diff 1–2 ada di `36b17d46`/`b3af67ad`.
+Diffs 1–4 of 4 (stacked), already merged into `main`. The SHAs below are the ones used after rebase onto `main` (`63b3c14c`); before the rebase, diffs 1–2 were at `36b17d46`/`b3af67ad`.
 
-| Diff | Isi | Status |
+| Diff | Content | Status |
 |:---|:---|:---|
 | 1 | Chat SSE → Responses SSE + `reasoning_details` | ✅ `b244d9e6` |
-| 2 | Arah request: body Responses → body Chat Completions | ✅ `b85b256e` |
-| **3** | Wiring di `ChatHandler.HandleResponses` (resolve, combo, fallback, penerjemah hanya bila upstream bukan Responses-native) | ✅ `6f47face` |
-| **4** | `response.completed` untuk jalur non-streaming | ✅ `6f47face` |
+| 2 | Request direction: Responses body → Chat Completions body | ✅ `b85b256e` |
+| **3** | Wiring in `ChatHandler.HandleResponses` (resolve, combo, fallback, translator only when upstream is not Responses-native) | ✅ `6f47face` |
+| **4** | `response.completed` for the non-streaming path | ✅ `6f47face` |
 
-**Diff 1 — mesin translasinya.** `TranslateOpenAIToResponses` + `FlushResponses` dengan `ResponsesState` yang mencerminkan `initState()` upstream.
+**Diff 1 — the translation engine.** `TranslateOpenAIToResponses` + `FlushResponses` with `ResponsesState` that mirrors upstream `initState()`.
 
-- 🔴 **Klien `/v1/responses` yang upstream-nya bukan Responses-native mendapat balasan yang salah bentuk.** `HandleResponses` meneruskan body apa adanya ke `<base>/responses` dan menyalin balasan mentah, jadi upstream Chat-Completions-only (OpenAI-compatible) menjawab dengan chunk Chat Completions ke klien yang mengharapkan event Responses.
-- **`response.completed` harus mengulang item-nya (#4307).** Klien yang membangun hasil akhirnya dari event terminal (GitHub Copilot CLI, helper "final response" OpenAI SDK) menganggap turn kosong padahal teksnya sudah streaming. `recordCompletedOutputItem` menyimpan item **berkunci `output_index`** sehingga close berulang menimpa alih-alih menduplikasi, dan `collectCompletedOutputItems` mengurutkannya menurut index supaya `response.output` mengikuti urutan emisi. Keduanya menempel di item yang sama yang memancarkan `response.output_item.done` — kalau terpisah, nomor yang tercatat pasti menyimpang dari yang dikirim.
-- **Penyelesaian ditunda saat usage belum tiba, tapi hanya pada jalur langsung.** OpenAI mengirim usage di chunk terakhir yang `choices`-nya kosong, jadi menyelesaikan di frame `finish_reason` akan membekukan payload sebelum chunk itu terbaca. `FlushReachesUs` meniru `state.targetFormat === FORMATS.OPENAI` upstream: benar (tunda ke flush) bila translator berada di rute langsung, salah (langsung kirim) bila ia hop kedua dari pivot, karena `translateResponse` sudah membuang chunk terminal sehingga flush tidak pernah dipanggil dan penundaan akan menelan `response.completed` sepenuhnya.
-- **Usage tidak menimpa akuntasi milik layer stream.** Dihasilkan ke `ResponsesState.Usage` sendiri, bukan ke usage internal, karena yang terakhir diisi `normalizeUsage()`-shaped untuk log dan biaya; ditimpa dengan bentuk Responses akan diam-diam membuang token cache/reasoning dari statistik. Tanpa `usage`, klien seperti Codex CLI menahan gauge "context used" di 0 dan tidak pernah auto-compact.
-- **Item tool baru diumumkan setelah id dan nama sama-sama tiba.** Beberapa provider memecah `id` dan `function.name` ke chunk berbeda; memutuskan lebih awal membuat panggilan `exec` terkunci permanen sebagai `function_call`. Argumen custom tool justru **tidak** di-stream dan baru dikirim saat close, setelah amplop JSON Chat bisa dibungkus — streaming fragmen mentah akan mengekspos `{"input":"..."}`, bukan program freeform yang diharapkan klien.
-- **`reasoning_details` kini ikut dibaca.** `extractReasoningText` hanya mengenal `reasoning_content` dan `reasoning`; vendor ketiga mengirim `reasoning_details` sebagai array yang bisa berisi string polos atau objek ber-`text`/`content`. `OpenAIReasoningDetail` menerima kedua bentuk dan mengembalikannya ke bentuk aslinya saat marshal, sehingga request yang diterjemahkan tidak mengubah bentuk yang disukai vendor.
-- Covered by `internal/translator/responses_test.go`: urutan event teks, nomor urut monotonik, item pesan dibuka sekali, reasoning via `reasoning_content`/`reasoning_details`/blok `<think>` (termasuk yang terbelah antar chunk), idempotensi close, tool call (nunggu id+nama, buffer argumen, custom tool, `extractCustomToolInput`), usage dari chunk tanpa `choices` beserta detail cache/reasoning, penundaan penyelesaian pada kedua mode `FlushReachesUs`, `output` pada `response.completed` (#4307) termasuk overwrite dan urutan, serta `[]` bukan `null` saat kosong.
-- **Diff 2 — arah request.** `ResponsesToChatRequest` mem-port `openaiResponsesToOpenAIRequest`: `input` (string, array, atau kosong) menjadi `messages` Chat, `instructions` jadi system message, blok `input_text`/`output_text` jadi `text` dan `input_image` jadi `image_url`, item `function_call` beruntun digabung ke satu turn assistant, `function_call_output` jadi pesan `tool`, dan `reasoning` di-buffer lalu menempel ke turn assistant berikutnya. `max_output_tokens` dipetakan ke `max_tokens` dan field khusus Responses (`input`, `instructions`, `include`, `store`, `prompt_cache_key`, `client_metadata`, `reasoning`) dibuang agar tidak bocor ke upstream.
-- **Prompt kosong tidak pernah jadi request tanpa user turn.** `input: ""`, `input: "   "`, dan `input: []` semuanya menjadi satu pesan user berisi `"..."`; `messages: []` ditolak semua provider.
-- **Tool call tanpa nama dilewati, bukan diteruskan.** Codex dan OpenAI menolak nameless call, jadi item yang namanya kosong/whitespace tidak pernah sampai ke wire. Hal yang sama berlaku untuk tool deklarasi tanpa nama: tool *hosted* seperti `{type:"request_user_input"}` tidak punya `name` dan tidak bisa jadi function declaration — meneruskannya mencapai provider seperti Gemini yang memvalidasi nama tool dengan ketat.
-- **Tool custom dipertahankan sebagai identitas.** Chat Completions tidak punya deklarasi custom tool, jadi tool `type:"custom"` diekspos sebagai function dengan satu properti string `input`; namanya dikembalikan di `ResponsesRequestResult.CustomToolNames` supaya konversi balasan bisa mengenali lagi dan memancarkan `custom_tool_call_input`. Field ini **tidak** ikut masuk body upstream — upstream menaruh `_customToolNames` di body lalu menghapusnya di `chatCore.js:214` sebelum mengirim; di sini ia jadi bagian hasil, bukan body.
-- **`additional_tools` digabung ke deklarasi tool**, dengan tool dari body lebih dulu. Skema `type:"object"` tanpa `properties` mendapat `properties` kosong, karena Codex Responses API mewajibkannya.
-- Covered by `internal/translator/responses_request_test.go` (24 test): normalisasi input string/kosong, instructions, pemetaan blok konten termasuk `file_id` dan default `detail:"auto"`, tool call beruntun, tool call nameless, tool result (string dan objek), reasoning yang menempel ke turn berikutnya / tidak bocor ke turn user / `encrypted_content` bukan teks tampil, deklarasi tool (function, hosted, custom, additional, sudah-bentuk-Chat), dan pembersihan field khusus Responses.
+- 🔴 **Clients of `/v1/responses` whose upstream is not Responses-native get a malformed reply.** `HandleResponses` forwards the body as-is to `<base>/responses` and copies the raw reply, so a Chat-Completions-only (OpenAI-compatible) upstream answers with Chat Completions chunks to a client that expects Responses events.
+- **`response.completed` must repeat its items (#4307).** Clients that build their final result from the terminal event (GitHub Copilot CLI, the OpenAI SDK "final response" helper) treat the turn as empty even though the text was already streaming. `recordCompletedOutputItem` stores items **keyed by `output_index`** so that repeated close overwrites instead of duplicating, and `collectCompletedOutputItems` sorts them by index so `response.output` follows emission order. Both attach to the same item that emits `response.output_item.done` — if separated, the recorded index would necessarily diverge from what is sent.
+- **Completion is deferred while usage has not arrived, but only on the direct path.** OpenAI sends usage in the last chunk whose `choices` is empty, so completing on the `finish_reason` frame would freeze the payload before that chunk is read. `FlushReachesUs` mirrors upstream `state.targetFormat === FORMATS.OPENAI`: correct (defer to flush) when the translator sits on the direct route, wrong (send immediately) when it is the second hop from the pivot, because `translateResponse` already discards the terminal chunk so flush is never called and the deferral would swallow `response.completed` entirely.
+- **Usage does not overwrite the accounting owned by the stream layer.** It is produced into its own `ResponsesState.Usage`, not into internal usage, because the latter is filled with `normalizeUsage()`-shaped data for logging and cost; overwriting it with the Responses shape would silently drop cache/reasoning tokens from the statistics. Without `usage`, clients like the Codex CLI hold the "context used" gauge at 0 and never auto-compact.
+- **New tool items are announced only after both id and name have arrived.** Some providers split `id` and `function.name` across different chunks; deciding earlier would lock an `exec` call permanently as `function_call`. Custom tool arguments, by contrast, are **not** streamed and are only sent at close, once the Chat JSON envelope can be wrapped — streaming raw fragments would expose `{"input":"..."}`, not the freeform program the client expects.
+- **`reasoning_details` is now read too.** `extractReasoningText` only recognized `reasoning_content` and `reasoning`; third-party vendors send `reasoning_details` as an array that can contain plain strings or objects with `text`/`content`. `OpenAIReasoningDetail` accepts both forms and returns them to their original form on marshal, so a translated request does not alter the shape a vendor prefers.
+- Covered by `internal/translator/responses_test.go`: text event ordering, monotonically increasing sequence numbers, message items opened once, reasoning via `reasoning_content`/`reasoning_details`/` thinking` blocks (including ones split across chunks), close idempotency, tool calls (waiting for id+name, argument buffering, custom tools, `extractCustomToolInput`), usage from chunks without `choices` along with cache/reasoning details, completion deferral in both `FlushReachesUs` modes, `output` on `response.completed` (#4307) including overwrite and ordering, and `[]` rather than `null` when empty.
+- **Diff 2 — request direction.** `ResponsesToChatRequest` ports `openaiResponsesToOpenAIRequest`: `input` (string, array, or empty) becomes Chat `messages`, `instructions` becomes a system message, `input_text`/`output_text` blocks become `text` and `input_image` becomes `image_url`, consecutive `function_call` items merge into a single assistant turn, `function_call_output` becomes a `tool` message, and `reasoning` is buffered then attached to the next assistant turn. `max_output_tokens` maps to `max_tokens` and Responses-specific fields (`input`, `instructions`, `include`, `store`, `prompt_cache_key`, `client_metadata`, `reasoning`) are dropped so they do not leak to the upstream.
+- **An empty prompt never becomes a request without a user turn.** `input: ""`, `input: "   "`, and `input: []` all become a single user message containing `"..."`; `messages: []` is rejected by every provider.
+- **Nameless tool calls are skipped, not forwarded.** Codex and OpenAI reject nameless calls, so items whose name is empty/whitespace never reach the wire. The same applies to nameless tool declarations: *hosted* tools like `{type:"request_user_input"}` have no `name` and cannot become a function declaration — forwarding them would reach providers like Gemini that validate tool names strictly.
+- **Custom tools are preserved as identity.** Chat Completions has no custom tool declaration, so a `type:"custom"` tool is exposed as a function with a single `input` string property; its name is returned in `ResponsesRequestResult.CustomToolNames` so the reply conversion can recognize it again and emit `custom_tool_call_input`. This field does **not** go into the upstream body — upstream puts `_customToolNames` in the body and removes it in `chatCore.js:214` before sending; here it becomes part of the result, not the body.
+- **`additional_tools` is merged into the tool declarations**, with tools from the body first. A `type:"object"` schema without `properties` gets an empty `properties`, because the Codex Responses API requires it.
+- Covered by `internal/translator/responses_request_test.go` (24 tests): normalization of string/empty input, instructions, content block mapping including `file_id` and default `detail:"auto"`, consecutive tool calls, nameless tool calls, tool results (string and object), reasoning attached to the next turn / not leaking into the user turn / `encrypted_content` not displayed as text, tool declarations (function, hosted, custom, additional, already-Chat-shaped), and cleanup of Responses-specific fields.
 
-**Diff 3 — `/v1/responses` benar-benar speaks Responses.** Rute `/responses` pindah dari `MediaHandler` ke `ChatHandler.HandleResponses`, cermin `HandleMessages`: resolve model, combo, capacity adapter, account fallback, dan usage logging. Sebelumnya handler media cuma passthrough lewat `forwardMediaRequest` — tanpa resolution, tanpa combo, tanpa fallback, tanpa log.
+**Diff 3 — `/v1/responses` genuinely speaks Responses.** The `/responses` route moved from `MediaHandler` to `ChatHandler.HandleResponses`, mirroring `HandleMessages`: model resolve, combo, capacity adapter, account fallback, and usage logging. Previously the media handler was only a passthrough via `forwardMediaRequest` — no resolution, no combo, no fallback, no logging.
 
-- 🔴 **Klien `/v1/responses` ke upstream Chat-Completions dapat balasan salah bentuk.** Smoke live (binary, upstream tiruan): sebelumnya balasan keluar apa adanya sebagai chunk Chat Completions; sesudahnya jadi `response.created` → `response.output_text.delta` → `response.completed`, dan upstream menerima `{"messages":[...]}` tanpa `input`/`instructions`.
-- **Penjaga "Responses-native" menentukan arah, bukan cuma tata letak.** `previous_response_id`, `store`, dan id item hanya milik API Responses; mengubahnya ke Chat Completions membuangnya dan codex kehilangan percakapan sisi server. Native-ness dibaca dari data yang sudah ada, bukan tabel baru: `executor.UpstreamSpeaksResponses` — base URL yang berakhiran `/responses` (codex, grok-cli, perplexity-agent; tes yang sama dengan yang dipakai eksekutor opencode sebelum menambahkan `/responses`) atau model opencode yang memang dilayani dari `/responses` (muse-spark, grok-4.6, gpt-5.6-luna). Padanan `sourceFormat === targetFormat` yang membuat upstream melewati penerjemahan. Balasan native diteruskan byte for byte lewat `passthroughResponses`, bukan lewat `handleCodexStream` yang akan mengubahnya jadi Chat Completions.
-- **Format klien lewat context, bukan field baru.** `translator.WithClientFormat` / `IsResponsesClient` / `NeedsResponsesBridge`, pola yang sama dengan `WithRequestedModel` yang sudah dipakai `HandleMessages`. Nol perubahan signature: `forwardRequestParams` dan kelima call site-nya tidak tersentuh, dan `executor.Request.Ctx` sudah meneruskan context ke `executor.Request{Ctx: ctx}`. `nil` context dibaca sebagai klien Chat di ketiga flag — itu mayoritas traffic, dan panic di sini akan menjatuhkan seluruh proxy.
-- **Kombo dan capacity adapter memakai aturan yang sama.** `handleMessagesComboFallback` dan `handleComboFallback` sebelumnya meng-hardcode `TranslateResponse: true` dan `Endpoint: "/v1/messages"`. Untuk klien Responses itu berarti balasan dibalik ke bentuk Claude, dan upstream Anthropic diberi body Chat mentah tanpa `EnsureClaudeMessages`. Keduanya kini diturunkan dari format klien lewat `forwardEndpoint`, tanpa mengubah perilaku klien Chat maupun klien Claude.
-- **Upstream Claude dilayani dua hop.** Event Claude → chunk Chat (cabang yang sudah ada) → event Responses, lewat bridge yang sama. `responsesBridge.feedFrames` menerima frame siap jadi maupun payload per chunk, supaya dua produser ini tidak masing-masing memecah frame sendiri.
-- **Stream terpotong tetap ditutup.** `bridge.close()` memancarkan `response.completed` kalau upstream mati di tengah jawaban; tanpa event terminal klien menunggu giliran yang sebenarnya sudah selesai. Berlaku juga untuk hop kedua (upstream Claude), yang tidak pernah memakai sentinel `[DONE]`.
+- 🔴 **Clients of `/v1/responses` to a Chat-Completions upstream can get a malformed reply.** Live smoke (binary, fake upstream): previously the reply came out as-is as Chat Completions chunks; afterwards it becomes `response.created` → `response.output_text.delta` → `response.completed`, and the upstream receives `{"messages":[...]}` without `input`/`instructions`.
+- **The "Responses-native" guard determines direction, not just layout.** `previous_response_id`, `store`, and item ids belong only to the Responses API; converting them to Chat Completions drops them and codex loses the server-side conversation. Native-ness is read from data that already exists, not a new table: `executor.UpstreamSpeaksResponses` — a base URL ending in `/responses` (codex, grok-cli, perplexity-agent; the same tests the opencode executor used before adding `/responses`) or an opencode model that is actually served from `/responses` (muse-spark, grok-4.6, gpt-5.6-luna). The counterpart of `sourceFormat === targetFormat` is what makes the upstream skip translation. Native replies are forwarded byte for byte via `passthroughResponses`, not via `handleCodexStream`, which would turn them into Chat Completions.
+- **Client format goes through context, not a new field.** `translator.WithClientFormat` / `IsResponsesClient` / `NeedsResponsesBridge`, the same pattern as `WithRequestedModel` already used by `HandleMessages`. Zero signature changes: `forwardRequestParams` and its five call sites are untouched, and `executor.Request.Ctx` already forwards the context to `executor.Request{Ctx: ctx}`. A `nil` context is read as a Chat client in all three flags — that is the majority of traffic, and a panic here would bring down the whole proxy.
+- **Combo and capacity adapter use the same rules.** `handleMessagesComboFallback` and `handleComboFallback` previously hardcoded `TranslateResponse: true` and `Endpoint: "/v1/messages"`. For a Responses client that meant the reply was flipped back into the Claude shape, and the Anthropic upstream was given a raw Chat body without `EnsureClaudeMessages`. Both are now derived from the client format via `forwardEndpoint`, without changing the behavior of Chat clients or Claude clients.
+- **Claude upstream is served in two hops.** Claude events → Chat chunks (the existing branch) → Responses events, through the same bridge. `responsesBridge.feedFrames` accepts ready-made frames as well as per-chunk payloads, so these two producers do not each split frames on their own.
+- **A truncated stream is still closed.** `bridge.close()` emits `response.completed` if the upstream dies mid-answer; without a terminal event the client waits on a turn that actually already finished. This also applies to the second hop (Claude upstream), which never uses the `[DONE]` sentinel.
 
-**Diff 4 — jalur non-streaming.** Klien yang tidak meminta streaming harus tetap menerima satu objek `Response`, bukan body Chat Completions yang tidak bisa dibacanya.
+**Diff 4 — the non-streaming path.** A client that does not request streaming must still receive a single `Response` object, not a Chat Completions body it cannot read.
 
-- **Objek `Response` dibangun dari translator streaming, bukan penulis kedua.** `ChatResponseToResponses` melipat satu jawaban Chat jadi satu chunk sintetis lalu memainkannya melalui `TranslateOpenAIToResponses` + `FlushResponses`, dan mengambil objek dari event `response.completed`. Bentuk item, urutannya, dan detail usage jadi identik di kedua jalur secara konstruksi, bukan karena dua implementasi kebetulan sama. Padanan upstream `convertResponsesStreamToJson`, yang mengagregasi event yang sama dari stream.
-- **Provider yang memaksa stream tetap dijawab JSON.** Klien non-streaming bisa saja menerima SSE dari upstream (Codex melakukannya); `respondAsResponses` mengagregatnya lebih dulu lewat `sseToClaudeJSON`, karena menjawab klien yang menunggu JSON dengan stream membuat parsing gagal di sisi klien, bukan di sisi proxy.
-- **Body yang tidak bisa dikonversi diteruskan utuh, bukan jadi 200 kosong.** Kesalahan konversi dicatat dan body asli dikirim; bentuk yang salah setidaknya masih membuat klien melaporkan masalahnya, sedangkan 200 kosong tidak memberi tahu apa pun.
-- **Usage native dibaca ulang.** `ParseResponsesUsage` menerjemahkan `input_tokens`/`output_tokens` (dan `input_tokens_details.cached_tokens`) ke bentuk Chat yang dipakai log dan biaya, baik dari body non-streaming maupun dari event terminal `response.completed`. Tanpa ini setiap giliran codex, grok-cli, dan perplexity-agent tercatat nol token.
-- Covered by `internal/proxy/executor/responses_bridge_test.go` (replay Chat SSE ke event Responses, stream terpotong tetap punya event terminal, dua hop Claude, dan tabel native-ness provider/model/config), `internal/translator/responses_json_test.go` (objek Response non-streaming, tool call, body tidak terbaca), `internal/translator/responses_usage_test.go` (envelope non-streaming, event terminal, cache detail, tanpa usage), `internal/translator/client_format_test.go` (ketiga flag termasuk context `nil`), dan `internal/handlers/chat/responses_test.go` (tiga e2e lewat handler: bridging ke upstream chat, upstream native tidak diterjemahkan, dan jawaban non-streaming berbentuk `Response`).
+- **The `Response` object is built from the streaming translator, not a second writer.** `ChatResponseToResponses` folds one Chat reply into a single synthetic chunk, plays it through `TranslateOpenAIToResponses` + `FlushResponses`, and takes the object from the `response.completed` event. Item shape, ordering, and usage details become identical on both paths by construction, not because two implementations happen to agree. The upstream counterpart is `convertResponsesStreamToJson`, which aggregates the same events from the stream.
+- **A provider that forces streaming is still answered with JSON.** A non-streaming client can receive SSE from the upstream (Codex does this); `respondAsResponses` aggregates it first through `sseToClaudeJSON`, because answering a client waiting for JSON with a stream makes parsing fail on the client side, not on the proxy side.
+- **A body that cannot be converted is forwarded whole, instead of becoming a 200 with empty body.** The conversion error is logged and the original body is sent; a malformed shape at least still lets the client report the problem, whereas an empty 200 tells nothing.
+- **Native usage is read back.** `ParseResponsesUsage` translates `input_tokens`/`output_tokens` (and `input_tokens_details.cached_tokens`) into the Chat shape used by logging and cost, from both the non-streaming body and the terminal `response.completed` event. Without this, every codex, grok-cli, and perplexity-agent turn would be recorded as zero tokens.
+- Covered by `internal/proxy/executor/responses_bridge_test.go` (replay Chat SSE to Responses events, truncated stream still has a terminal event, two-hop Claude, and the provider/model/config native-ness table), `internal/translator/responses_json_test.go` (non-streaming Response object, tool call, unreadable body), `internal/translator/responses_usage_test.go` (non-streaming envelope, terminal event, cache details, no usage), `internal/translator/client_format_test.go` (all three flags including `nil` context), and `internal/handlers/chat/responses_test.go` (three e2e through the handler: bridging to a chat upstream, native upstream not translated, and non-streaming answer shaped as `Response`).
 
-### 🐛 Empat jalur yang terlewat saat wiring `/v1/responses`
+### 🐛 Four paths missed while wiring `/v1/responses`
 
-Audit setelah wiring menemukan jalur yang tidak melewati `sseStream` maupun `handleJSONResponse`, jadi bridge-nya tidak pernah sampai ke sana. `ResponsesBridge` diekspor supaya producer mana pun bisa memakainya, dan `FeedFrames` menerima frame siap jadi maupun payload per chunk.
+An audit after the wiring found paths that go through neither `sseStream` nor `handleJSONResponse`, so the bridge never reached them. `ResponsesBridge` is exported so any producer can use it, and `FeedFrames` accepts ready-made frames as well as per-chunk payloads.
 
-- 🔴 **Antigravity (gemini-native) menjawab Chat Completions ke klien Responses.** `handleGeminiStream` dan `handleGeminiNonStream` menulis hasil terjemahannya langsung ke writer, tanpa pernah melewati bridge. Keduanya kini memakai bridge yang sama, dan `[DONE]` tidak lagi ditulis untuk klien Responses karena yang mereka tunggu adalah `response.completed`.
-- 🔴 **MiMo free menulis body mentah di jalur non-streaming.** Jalur streaming-nya sudah lewat `handleStreamResponse` (dan jadi ikut ter-bridge), tapi cabang non-streaming melakukan `io.Copy` apa adanya. Sekarang keduanya membaca body lalu melewati `respondAsResponses`.
-- 🔴 **`/v1/responses/compact` masih lewat handler media, dan `_compact` tak pernah dibaca siapa pun.** Rutenya diarahkan ke `HandleResponsesCompact` (yang sekarang memanggil `HandleResponses`, sama seperti upstream yang set `body._compact` lalu reuse `handleChat` — sebelumnya ia memaksa body Responses masuk ke `/v1/chat/completions`). `applyCodexCompact` di eksekutor codex menerjemahkan penanda itu jadi URL `/compact` dan menghapusnya dari body, porting `codex.js` `transformRequest` + `buildUrl`.
-- **Kode mati dibuang, bukan ditinggal sebagai shim.** Setelah rute berpindah, `MediaHandler.HandleResponses` / `HandleResponsesCompact` dan blok dispatch `/responses` di `forwardMediaRequest` tidak punya pemanggil lagi, jadi ketiganya dihapus. Test `media/responses_test.go` (6 test) ikut hilang: semuanya memanggil handler yang sudah tidak ada, dan sebagian hanya menguji handler lewat `io.Copy`. Dua perilaku yang memang masih berarti — provider tanpa koneksi, dan kombo yang berotasi ke anggota sehat — dipindah ke `chat/responses_test.go` dan ditulis ulang terhadap apa yang dilihat klien, bukan urutan handler.
-- **Status kode untuk `/v1/responses` kini sama dengan `/v1/chat/completions`.** Provider tanpa koneksi dulu dijawab 404 oleh handler media; sekarang lewat mesin fallback yang sama dengan dua endpoint lain, jadi 502 dengan pesan yang sama. Konsisten lebih berharga daripada status yang berbeda per wire format.
-- Covered by `internal/handlers/chat/responses_test.go`: `TestHandleResponsesCompact_MarksRequestAndKeepsWireFormat` (penanda `_compact` sampai ke URL `/compact`, tidak bocor ke body, klien tetap dapat format Responses), `TestHandleResponses_ConnectionProblemsAreReported` (tanpa koneksi ditolak, koneksi tanpa kredensial tidak pernah memanggil upstream), `TestHandleResponses_ComboRotatesAndStaysInWireFormat` (anggota kombo yang sehat menjawab, format tidak bocor), dan `TestHandleGeminiStream_ResponsesClient` (dua hop Gemini → Chat → Responses, ditutup `response.completed`).
+- 🔴 **Antigravity (gemini-native) answers Chat Completions to a Responses client.** `handleGeminiStream` and `handleGeminiNonStream` write their translation results directly to the writer, never passing through the bridge. Both now use the same bridge, and `[DONE]` is no longer written for a Responses client, because what it waits for is `response.completed`.
+- 🔴 **MiMo free writes the raw body on the non-streaming path.** Its streaming path already went through `handleStreamResponse` (and so got bridged), but the non-streaming branch did a `io.Copy` as-is. Now both read the body and pass it through `respondAsResponses`.
+- 🔴 **`/v1/responses/compact` still went through the media handler, and `_compact` was never read by anyone.** The route is now directed to `HandleResponsesCompact` (which now calls `HandleResponses`, just like upstream sets `body._compact` and then reuses `handleChat` — previously it forced the Responses body into `/v1/chat/completions`). `applyCodexCompact` in the codex executor translates that marker into the `/compact` URL and removes it from the body, porting `codex.js` `transformRequest` + `buildUrl`.
+- **Dead code is removed, not left as a shim.** After the route moved, `MediaHandler.HandleResponses` / `HandleResponsesCompact` and the `/responses` dispatch block in `forwardMediaRequest` no longer have any callers, so all three were deleted. The `media/responses_test.go` tests (6 tests) went along: they all call handlers that no longer exist, and some merely tested the handler through `io.Copy`. Two behaviors that still genuinely matter — a provider without a connection, and a combo rotating to a healthy member — were moved to `chat/responses_test.go` and rewritten against what the client sees, not the handler sequence.
+- **The status code for `/v1/responses` is now the same as for `/v1/chat/completions`.** A provider without a connection used to be answered 404 by the media handler; now it goes through the same fallback machinery as the other two endpoints, so it is 502 with the same message. Consistency is worth more than a different status per wire format.
+- Covered by `internal/handlers/chat/responses_test.go`: `TestHandleResponsesCompact_MarksRequestAndKeepsWireFormat` (the `_compact` marker reaches the `/compact` URL, does not leak into the body, the client still gets the Responses format), `TestHandleResponses_ConnectionProblemsAreReported` (no connection is rejected, a connection without credentials never calls the upstream), `TestHandleResponses_ComboRotatesAndStaysInWireFormat` (a healthy combo member answers, the format does not leak), and `TestHandleGeminiStream_ResponsesClient` (two hops Gemini → Chat → Responses, closed with `response.completed`).
 
-### 🐛 reasoning_effort "max" sekarang diturunkan di jalur MiMo
+### 🐛 reasoning_effort "max" is now clamped down on the MiMo path
 
-- 🔴 **mimo-v2.5-pro dan v2.6 menjawab 400 untuk `reasoning_effort: "max"`.** Upstream sudah memperbaikinya di `1b72f02e`; port Go belum punya penerapan aturannya sama sekali — bukan karena "terblokir", tapi karena `applyFormat` deepseek memang belum ada di Go. Yang sudah ada sebelumnya adalah clamp `max→xhigh` untuk Codex dan opencode zen (`transform.go:387`, `providers.go:1130`), yang **tidak menyentuh mimo** dan punya nilai target berbeda.
-- **Aturannya umum, bukan mimo-spesifik.** `providers.ClampDeepseekEffort` memetakan level ke kosakata effort deepseek (`xhigh`/`max` → `"max"`), lalu menurunkan ke `"high"` bila level yang dideklarasikan model **tidak memuat `"max"`**. Yang menentukan adalah level yang dipromosikan, bukan nama model — mimo-v2.5 *menerima* `"max"` sementara v2.5-pro/v2.6 menolaknya, jadi model yang dipatok akan salah untuk setengah kasus.
-- Dipanggil dari `injectMimoMarker` (`internal/handlers/chat/mimofree.go`), yang kini menyiapkan body MiMo: marker anti-abuse **dan** effort. Jalur deepseek lain belum diaudite — helper-nya sudah generik dan siap dipakai di sana.
-- Covered by `internal/providers/clamp_effort_test.go` (7 kasus, termasuk batas v2.5 vs v2.5-pro) dan `internal/handlers/chat/mimofree_test.go` (clamp lewat body, effort yang tidak ada tidak dikarang, marker anti-abuse tetap terpasang).
-
+- 🔴 **mimo-v2.5-pro and v2.6 answer 400 for `reasoning_effort: "max"`.** The upstream already fixed this in `1b72f02e`; the Go port has no implementation of the rule at all — not because it is "blocked", but because deepseek `applyFormat` simply does not exist in Go yet. What existed before was a `max→xhigh` clamp for Codex and opencode zen (`transform.go:387`, `providers.go:1130`), which does **not** touch mimo and has different target values.
+- **The rule is general, not mimo-specific.** `providers.ClampDeepseekEffort` maps levels to the deepseek effort vocabulary (`xhigh`/`max` → `"max"`), then clamps down to `"high"` when the model's declared levels do **not** include `"max"`. What decides is the promoted level, not the model name — mimo-v2.5 *accepts* `"max"` while v2.5-pro/v2.6 reject it, so a pinned model would be wrong for half the cases.
+- Called from `injectMimoMarker` (`internal/handlers/chat/mimofree.go`), which now prepares the MiMo body: the anti-abuse marker **and** the effort. Other deepseek paths have not been audited yet — the helper is already generic and ready to be used there.
+- Covered by `internal/providers/clamp_effort_test.go` (7 cases, including the v2.5 vs v2.5-pro boundary) and `internal/handlers/chat/mimofree_test.go` (clamp through the body, nonexistent effort is not fabricated, the anti-abuse marker remains attached).
 ### 🐛 Issue #25 — Codex quota tracker was empty; codex now reads live 5h/7d quota
 
 - 🔴 **Every Codex account showed "Account active. No quota limits tracked."** `codex` was already listed in `usageSupportedProviders`, so Codex OAuth rows appeared in the quota tracker — but `fetchProviderUsage` had no `codex` case, so the request fell through to the lock fallback and answered `{plan:"codex", quotas:{}}`. Antigravity looked fine because it had a fetcher; Codex had none. The bug report was right that nothing read `wham/usage` anywhere in the tree. `internal/codexquota` now owns that endpoint (`GET https://chatgpt.com/backend-api/wham/usage`) and the dashboard dispatches `codex` to it, porting `open-sse/services/usage/codex.js:getCodexUsage`.
