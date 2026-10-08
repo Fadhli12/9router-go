@@ -781,3 +781,56 @@ func TestOpenAIToKiro_OrphanToolResultInCurrentTurnIsFlattened(t *testing.T) {
 		t.Errorf("orphan tool result content must be folded into current turn text, got %q", content)
 	}
 }
+
+// TestOpenAIToKiro_ShortensOverLongToolCallID pins the fix for Kiro's
+// "Invalid tool use format." on agents (Sisyphus/OpenCode) that mint tool-call
+// ids as `call_<n>__ts__<long-signature>` (1000+ chars). CodeWhisperer rejects
+// a toolUseId that long, so it must be collapsed to a short id while the
+// matching tool result keeps pairing by collapsing to the same id.
+func TestOpenAIToKiro_ShortensOverLongToolCallID(t *testing.T) {
+	longID := "call_301068__ts__" + strings.Repeat("x", 2000)
+	body := []byte(`{"messages":[
+		{"role":"user","content":"check mempalace"},
+		{"role":"assistant","content":"","tool_calls":[{"id":"` + longID + `","type":"function","function":{"name":"mempalace_mempalace_status","arguments":"{}"}}]},
+		{"role":"tool","tool_call_id":"` + longID + `","content":"ok"},
+		{"role":"user","content":"continue"}
+	],"tools":[
+		{"type":"function","function":{"name":"mempalace_mempalace_status","description":"status","parameters":{"type":"object","properties":{}}}}
+	]}`)
+	out, err := OpenAIToKiro(body, KiroTranslateOptions{Model: "m"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := decodeKiro(t, out)
+	cs := m["conversationState"].(map[string]any)
+	hist := cs["history"].([]any)
+
+	var seenToolUseID, seenToolResultID string
+	for _, h := range hist {
+		turn := h.(map[string]any)
+		if arm, ok := turn["assistantResponseMessage"].(map[string]any); ok {
+			if uses, _ := arm["toolUses"].([]any); len(uses) == 1 {
+				seenToolUseID, _ = uses[0].(map[string]any)["toolUseId"].(string)
+			}
+		}
+	}
+	// The tool result is the last user turn, so it lands in currentMessage, not
+	// history.
+	if cur, ok := cs["currentMessage"].(map[string]any)["userInputMessage"].(map[string]any); ok {
+		if ctx, ok := cur["userInputMessageContext"].(map[string]any); ok {
+			if results, _ := ctx["toolResults"].([]any); len(results) == 1 {
+				seenToolResultID, _ = results[0].(map[string]any)["toolUseId"].(string)
+			}
+		}
+	}
+
+	if seenToolUseID == "" {
+		t.Fatal("expected a toolUse in history")
+	}
+	if len(seenToolUseID) > 64 {
+		t.Errorf("toolUseId not shortened: %d chars", len(seenToolUseID))
+	}
+	if seenToolUseID != seenToolResultID {
+		t.Errorf("tool result must pair with the shortened toolUse: toolUse=%q toolResult=%q", seenToolUseID, seenToolResultID)
+	}
+}

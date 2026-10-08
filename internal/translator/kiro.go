@@ -2,6 +2,7 @@ package translator
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	json "encoding/json/v2"
 	"fmt"
@@ -414,6 +415,7 @@ func kiroUserContent(msg map[string]any, validToolUseIDs map[string]bool) (strin
 	var images, toolResults []any
 
 	appendToolResult := func(id string, isErr bool, content string) {
+		id = kiroShortToolID(id)
 		if id != "" && validToolUseIDs[id] {
 			status := "success"
 			if isErr {
@@ -540,6 +542,7 @@ func kiroAssistantToolUses(msg map[string]any, nameMap map[string]string, specNa
 		if id == "" {
 			id = newKiroUUID()
 		}
+		id = kiroShortToolID(id)
 		if input == nil {
 			input = map[string]any{}
 		}
@@ -597,6 +600,23 @@ func kiroToolUseIDSet(toolUses []any) map[string]bool {
 		}
 	}
 	return ids
+}
+
+// kiroShortToolID collapses an over-long tool-call id into a short, stable id.
+// Some agents (Sisyphus/OpenCode) mint tool-call ids as a call id plus a long
+// `__ts__<signature>` suffix (1000+ chars). CodeWhisperer rejects a toolUseId
+// that long with "Invalid tool use format.", so the id is hashed to a fixed
+// short form. The hash is deterministic, so a tool result carrying the same
+// original id normalizes to the same short id and still pairs with its toolUse.
+func kiroShortToolID(id string) string {
+	if id == "" {
+		return id
+	}
+	if len(id) <= 64 {
+		return id
+	}
+	sum := sha256.Sum256([]byte(id))
+	return "call_" + hex.EncodeToString(sum[:8])
 }
 
 // kiroParseToolInput decodes a JSON-encoded arguments string, tolerating the
