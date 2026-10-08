@@ -612,6 +612,7 @@ func (h *ChatHandler) handleComboFallback(ctx context.Context, w http.ResponseWr
 				} else {
 					fwdErr = h.tryForwardWithConnection(forwardRequestParams{
 						Ctx: ctx, W: cw, Provider: modelInfo.Provider, Model: modelInfo.Model,
+						RequestedModel: comboName, ComboName: comboName,
 						ConnectionID: connID, ConnName: connObjName(picked), ConnEmail: connObjEmail(picked),
 						ConnData: connData, Body: upstreamJSON,
 						IsStream: isStream, TranslateResponse: translateResponse,
@@ -774,6 +775,7 @@ func (h *ChatHandler) handleMessagesComboFallback(ctx context.Context, w http.Re
 			// Try up to 10 connections for this model entry
 			for connAttempt := 0; connAttempt < 10; connAttempt++ {
 				var connID string
+				var picked *ProviderConnection
 				var connData *ConnectionData
 				isKnownNoAuth := false
 				if cfg, ok := providers.KnownProviders[modelInfo.Provider]; ok && (cfg.NoAuth || cfg.DefaultAPIKey != "") {
@@ -783,11 +785,13 @@ func (h *ChatHandler) handleMessagesComboFallback(ctx context.Context, w http.Re
 						ProxyPoolID: h.ResolveProviderProxyPoolID(modelInfo.Provider),
 					}
 				} else {
-					conn, cData, err := h.getBestConnection(modelInfo.Provider, modelInfo.ConnectionID, excludeIDs, modelInfo.Model)
+					var cData *ConnectionData
+					var err error
+					picked, cData, err = h.getBestConnection(modelInfo.Provider, modelInfo.ConnectionID, excludeIDs, modelInfo.Model)
 					if err != nil {
 						break
 					}
-					connID = conn.ID
+					connID = picked.ID
 					connData = cData
 				}
 				if connID != "" {
@@ -817,7 +821,9 @@ func (h *ChatHandler) handleMessagesComboFallback(ctx context.Context, w http.Re
 
 				fwdErr := h.tryForwardWithConnection(forwardRequestParams{
 					Ctx: ctx, W: cw, Provider: modelInfo.Provider, Model: modelInfo.Model,
-					ConnectionID: connID, ConnData: connData, Body: upstreamJSON,
+					RequestedModel: comboName, ComboName: comboName,
+					ConnectionID: connID, ConnName: connObjName(picked), ConnEmail: connObjEmail(picked),
+					ConnData: connData, Body: upstreamJSON,
 					IsStream: isStream, TranslateResponse: !translator.IsResponsesClient(ctx),
 					Endpoint: forwardEndpoint(ctx, "/v1/messages"),
 				})
