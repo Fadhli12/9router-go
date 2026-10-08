@@ -89,6 +89,12 @@ func TestAntigravityThoughtSignatures_StripAndReplace(t *testing.T) {
 func TestUnwrapAntigravityResponse(t *testing.T) {
 	wrapped := []byte(`{"response":{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}}`)
 	unwrapped := UnwrapAntigravityResponse(wrapped)
+	// Asserting on "candidates" proves nothing: the substring is present in
+	// the wrapped body too, so a passthrough satisfies it. The envelope key
+	// disappearing is what distinguishes a real unwrap.
+	if bytes.Contains(unwrapped, []byte(`"response"`)) {
+		t.Errorf("envelope still present, unwrap did not run: %s", string(unwrapped))
+	}
 	if !bytes.Contains(unwrapped, []byte(`"candidates"`)) {
 		t.Errorf("expected unwrapped candidates, got %s", string(unwrapped))
 	}
@@ -131,10 +137,22 @@ func TestOpenAIReasoningDetail_MarshalUnmarshal(t *testing.T) {
 }
 
 func TestUnwrapClineEnvelope(t *testing.T) {
-	wrapped := []byte(`{"status":"success","data":{"id":"msg-1","choices":[{"message":{"content":"hi"}}]}}`)
+	// The envelope key is "success", not "status" — with "status" the guard
+	// never fires and the body is returned untouched, which the old
+	// assertion below could not tell apart from a real unwrap.
+	wrapped := []byte(`{"success":true,"data":{"id":"msg-1","choices":[{"message":{"content":"hi"}}]}}`)
 	unwrapped := UnwrapClineEnvelope(wrapped)
+	if bytes.Contains(unwrapped, []byte(`"data"`)) {
+		t.Errorf("envelope still present, unwrap did not run: %s", string(unwrapped))
+	}
 	if !bytes.Contains(unwrapped, []byte(`"msg-1"`)) {
 		t.Errorf("expected unwrapped data, got %s", string(unwrapped))
+	}
+
+	// A failed envelope is passed through whole.
+	failed := []byte(`{"success":false,"data":{"id":"msg-2"}}`)
+	if got := UnwrapClineEnvelope(failed); !bytes.Equal(got, failed) {
+		t.Errorf("expected failed envelope to pass through, got %s", string(got))
 	}
 
 	// Raw passthrough on invalid json

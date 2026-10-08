@@ -1,7 +1,7 @@
 package translator
 
 import (
-	json "encoding/json/v2"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -401,6 +401,26 @@ func TestFitToolNames_GeminiContents(t *testing.T) {
 	}
 	if strings.Contains(string(got), longName) {
 		t.Errorf("expected long name replaced in contents: %s", string(got))
+	}
+}
+
+// A Gemini turn can carry the tool result without the call — the call is in
+// the previous turn. The quick-check token list has to name functionResponse
+// too, or such a body skips the fit entirely and the long name reaches the
+// upstream unshortened while the declaration beside it was fitted.
+func TestFitToolNames_GeminiResponseOnlyHistory(t *testing.T) {
+	longName := "mcp__gemini_server__call_a_super_long_function_name_that_exceeds_limits_123"
+	body := []byte(`{
+		"contents": [
+			{"parts": [{"functionResponse": {"name": "` + longName + `", "response": {}}}]}
+		]
+	}`)
+	got, toolMap := FitToolNames(body)
+	if len(toolMap) != 1 {
+		t.Fatalf("expected 1 tool mapped, got %v", toolMap)
+	}
+	if strings.Contains(string(got), longName) {
+		t.Errorf("long name survived in a response-only turn: %s", string(got))
 	}
 }
 

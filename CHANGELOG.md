@@ -1452,6 +1452,70 @@ is green; 20 consecutive runs of the formerly flaky test are green. The workflow
 file is run by an ubuntu runner (cgo is available there), not a local machine
 without a C compiler.
 
+### 🔒 OAuth refresh singleflight, email masking, & backend test coverage
+
+- **OAuth refresh singleflight**: `refreshOAuthTokenIfExpired` and
+  `forceRefreshOAuthToken` (`internal/handlers/chat/gemini_handler.go`) run
+  inside a `singleflight.Group` keyed per connection, so an expired token costs
+  one upstream round-trip instead of one per concurrent request. The forced
+  refresh uses a `\x00`-prefixed key, which a connection id can never contain,
+  so the two flights cannot collide.
+- **Routing unchanged**: Antigravity-prefixed models (`ag/muse-spark-*`) still
+  route to their owning executor via `routeModelToOwningProvider` in
+  `internal/handlers/chat/resolution.go`.
+- **Email masking**: `web/src/lib/privacy.ts` adds `maskEmail` /
+  `formatEmailLabel` plus an `emailPrivacy` store persisted to
+  `localStorage['9router_mask_email']`, with a toggle in Quota Tracker,
+  Provider Detail, and the Media views so account emails can be hidden while
+  screen sharing. `maskEmail` is idempotent, the store follows the `storage`
+  event so a second window stays in sync, and the toggle also appears in the
+  Model picker, Analytics topology, and the Media header — the tabs that never
+  mount the Providers view and therefore had no way to reach it.
+- **A masked label can never be written back**: the shared
+  `EditConnectionModal` seeds the name field through `formatEmailLabel` and
+  submits `undefined` unless the field differs from both the raw and the
+  masked value. Saving a priority change with masking on leaves the stored
+  name alone instead of persisting `l***m@gmail.com` into
+  `providerConnections.name`.
+- **Backend test coverage**: unit tests added across `config`, `codexquota`,
+  `usagetracker`, `middleware`, `translator`, `app`, `handlerutil`, and `proc`.
+  Measured on this tree: config 90.8 · codexquota 87.3 · usagetracker 87.6 ·
+  middleware 89.2 · translator 85.4 · proc 85.9 are at or above 85%;
+  `handlerutil` 80.2 and `app` 82.1 are not. `internal/proc` also dropped from
+  ~60s to under a second by killing the child process instead of waiting out
+  its lifetime. The two envelope-unwrap tests assert the envelope key is
+  gone, so they fail when the unwrap is a no-op.
+
+**Regression coverage added with this change:** an unexpired token must return
+the caller's own token, and a waiter sharing a collapsed flight must not be
+handed the leader's. Both are new — no test previously sent a connection whose
+`apiKey` differs from its `accessToken`, which is exactly the iFlow shape
+(HMAC platform key plus a separate OAuth token), and that gap is why a token
+substitution in this path passed the full suite while signing iFlow requests
+with the wrong secret.
+
+**Found while reviewing this change, and fixed here.** Each was proven by
+reverting the fix and watching the test fail, not by inspection:
+
+- **A refresher returning no result crashed the gateway.** The lazy path
+  passed the result straight to `BuildConnectionUpdate`, which dereferences it;
+  the forced path already guarded this shape. A provider reporting success
+  with no token therefore panicked — and singleflight re-panicked that on
+  every waiter instead of returning an error.
+- **The write-back guard compared against a freshly derived mask.** Toggling
+  masking in a second window while the modal was open made the untouched
+  masked field compare as a rename, and persisted `l***m@gmail.com`. The
+  comparison is now against the value the field opened with, in
+  `submittedConnectionName`, with both sides trimmed so a stored name padded
+  with whitespace still matches.
+- **A Gemini turn carrying only a tool result skipped the name fit.** The
+  quick-check token list named `functionCall` but not `functionResponse`, so a
+  history-only turn returned unshortened while the declaration beside it was
+  fitted.
+- **`maskEmail` was never tested with two addresses in one label.** The regex
+  is global; dropping `/g` left the second address in the clear and the suite
+  green.
+
 Job baru `race` menjalankan `go test -race -count=1 -timeout 10m ./...`.
 Dipisah dari job `test`, bukan menambah step, supaya laporan race bernama sendiri
 di daftar check dan dua kegagalan (assertion flaky vs race asli) tidak saling

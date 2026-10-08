@@ -168,6 +168,10 @@ func (h *ChatHandler) storeAntigravityProjectID(connectionID, pid string) {
 type oauthTokenResult struct {
 	token     string
 	projectID string
+	// passthrough marks a result carrying no new token — the connection was
+	// healthy or unreadable. A waiter sharing the leader's flight must keep
+	// its own token rather than adopting the leader's.
+	passthrough bool
 }
 
 // RefreshOAuthTokenIfExpired checks and refreshes OAuth token for any provider with refreshToken.
@@ -189,12 +193,12 @@ func (h *ChatHandler) refreshOAuthTokenIfExpired(connectionID, currentToken stri
 		var provider string
 		var rawData string
 		if err := row.Scan(&provider, &rawData); err != nil {
-			return oauthTokenResult{token: currentToken}, nil
+			return oauthTokenResult{token: currentToken, passthrough: true}, nil
 		}
 
 		var connMap map[string]any
 		if err := json.Unmarshal([]byte(rawData), &connMap); err != nil {
-			return oauthTokenResult{token: currentToken}, nil
+			return oauthTokenResult{token: currentToken, passthrough: true}, nil
 		}
 
 		oauthData := providers.ParseOAuthConnection(connMap)
@@ -202,15 +206,21 @@ func (h *ChatHandler) refreshOAuthTokenIfExpired(connectionID, currentToken stri
 		if oauthData != nil {
 			projectID = oauthData.ProjectID
 		}
-		// The token is usable, so there is nothing to refresh. Hand back exactly the
-		// credential the caller passed in: resolveProviderAuthToken picked it
-		// deliberately, and for providers like Kiro that choice is load-bearing —
-		// upstream (open-sse/executors/kiro.js buildHeaders) uses the apiKey for
-		// `authMethod: "api_key"` connections even when an accessToken is present,
-		// and sending the other one answers 403. Substituting the row's
-		// accessToken here would silently undo that decision on every request.
+// The token is usable, so there is nothing to refresh. Hand back exactly
+		// the credential the caller passed in, untouched: the stored accessToken
+		// is not interchangeable with it, and the request path picks the right
+		// one deliberately.
+		//
+		// for iflow the connection stores an HMAC platform key in apiKey and the
+		// OAuth access token alongside it, and the request is signed with apiKey
+		// (proxy/executor/providers.go) — substituting here would sign every
+		// healthy connection with the wrong secret.
+		//
+		// Same for Kiro: upstream (open-sse/executors/kiro.js buildHeaders) uses
+		// the apiKey for `authMethod: "api_key"` connections even when an
+		// accessToken is present, and sending the other one answers 403.
 		if oauthData == nil || oauthData.RefreshToken == "" || !oauthData.IsExpired() {
-			return oauthTokenResult{token: currentToken, projectID: projectID}, nil
+			return oauthTokenResult{token: currentToken, projectID: projectID, passthrough: true}, nil
 		}
 
 		// Try per-provider OAuth refresher first
@@ -229,7 +239,17 @@ func (h *ChatHandler) refreshOAuthTokenIfExpired(connectionID, currentToken stri
 			})
 			if err != nil {
 				h.parkRejectedOAuthAccount(connectionID, err)
-				return oauthTokenResult{token: currentToken, projectID: projectID}, fmt.Errorf("OAuth refresh for %s: %w", provider, err)
+return oauthTokenResult{token: currentToken, projectID: projectID, passthrough: true},
+					fmt.Errorf("OAuth refresh for %s: %w", provider, err)
+			}
+			if result == nil {
+				// A refresher that reports success but hands back nothing is a
+				// broken provider, not a reason to crash the gateway. The forced
+				// path already guards this shape; without it BuildConnectionUpdate
+				// dereferences nil, and singleflight re-panics that on every waiter.
+				log.Error("oauth", "custom refresh returned no result", "provider", provider, "connection", connectionID)
+				return oauthTokenResult{token: currentToken, projectID: projectID, passthrough: true},
+					fmt.Errorf("OAuth refresh for %s: refresher returned no token", provider)
 			}
 			update := oauth.BuildConnectionUpdate(result)
 			var existing map[string]any
@@ -262,14 +282,14 @@ func (h *ChatHandler) refreshOAuthTokenIfExpired(connectionID, currentToken stri
 		// Fall back to standard OAuth2
 		cfg, ok := providers.KnownOAuthConfigs[provider]
 		if !ok {
-			return oauthTokenResult{token: currentToken, projectID: projectID}, nil
+			return oauthTokenResult{token: currentToken, projectID: projectID, passthrough: true}, nil
 		}
 
 		log.Info("oauth", "token expired, standard refresh", "provider", provider, "project", projectID)
 		tokenResp, err := providers.RefreshToken(cfg, oauthData.RefreshToken)
 		if err != nil {
 			h.parkRejectedOAuthAccount(connectionID, err)
-			return oauthTokenResult{token: currentToken, projectID: projectID}, fmt.Errorf("OAuth refresh for %s: %w", provider, err)
+			return oauthTokenResult{token: currentToken, projectID: projectID, passthrough: true}, fmt.Errorf("OAuth refresh for %s: %w", provider, err)
 		}
 
 		update := tokenResp.BuildConnectionUpdate()
@@ -295,13 +315,23 @@ func (h *ChatHandler) refreshOAuthTokenIfExpired(connectionID, currentToken stri
 		return oauthTokenResult{token: tokenResp.AccessToken, projectID: projectID}, nil
 	})
 
+// A shared flight must not hand one caller's token to another: when the
+	// leader found the connection healthy, it returned its own token as a
+	// pass-through, and that value belongs to the leader alone.
 	if err != nil {
 		r, _ := res.(oauthTokenResult)
-		return r.token, r.projectID, err
+		token := currentToken
+		if !r.passthrough {
+			token = r.token
+		}
+		return token, r.projectID, err
 	}
 	r, ok := res.(oauthTokenResult)
 	if !ok {
 		return currentToken, "", nil
+	}
+	if r.passthrough {
+		return currentToken, r.projectID, nil
 	}
 	return r.token, r.projectID, nil
 }
@@ -315,7 +345,9 @@ func (h *ChatHandler) forceRefreshOAuthToken(connectionID string) (string, strin
 		return "", "", fmt.Errorf("no database repository available")
 	}
 
-	res, err, _ := h.oauthRefreshFlight.Do("force:"+connectionID, func() (any, error) {
+	// The "\x00" prefix cannot occur in a connection id, so a forced refresh
+	// can never collide with the lazy flight of a connection named "force:<id>".
+	res, err, _ := h.oauthRefreshFlight.Do("\x00force:"+connectionID, func() (any, error) {
 		db := h.Repo.RawDB()
 		row := db.QueryRow("SELECT provider, data FROM providerConnections WHERE id = ?", connectionID)
 		var provider string

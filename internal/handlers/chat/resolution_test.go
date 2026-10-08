@@ -526,6 +526,8 @@ func TestResolveModel_StrictProviderIsolation(t *testing.T) {
 		t.Fatalf("expected antigravity/muse-spark-1.3-contributor-free, got %s/%s", info.Provider, info.Model)
 	}
 
+	// resolveModelEntryGuarded is the path the six combo callers use; without
+	// this the routing fix was only covered through resolveModel.
 	entry := h.resolveModelEntry("ag/muse-spark-1.3-contributor-free")
 	if entry == nil || entry.Provider != "antigravity" {
 		t.Fatalf("resolveModelEntry: expected antigravity, got %+v", entry)
