@@ -159,7 +159,7 @@ func (h *ChatHandler) handleAccountFallback(
 			// A 402 is a spent quota/billing window, not a transient blip. Kiro
 			// resets its monthly request count on the 1st, so park the account
 			// until the next month instead of letting the 2-hour cap re-pick it.
-			if ue.StatusCode == http.StatusPaymentRequired {
+			if isMonthlyQuotaError(ue.StatusCode, errorText) {
 				cooldownSec = monthlyQuotaCooldownSec(time.Now())
 			}
 			errMsg := errorText

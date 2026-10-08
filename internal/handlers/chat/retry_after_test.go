@@ -101,3 +101,27 @@ func TestMonthlyQuotaCooldownSec(t *testing.T) {
 		t.Errorf("monthlyQuotaCooldownSec(%v) = %d, want %d", dec, got, want)
 	}
 }
+
+func TestIsMonthlyQuotaError(t *testing.T) {
+	cases := []struct {
+		name      string
+		status    int
+		text      string
+		wantQuota bool
+	}{
+		{"kiro 402", http.StatusPaymentRequired, "You have reached the limit.", true},
+		{"codebuddy cn quota exhausted", http.StatusTooManyRequests, "额度已用尽，请访问以下链接购买加量包", true},
+		{"codebuddy cn quota exhausted short", http.StatusTooManyRequests, "额度用尽", true},
+		{"codex quota exhausted", http.StatusTooManyRequests, "quota exhausted", true},
+		{"transient rate limit", http.StatusTooManyRequests, "rate limit reached", false},
+		{"generic 429 no text", http.StatusTooManyRequests, "", false},
+		{"5xx", http.StatusServiceUnavailable, "server overloaded", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isMonthlyQuotaError(tc.status, tc.text); got != tc.wantQuota {
+				t.Errorf("isMonthlyQuotaError(%d, %q) = %v, want %v", tc.status, tc.text, got, tc.wantQuota)
+			}
+		})
+	}
+}

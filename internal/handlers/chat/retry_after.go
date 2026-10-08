@@ -308,3 +308,23 @@ func monthlyQuotaCooldownSec(now time.Time) int {
 	next := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location())
 	return ceilSeconds(next.Sub(now))
 }
+
+// isMonthlyQuotaError reports whether an upstream retryable error means the
+// account's monthly quota is spent (so it should be parked until the next
+// month) rather than a transient rate limit (which only needs a short cooldown).
+//
+// Kiro answers 402 "You have reached the limit" (MONTHLY_REQUEST_COUNT); Codex
+// and CodeBuddy CN answer 429 with a quota-exhausted message. CodeBuddy CN's
+// message is localized ("额度已用尽" = "quota exhausted"), so both the English
+// and the Chinese spellings are matched here.
+func isMonthlyQuotaError(statusCode int, errorText string) bool {
+	if statusCode == http.StatusPaymentRequired {
+		return true
+	}
+	if statusCode != http.StatusTooManyRequests {
+		return false
+	}
+	return strings.Contains(errorText, "额度已用尽") ||
+		strings.Contains(errorText, "额度用尽") ||
+		strings.Contains(errorText, "quota exhausted")
+}
