@@ -40,8 +40,8 @@
   // 2. OAuth Providers
   let oauthProviders = $derived(
     PROVIDER_CATALOG
-      .filter((p) => isChatProvider(p) && !p.hidden && p.category === 'oauth' && matchesSearch(p.name, searchQuery, p.id, p.alias) && matchesFilter(getProviderStats(connections, p.id, ['oauth']), statusFilter))
-      .map((p) => ({ ...p, stats: getProviderStats(connections, p.id, ['oauth']) }))
+      .filter((p) => isChatProvider(p) && !p.hidden && p.category === 'oauth' && matchesSearch(p.name, searchQuery, p.id, p.alias) && matchesFilter(getProviderStats(connections, p.id, p.authModes ?? ['oauth']), statusFilter))
+      .map((p) => ({ ...p, stats: getProviderStats(connections, p.id, p.authModes ?? ['oauth']) }))
       .sort((a, b) => (b.stats.connected > 0 ? 1 : 0) - (a.stats.connected > 0 ? 1 : 0) || a.name.localeCompare(b.name))
   )
 
@@ -56,8 +56,8 @@
   // 4. API Key Providers
   let apikeyProviders = $derived(
     PROVIDER_CATALOG
-      .filter((p) => isChatProvider(p) && !p.hidden && (p.category === 'apikey' || p.category === 'webCookie') && matchesSearch(p.name, searchQuery, p.id, p.alias) && matchesFilter(getProviderStats(connections, p.id, ['apikey', 'api_key']), statusFilter))
-      .map((p) => ({ ...p, stats: getProviderStats(connections, p.id, ['apikey', 'api_key']) }))
+      .filter((p) => isChatProvider(p) && !p.hidden && (p.category === 'apikey' || p.category === 'webCookie') && matchesSearch(p.name, searchQuery, p.id, p.alias) && matchesFilter(getProviderStats(connections, p.id, p.authModes ?? ['apikey', 'api_key']), statusFilter))
+      .map((p) => ({ ...p, stats: getProviderStats(connections, p.id, p.authModes ?? ['apikey', 'api_key']) }))
       .sort((a, b) => (b.stats.connected > 0 ? 1 : 0) - (a.stats.connected > 0 ? 1 : 0) || a.name.localeCompare(b.name))
   )
 
