@@ -2,6 +2,7 @@
   import { onMount, untrack } from 'svelte'
   import {
     api,
+    normalizeLastError,
     type ConnectionUsageResponse,
     type CreateConnectionPayload,
     type FreebuffSessionStatusResponse,
@@ -155,10 +156,6 @@
         clearInterval(freebuffPollTimer)
         freebuffPollTimer = null
       }
-      if (stickyDebounceTimer) {
-        clearTimeout(stickyDebounceTimer)
-        stickyDebounceTimer = null
-      }
     }
   })
 
@@ -272,12 +269,11 @@
   })
   let canImportCompatible = $derived(providerConnections.some((c) => c.isActive !== 0))
 
-  // Settings & Strategies (local in-memory cache, non-reactive to prevent reactivity cascades)
-  let settings: Settings | null = null
+  // Settings & Strategies
+  let settings = $state<Settings | null>(null)
   let isRoundRobin = $state(false)
   let stickyLimit = $state('1')
   let thinkingLevel = $state('auto')
-  let stickyDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
   // Proxy Pools
   let proxyPools = $state<ProxyPool[]>([])
@@ -687,7 +683,6 @@
 
   // Load models, settings, proxy pools
   async function loadData() {
-    suggestedModels = []
     try {
       const [modelsData, settingsData, poolsData, aliasesData, capsData] = await Promise.all([
         fetchProviderModelsData(providerId, storageAlias),
@@ -725,7 +720,7 @@
       const thinking = (settingsData as any)?.providerThinking?.[providerId]
       thinkingLevel = thinking?.mode || 'auto'
       // Extract free provider proxy & rotation settings
-      if (strategy) {
+      if (strategy && !isSavingFreeProxy) {
         freeProxyPoolId = strategy.proxyPoolId || 'none'
         freeRotateStrategy = (strategy.rotateStrategy as 'none' | 'round-robin' | 'random') || 'none'
       }
@@ -777,22 +772,6 @@
       isSavingFreeProxy = false
     }
   }
-function formatErrorText(err: unknown): string {
-    if (!err) return ''
-    if (typeof err === 'string') return err
-    if (typeof err === 'object') {
-      const obj = err as Record<string, unknown>
-      if (typeof obj.message === 'string') return obj.message
-      if (typeof obj.error === 'string') return obj.error
-      try {
-        return JSON.stringify(err)
-      } catch {
-        return String(err)
-      }
-    }
-    return String(err)
-  }
-
   function getCooldownInfo(conn: ProviderConnection): { label: string; title: string; isExhausted: boolean; isLock?: boolean } | null {
     // 1. Check modelLock_* and rateLimitedUntil across conn, conn.data, and providerSpecificData (matching upstream ⏱ {timeLeft})
     const dataObj = conn.providerSpecificData as Record<string, unknown> | undefined
@@ -877,7 +856,7 @@ function formatErrorText(err: unknown): string {
     }
     // 4. Check errorCode 429 or lastError indicating rate limit / quota
     const errCode = (conn as unknown as { errorCode?: number }).errorCode
-    const lastErr = formatErrorText(conn.lastError)
+    const lastErr = normalizeLastError(conn.lastError) || ''
     if (
       errCode === 429 ||
       lastErr.includes('429') ||
@@ -902,9 +881,15 @@ function formatErrorText(err: unknown): string {
     return null
   }
 
+  let lastLoadedProviderId = ''
   $effect(() => {
-    if (providerId) {
+    const pid = providerId
+    if (pid) {
       untrack(() => {
+        if (lastLoadedProviderId !== pid) {
+          lastLoadedProviderId = pid
+          suggestedModels = []
+        }
         loadData()
       })
     }
@@ -922,78 +907,29 @@ function formatErrorText(err: unknown): string {
         updated[providerId] = {
           ...(updated[providerId] || {}),
           fallbackStrategy: 'round-robin',
-          stickyRoundRobinLimit: Number(sticky) || 1
+          stickyRoundRobinLimit: Number(sticky) || 3
         }
       } else {
-        if (updated[providerId]) {
-          const entry = { ...updated[providerId] }
-          delete entry.fallbackStrategy
-          delete entry.stickyRoundRobinLimit
-          if (Object.keys(entry).length > 0) {
-            updated[providerId] = entry
-          } else {
-            delete updated[providerId]
-          }
-        }
+        delete updated[providerId]
       }
-      if (settings) {
-        settings = { ...settings, providerStrategies: updated }
-      }
+      if (settings) settings.providerStrategies = updated
       await api.updateSettings({ providerStrategies: updated })
     } catch (err) {
       console.error('Error saving provider strategy:', err)
-      throw err
     }
   }
 
   async function toggleRoundRobin() {
-    const prevRoundRobin = isRoundRobin
-    const prevSticky = stickyLimit
-    const nextRoundRobin = !prevRoundRobin
-
-    // Optimistic UI update (instant toggle, zero lag)
-    isRoundRobin = nextRoundRobin
-    if (nextRoundRobin && (!stickyLimit || stickyLimit === '0')) {
+    isRoundRobin = !isRoundRobin
+    if (isRoundRobin && !stickyLimit) {
       stickyLimit = '1'
     }
-
-    try {
-      await saveProviderStrategy(nextRoundRobin ? 'round-robin' : null, stickyLimit)
-    } catch (err) {
-      // Rollback on failure
-      isRoundRobin = prevRoundRobin
-      stickyLimit = prevSticky
-    }
-  }
-
-  function handleStickyLimitInput(event: Event) {
-    const val = (event.target as HTMLInputElement).value
-    stickyLimit = val
-    if (!isRoundRobin) return
-
-    if (stickyDebounceTimer) {
-      clearTimeout(stickyDebounceTimer)
-    }
-    stickyDebounceTimer = setTimeout(async () => {
-      try {
-        await saveProviderStrategy('round-robin', stickyLimit)
-      } catch (err) {
-        console.error('Failed to save debounced sticky limit:', err)
-      }
-    }, 400)
+    await saveProviderStrategy(isRoundRobin ? 'round-robin' : null, stickyLimit)
   }
 
   async function handleStickyLimitChange() {
-    if (stickyDebounceTimer) {
-      clearTimeout(stickyDebounceTimer)
-      stickyDebounceTimer = null
-    }
     if (isRoundRobin) {
-      try {
-        await saveProviderStrategy('round-robin', stickyLimit)
-      } catch (err) {
-        console.error('Failed to save sticky limit on change:', err)
-      }
+      await saveProviderStrategy('round-robin', stickyLimit)
     }
   }
 
@@ -1132,37 +1068,6 @@ function formatErrorText(err: unknown): string {
     if (!isTestingOneByOne) return
     isStopTesting = true
     isStoppingOneByOne = true
-  }
-
-  // Individual Connection Health Test
-  let testingSingleConnId = $state<string | null>(null)
-
-  async function handleTestSingleConnection(conn: ProviderConnection) {
-    if (testingSingleConnId || isTestingOneByOne) return
-    testingSingleConnId = conn.id
-    oneByOneStatuses = { ...oneByOneStatuses, [conn.id]: { state: 'testing', error: null } }
-    try {
-      const res = await api.testConnection(conn.id)
-      if (res?.valid) {
-        oneByOneStatuses = { ...oneByOneStatuses, [conn.id]: { state: 'success', error: null } }
-      } else {
-        oneByOneStatuses = {
-          ...oneByOneStatuses,
-          [conn.id]: { state: 'failed', error: res?.error || 'Test failed' }
-        }
-      }
-    } catch (err) {
-      oneByOneStatuses = {
-        ...oneByOneStatuses,
-        [conn.id]: {
-          state: 'failed',
-          error: err instanceof Error ? err.message : 'Test failed'
-        }
-      }
-    } finally {
-      testingSingleConnId = null
-      onRefresh()
-    }
   }
 
   // Per-row refresh: probe one account straight from its row instead of
@@ -1878,13 +1783,11 @@ function formatErrorText(err: unknown): string {
     }
   }
 
-  async function copyAuthUrl() {
+  function copyAuthUrl() {
     if (!oauthAuthUrl) return
-    const ok = await copyToClipboard(oauthAuthUrl)
-    if (ok) {
-      copiedAuthUrl = true
-      setTimeout(() => (copiedAuthUrl = false), 2000)
-    }
+    copyToClipboard(oauthAuthUrl)
+    copiedAuthUrl = true
+    setTimeout(() => (copiedAuthUrl = false), 2000)
   }
 
   async function submitManualCallback() {
@@ -2152,14 +2055,12 @@ function formatErrorText(err: unknown): string {
   }
 
   // Model actions
-  async function copyModelId(modelId: string) {
+  function copyModelId(modelId: string) {
     const level = resolveThinkingSuffix(modelId)
     const full = `${storageAlias}/${modelId}${level ? `(${level})` : ''}`
-    const ok = await copyToClipboard(full)
-    if (ok) {
-      copiedModelId = modelId
-      setTimeout(() => (copiedModelId = null), 2000)
-    }
+    copyToClipboard(full)
+    copiedModelId = modelId
+    setTimeout(() => (copiedModelId = null), 2000)
   }
 
   async function testModel(modelId: string, silent = false) {
@@ -2401,12 +2302,10 @@ function formatErrorText(err: unknown): string {
     }
   }
 
-  async function copyCompatibleModel(modelId: string) {
-    const ok = await copyToClipboard(`${displayAlias()}/${modelId}`)
-    if (ok) {
-      copiedModelId = modelId
-      setTimeout(() => (copiedModelId = null), 2000)
-    }
+  function copyCompatibleModel(modelId: string) {
+    copyToClipboard(`${displayAlias()}/${modelId}`)
+    copiedModelId = modelId
+    setTimeout(() => (copiedModelId = null), 2000)
   }
 
   async function handleImportCompatibleModels() {
@@ -2512,33 +2411,11 @@ function formatErrorText(err: unknown): string {
       }
       const modelsData = await fetchProviderModelsData(providerId, storageAlias)
       customModels = modelsData.customModels
-      if (imported > 0) {
-        notifyCustomModelsChanged()
-        alert(`Successfully imported ${imported} new model(s) from ${providerName}!`)
-      } else {
-        alert(`All ${models.length} models returned from /models are already present in the catalog.`)
-      }
+      if (imported > 0) notifyCustomModelsChanged()
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to import models')
     } finally {
       isImportingLiveCatalogModels = false
-    }
-  }
-
-  let isSyncingOmniRoute = $state(false)
-
-  async function handleSyncOmniRoute() {
-    if (isSyncingOmniRoute) return
-    isSyncingOmniRoute = true
-    try {
-      const res = await api.syncFromOmniRoute()
-      notifyCustomModelsChanged()
-      await loadData()
-      alert(`Sync complete: ${res.customModels} custom models, ${res.modelAliases} aliases, ${res.modelCompatOverrides} overrides synced from OmniRoute.`)
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to sync from OmniRoute')
-    } finally {
-      isSyncingOmniRoute = false
     }
   }
 
@@ -3021,7 +2898,6 @@ function formatErrorText(err: unknown): string {
                 type="number"
                 min="1"
                 bind:value={stickyLimit}
-                oninput={handleStickyLimitInput}
                 onchange={handleStickyLimitChange}
                 placeholder="1"
                 class="w-14 px-2 py-1 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
@@ -3163,8 +3039,7 @@ function formatErrorText(err: unknown): string {
           {@const specificData = conn.providerSpecificData as Record<string, unknown> | undefined}
           {@const assignedPoolId = (typeof specificData?.proxyPoolId === 'string' ? specificData.proxyPoolId : null)}
           {@const proxyBadge = proxyBadgeFor(conn)}
-          {@const rawErr = conn.lastError || status?.error}
-          {@const lastErr = formatErrorText(rawErr)}
+          {@const lastErr = normalizeLastError(conn.lastError || status?.error) || ''}
           {@const priorityNum = conn.priority ?? idx + 1}
           {@const isConnActive = conn.isActive === 1}
           {@const cooldownInfo = getCooldownInfo(conn)}
@@ -3383,19 +3258,6 @@ function formatErrorText(err: unknown): string {
                        on a single row as buttons are added; a fixed
                        grid-cols-N silently wrapped once a fourth button landed. -->
                   <div class="grid flex-1 grid-flow-col auto-cols-fr gap-1 sm:flex sm:flex-none">
-                    <!-- Individual Test Connection button -->
-                    <button
-                      type="button"
-                      onclick={() => handleTestSingleConnection(conn)}
-                      disabled={testingSingleConnId === conn.id || isTestingOneByOne}
-                      class="flex flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50 text-text-muted hover:text-primary cursor-pointer"
-                      title="Test this connection"
-                    >
-                      <span class="material-symbols-outlined text-[18px] {testingSingleConnId === conn.id ? 'animate-spin text-primary' : ''}">
-                        {testingSingleConnId === conn.id ? 'progress_activity' : 'network_check'}
-                      </span>
-                      <span class="text-[10px] leading-tight">Test</span>
-                    </button>
                     <!-- Proxy dropdown -->
                     <div class="relative">
                       <button
@@ -3703,8 +3565,8 @@ function formatErrorText(err: unknown): string {
   {:else}
   <div class="bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-soft)] p-6">
     <!-- Header -->
-    <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div class="flex items-center gap-3 flex-wrap">
+    <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div class="flex items-center gap-3">
         <h2 class="text-lg font-semibold">Available Models</h2>
         {#if modelDeprecationCount > 0}
           <span
@@ -3729,54 +3591,13 @@ function formatErrorText(err: unknown): string {
         {/if}
       </div>
 
-      <div class="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onclick={() => (showAddCustomModelModal = true)}
-          class="inline-flex items-center justify-center gap-1.5 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-brand-500 hover:bg-brand-600 text-white shadow-sm h-7 px-3 text-xs rounded-[8px]"
-        >
-          <span class="material-symbols-outlined text-[16px]">add</span>
-          Add Model
-        </button>
-
-        {#if providerConnections.some((c) => c.isActive !== 0)}
-          <button
-            type="button"
-            onclick={handleImportLiveCatalogModels}
-            disabled={isImportingLiveCatalogModels}
-            class="inline-flex items-center justify-center gap-1.5 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px]"
-            title="Fetch live models directly from provider API"
-          >
-            <span class="material-symbols-outlined text-[16px] {isImportingLiveCatalogModels ? 'animate-spin' : ''}">
-              {isImportingLiveCatalogModels ? 'progress_activity' : 'download'}
-            </span>
-            {isImportingLiveCatalogModels
-              ? 'Fetching...'
-              : providerId === 'qoder' || providerId === 'qoder-cn'
-                ? 'Fetch Qoder Models'
-                : 'Import from /models'}
-          </button>
-        {/if}
-
-        <button
-          type="button"
-          onclick={handleSyncOmniRoute}
-          disabled={isSyncingOmniRoute}
-          class="inline-flex items-center justify-center gap-1.5 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px]"
-          title="Sync models, custom models, and aliases from OmniRoute database"
-        >
-          <span class="material-symbols-outlined text-[16px] {isSyncingOmniRoute ? 'animate-spin' : ''}">
-            {isSyncingOmniRoute ? 'progress_activity' : 'sync'}
-          </span>
-          {isSyncingOmniRoute ? 'Syncing...' : 'Sync from OmniRoute'}
-        </button>
-
+      <div class="flex gap-2">
         <button
           type="button"
           onclick={handleToggleAllModels}
-          class="inline-flex items-center justify-center gap-1.5 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px]"
+          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px]"
         >
-          <span class="material-symbols-outlined text-[16px]">block</span>
+          <span class="material-symbols-outlined text-[18px]">block</span>
           {allDisabled ? 'Enable All' : 'Disable All'}
         </button>
       </div>
@@ -3883,7 +3704,7 @@ function formatErrorText(err: unknown): string {
                 type="button"
                 onclick={() => testModel(model.id)}
                 disabled={isTestingThis}
-                class="rounded p-0.5 text-text-muted transition-colors hover:bg-sidebar hover:text-primary cursor-pointer"
+                class="rounded p-0.5 text-text-muted transition-opacity hover:bg-sidebar hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 cursor-pointer"
                 title={modelTestErrors[model.id] || (testStatus === 'ok' ? 'Test Passed' : 'Test')}
               >
                 {#if isTestingThis}
@@ -3930,7 +3751,7 @@ function formatErrorText(err: unknown): string {
             <button
               type="button"
               onclick={() => handleDisableModel(model.id)}
-              class="ml-auto rounded p-0.5 text-text-muted transition-colors hover:bg-red-500/10 hover:text-red-500 cursor-pointer"
+              class="ml-auto rounded p-0.5 text-text-muted opacity-100 transition-opacity hover:bg-red-500/10 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100 cursor-pointer"
               title="Disable this model"
             >
               <span class="material-symbols-outlined text-sm">close</span>
@@ -3961,6 +3782,24 @@ function formatErrorText(err: unknown): string {
         <span class="material-symbols-outlined text-sm">add</span>
         Add Model
       </button>
+
+      {#if (providerId === 'cline' || providerId === 'clinepass' || providerId === 'qoder' || providerId === 'qoder-cn') && providerConnections.some((c) => c.isActive !== 0)}
+        <button
+          type="button"
+          onclick={handleImportLiveCatalogModels}
+          disabled={isImportingLiveCatalogModels}
+          class="flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-surface-2 hover:bg-surface-3 px-3 py-2 text-xs text-text-main transition-colors sm:w-auto cursor-pointer disabled:opacity-50"
+        >
+          <span class="material-symbols-outlined text-sm {isImportingLiveCatalogModels ? 'animate-spin' : ''}">
+            {isImportingLiveCatalogModels ? 'progress_activity' : 'download'}
+          </span>
+          {isImportingLiveCatalogModels
+            ? 'Fetching...'
+            : providerId === 'qoder' || providerId === 'qoder-cn'
+              ? 'Fetch Qoder Models'
+              : 'Import from /models'}
+        </button>
+      {/if}
 
       {#if allAvailableModels.length > 0}
         <button

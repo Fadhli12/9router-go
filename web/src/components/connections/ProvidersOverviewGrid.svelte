@@ -5,8 +5,6 @@
   import { PROVIDER_CATALOG, isChatProvider } from '../../lib/providers'
   import ProviderCard from './ProviderCard.svelte'
   import { getProviderStats, matchesFilter, matchesSearch } from './types'
-  import { api } from '../../api/client'
-  import { notifyCustomModelsChanged } from '../../lib/customModels'
 
   interface Props {
     connections: ProviderConnection[]
@@ -28,22 +26,6 @@
   let searchQuery = $state('')
   let statusFilter = $state<'all' | 'connected' | 'error' | 'disabled' | 'not_connected'>('all')
   let showAllApikey = $state(false)
-  let isSyncingOmniRoute = $state(false)
-
-  async function handleSyncOmniRoute() {
-    if (isSyncingOmniRoute) return
-    isSyncingOmniRoute = true
-    try {
-      const res = await api.syncFromOmniRoute()
-      notifyCustomModelsChanged()
-      alert(`Sync from OmniRoute complete: ${res.customModels} custom models, ${res.modelAliases} aliases, ${res.modelCompatOverrides} overrides.`)
-      window.location.reload()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to sync from OmniRoute')
-    } finally {
-      isSyncingOmniRoute = false
-    }
-  }
 
   const APIKEY_INITIAL_VISIBLE = 20
 
@@ -57,8 +39,8 @@
   // 2. OAuth Providers
   let oauthProviders = $derived(
     PROVIDER_CATALOG
-      .filter((p) => isChatProvider(p) && !p.hidden && (p.category === 'oauth' || p.authModes?.includes('oauth')) && matchesSearch(p.name, searchQuery, p.id, p.alias) && matchesFilter(getProviderStats(connections, p.id, ['oauth', 'apikey', 'api_key']), statusFilter))
-      .map((p) => ({ ...p, stats: getProviderStats(connections, p.id, ['oauth', 'apikey', 'api_key']) }))
+      .filter((p) => isChatProvider(p) && !p.hidden && p.category === 'oauth' && matchesSearch(p.name, searchQuery, p.id, p.alias) && matchesFilter(getProviderStats(connections, p.id, ['oauth']), statusFilter))
+      .map((p) => ({ ...p, stats: getProviderStats(connections, p.id, ['oauth']) }))
       .sort((a, b) => (b.stats.connected > 0 ? 1 : 0) - (a.stats.connected > 0 ? 1 : 0) || a.name.localeCompare(b.name))
   )
 
@@ -98,29 +80,16 @@
       />
     </div>
 
-    <div class="flex items-center gap-2">
-      <button
-        type="button"
-        onclick={handleSyncOmniRoute}
-        disabled={isSyncingOmniRoute}
-        class="inline-flex items-center justify-center gap-1.5 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-8 px-3 text-xs rounded-lg shadow-xs"
-        title="Sync models, custom models, and aliases from OmniRoute"
-      >
-        <span class="material-symbols-outlined text-[16px] {isSyncingOmniRoute ? 'animate-spin' : ''}">sync</span>
-        {isSyncingOmniRoute ? 'Syncing...' : 'Sync from OmniRoute'}
-      </button>
-
-      <select
-        bind:value={statusFilter}
-        class="h-8 rounded-lg border border-border bg-surface px-2 text-xs text-text-main outline-none transition-colors hover:border-brand-500/40 cursor-pointer"
-      >
-        <option value="all">All</option>
-        <option value="connected">Connected</option>
-        <option value="error">Error</option>
-        <option value="disabled">Disabled</option>
-        <option value="not_connected">Not Connected</option>
-      </select>
-    </div>
+    <select
+      bind:value={statusFilter}
+      class="h-8 rounded-lg border border-border bg-surface px-2 text-xs text-text-main outline-none transition-colors hover:border-brand-500/40 cursor-pointer"
+    >
+      <option value="all">All</option>
+      <option value="connected">Connected</option>
+      <option value="error">Error</option>
+      <option value="disabled">Disabled</option>
+      <option value="not_connected">Not Connected</option>
+    </select>
   </div>
 
   <!-- 1. Custom Providers -->
