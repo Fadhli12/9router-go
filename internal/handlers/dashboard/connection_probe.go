@@ -36,16 +36,16 @@ const (
 	// connectionProxyProbeTimeout mirrors the proxy pool test timeout.
 	connectionProxyProbeTimeout = 5 * time.Second
 
-	codexCLIVersion               = providers.CodexCLIVersion
-	grokCLIProbeURL               = "https://cli-chat-proxy.grok.com/v1/user"
-	grokCLIProbeUA                = providers.GrokCLIPagerUserAgent
-	kimchiProbeURL                = "https://api.cast.ai/v1/llm/openai/supported-providers"
-	kilocodeProbeURL              = "https://api.kilo.ai/api/profile"
-	clineProbeURL                 = "https://api.cline.bot/api/v1/users/me"
-	googleUserinfoURL             = "https://www.googleapis.com/oauth2/v1/userinfo?alt=json"
-	codexProbeURL                 = "https://chatgpt.com/backend-api/codex/responses"
-	cloudCodeAssistProbeURL       = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
-	cloudCodeAssistProbeBody      = `{"metadata":{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}}`
+	codexCLIVersion          = providers.CodexCLIVersion
+	grokCLIProbeURL          = "https://cli-chat-proxy.grok.com/v1/user"
+	grokCLIProbeUA           = providers.GrokCLIPagerUserAgent
+	kimchiProbeURL           = "https://api.cast.ai/v1/llm/openai/supported-providers"
+	kilocodeProbeURL         = "https://api.kilo.ai/api/profile"
+	clineProbeURL            = "https://api.cline.bot/api/v1/users/me"
+	googleUserinfoURL        = "https://www.googleapis.com/oauth2/v1/userinfo?alt=json"
+	codexProbeURL            = "https://chatgpt.com/backend-api/codex/responses"
+	cloudCodeAssistProbeURL  = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+	cloudCodeAssistProbeBody = `{"metadata":{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}}`
 	// Meta's Model API lists its own catalogue for the credential that is
 	// being tested, which is the same call the dashboard's live-model import
 	// makes — a 401/403 is the only invalid answer. This is the Muse Code
@@ -163,13 +163,14 @@ type oauthProbeConfig struct {
 var oauthProbeConfigs = map[string]oauthProbeConfig{
 	"claude": {checkExpiry: true, refreshable: true},
 	"codex": {
-		url:            codexProbeURL,
-		method:         http.MethodPost,
-		authHeader:     "Authorization",
-		extraHeaders:   map[string]string{"Content-Type": "application/json", "originator": "codex_cli_rs", "User-Agent": providers.CodexCLIUserAgent, "version": providers.CodexCLIVersionHeader},
-		body:           `{"model":"gpt-6-luna","input":[],"stream":false,"store":false}`,
-		acceptStatuses: []int{http.StatusBadRequest},
-		refreshable:    true,
+		// Codex has no endpoint that can validate a token without end-user auth:
+		// /codex/responses answers missing_end_user_auth and wham/usage answers
+		// 401 "Unauthorized" even for the exact token a successful chat request
+		// used moments earlier. The chat path proves the account, so the probe
+		// only checks token expiry (a non-expired token + active account counts
+		// as valid) instead of issuing a doomed upstream call.
+		checkExpiry: true,
+		refreshable: true,
 	},
 	"gemini-cli": {
 		url: googleUserinfoURL, method: http.MethodGet,
@@ -190,11 +191,11 @@ var oauthProbeConfigs = map[string]oauthProbeConfig{
 		},
 		method: http.MethodGet, noAuth: true,
 	},
-	"kiro":           {checkExpiry: true, refreshable: true},
-	"qoder":          {url: "https://openapi.qoder.sh/api/v1/userinfo", method: http.MethodGet, authHeader: "Authorization", authPrefix: "Bearer "},
-	"qoder-cn":       {url: "https://openapi.qoder.com.cn/api/v1/userinfo", method: http.MethodGet, authHeader: "Authorization", authPrefix: "Bearer "},
-	"kimi":           {checkExpiry: true, refreshable: true},
-	"kimi-coding":    {checkExpiry: true, refreshable: true},
+	"kiro":        {checkExpiry: true, refreshable: true},
+	"qoder":       {url: "https://openapi.qoder.sh/api/v1/userinfo", method: http.MethodGet, authHeader: "Authorization", authPrefix: "Bearer "},
+	"qoder-cn":    {url: "https://openapi.qoder.com.cn/api/v1/userinfo", method: http.MethodGet, authHeader: "Authorization", authPrefix: "Bearer "},
+	"kimi":        {checkExpiry: true, refreshable: true},
+	"kimi-coding": {checkExpiry: true, refreshable: true},
 	// A Muse Code subscription stores the minted Model API key as its bearer
 	// token, so the catalogue call proves the credential exactly the same way
 	// it does for a pasted dev.meta.ai key — and there is nothing to refresh,
