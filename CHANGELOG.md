@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+### 🐛 Modal policy key: allowlist tidak tampil dan pattern baru tidak tersimpan (Closes #216)
+
+- **Latar belakang**: report #216 — API balas `200 ok`, tapi `model access`
+  di modal policy tidak menyimpan dan tidak menampilkan kembali nilai yang
+  disimpan, dan tombol `load` juga tidak memuat apa pun.
+- **Backend-nya benar, jadi tidak ada perubahan Go.** Direproduksi lewat
+  `app.ProvideRouter` (router produksi, DB SQLite sungguhan): `PUT
+  /api/keys/{id}/models` menulis baris ke `api_key_model_access`, dan `GET
+  /api/keys/{id}/models` membacanya kembali. `resale metadata`, rate limit,
+  dan expiry sudah benar sejak awal — diverifikasi lewat UI, tidak diubah.
+- **Akar masalahnya di `ApiKeyPolicyModal.svelte`, di dua tempat.**
+  1. Allowlist tidak pernah dimuat saat modal dibuka. Listanya dimulai kosong
+     dan baru terisi setelah tombol `Load` ditekan, sehingga untuk key yang
+     sebenarnya dibatasi modal tetap menulis *"every model is allowed"*.
+  2. Tombol **Save Policy** hanya menulis kolom policy; allowlist disimpan lewat
+     endpoint terpisah yang tidak pernah dipanggil dari alur utama. Pattern
+     yang diketik lalu di-`Save` akan diterima `200` lalu hilang.
+  Kedua bug itu saling mengunci: draft kosong dari (1) menimpa daftar yang
+  tersimpan begitu operator menyimpan policy lain.
+- **Fiks**: allowlist diambil saat modal dibuka, dan **Save Policy** sekarang
+  menulis allowlist juga — satu aksi menyimpan satu policy utuh. Tombol `Load`
+  jadi `Reload`, dan `Save allowlist only` dihapus karena sudah tercakup;
+  `saveModels()` dan `isSavingModels` ikut dibersihkan karena tidak ada
+  pemanggilnya lagi.
+- **Penulisan allowlist dikunci sampai daftarnya benar-benar dibaca.** Kalau
+  hanya dilewati saat request berjalan, ada dua keadaan berbeda dengan hasil
+  identik — `models` kosong — dan keduanya berarti "hapus allowlist": request
+  yang masih berjalan, dan request yang **gagal**. Versi pertama hanya menutup
+  yang pertama; pada yang kedua `hasLoadedModels` sempat bernilai true di
+  `finally`, sehingga `Save Policy` menulis daftar kosong di atas daftar yang
+  tersimpan — persis kelas kehilangan data yang sedang diperbaiki di sini.
+  Sekarang penulisan hanya boleh jalan setelah allowlist benar-benar termuat;
+  selain itu simpan ditolak dengan pesan yang menyebut alasannya, dan modal
+  tetap terbuka supaya operator tidak mengira policy utuh sudah tersimpan.
+- **Regresi dijaga** di `internal/integration/keys_policy_test.go`:
+  `TestKeyPolicyRoundTrip`, `TestKeyModelAllowlistRoundTrip`, dan
+  `TestKeyPolicySavePreservesAllowlist` — semuanya membaca ulang lewat router
+  produksi setelah `GET` baru, bukan dari respons write yang selalu sukses.
+  Skor `svelte-check` turun 84 → 83 (`web/scripts/svelte-check-baseline.json`).
+
 ### 🔀 Seluruh `encoding/json` v1 pindah ke `encoding/json/v2`
 
 - **Latar belakang**: repo sudah migrasiMayor ke `encoding/json/v2`, tapi 50
