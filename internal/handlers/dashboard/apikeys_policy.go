@@ -76,7 +76,6 @@ func (h *DashboardHandler) HandleUpdateApiKey(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
-
 	// A limit is only meaningful when it is a whole non-negative number; a
 	// negative value would read as "unlimited" in the limiter while looking
 	// like a configured limit in the dashboard.

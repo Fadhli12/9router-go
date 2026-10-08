@@ -173,9 +173,14 @@ func (h *ChatHandler) handleAccountFallback(
 			}
 			// Account-scoped cooldown alongside the per-model locks, so the
 			// selector can skip this account before spending a request
-			// (upstream applyErrorState).
-			until := time.Now().UTC().Add(time.Duration(cooldownSec) * time.Second)
-			if provider != "antigravity" {
+			// (upstream applyErrorState). Only lock if error is account-scoped,
+			// not model-scoped (e.g. 401 auth issues), so unrelated models stay available.
+			if isModelScopedQuotaError(ue.StatusCode, errorText, model) {
+				if recErr := h.Repo.RecordConnectionError(connObj.ID, ue.StatusCode, errorText, classification.NewBackoffLevel); recErr != nil {
+					log.Warn("fallback", "record connection error failed", "conn", connObj.ID, "error", recErr)
+				}
+			} else {
+				until := time.Now().UTC().Add(time.Duration(cooldownSec) * time.Second)
 				if lockErr := h.Repo.LockConnectionRateLimit(connObj.ID, until, classification.NewBackoffLevel, ue.StatusCode, errorText); lockErr != nil {
 					log.Warn("fallback", "rate limit lock failed", "conn", connObj.ID, "error", lockErr)
 				}
@@ -234,6 +239,10 @@ type forwardRequestParams struct {
 	W                 http.ResponseWriter
 	Provider          string
 	Model             string
+	RequestedModel    string
+	ComboName         string
+	Protocol          string
+	StartedAt         time.Time
 	ConnectionID      string
 	ConnName          string // human-readable account name, for logs
 	ConnEmail         string
@@ -244,7 +253,6 @@ type forwardRequestParams struct {
 	Endpoint          string
 	PrefixHash        string
 }
-
 func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	startTime := time.Now()
 	ctx, w := f.Ctx, f.W
@@ -343,7 +351,12 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			claudeNative = true
 		}
 	}
+	compressStart := time.Now()
 	pipedBody, origTokens, savedTokens, savedPct := h.applyTokenSavers(body, claudeNative)
+	compressDurMs := int(time.Since(compressStart).Milliseconds())
+	if compressDurMs <= 0 {
+		compressDurMs = 1
+	}
 	var claudeToolMap map[string]string
 	if isAnthropic {
 		if !claudeNative {
@@ -489,6 +502,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 				OriginalInputTokens: origTokens,
 				SavedTokens:         savedTokens,
 				SavedPercent:        savedPct,
+				CompressionDurationMs: compressDurMs,
 			},
 			nil,
 			fwdErr,
@@ -520,7 +534,6 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		w.Header().Set("X-9Router-Provider", provider)
 		w.Header().Set("X-9Router-Model", model)
 	}
-
 	// The outbound guardrail tap goes here, not inside a response handler:
 	// this is the one point every dispatch path shares, so a provider with a
 	// registered executor is covered by exactly the same policy as one
@@ -708,16 +721,38 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		if usage == nil {
 			usage = &translator.OpenAIUsage{}
 		}
+		reqModel := f.RequestedModel
+		if reqModel == "" {
+			reqModel = translator.RequestedModelFromContext(ctx)
+		}
+		if reqModel == "" {
+			reqModel = model
+		}
+		protocol := f.Protocol
+		if protocol == "" {
+			protocol = resolveProtocol(endpoint)
+		}
+		startedAt := f.StartedAt
+		if startedAt.IsZero() {
+			startedAt = time.Now().Add(-time.Duration(latencyMs) * time.Millisecond)
+		}
+
 		logInfo := &UsageLogInfo{
-			Provider:            provider,
-			Model:               model,
-			ConnectionID:        connectionID,
-			APIKey:              apiKey,
-			Endpoint:            endpoint,
-			Egress:              resolveEgress(connData, providerCfg).LogValue(),
-			OriginalInputTokens: origTokens,
-			SavedTokens:         savedTokens,
-			SavedPercent:        savedPct,
+			Provider:               provider,
+			Model:                  model,
+			RequestedModel:         reqModel,
+			ComboName:              f.ComboName,
+			Protocol:               protocol,
+			CacheSource:            resolveCacheSource(usage),
+			StartedAt:              startedAt,
+			ConnectionID:           connectionID,
+			APIKey:                 apiKey,
+			Endpoint:               endpoint,
+			Egress:                 resolveEgress(connData, providerCfg).LogValue(),
+			OriginalInputTokens:   origTokens,
+			SavedTokens:           savedTokens,
+			SavedPercent:          savedPct,
+			CompressionDurationMs: compressDurMs,
 		}
 		logInfo.ConnName, logInfo.ConnEmail = identityNames(h.connIdentityKVOr(f, connectionID))
 		h.logUsage(ctx, logInfo, usage, latencyMs, body, metrics)
@@ -742,18 +777,40 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	// request actually left through the pool.
 	identity = append(identity, "egress", resolveEgress(connData, providerCfg).LogValue())
 	connName, connEmail := identityNames(identity)
+	reqModel := f.RequestedModel
+	if reqModel == "" {
+		reqModel = translator.RequestedModelFromContext(ctx)
+	}
+	if reqModel == "" {
+		reqModel = model
+	}
+	protocol := f.Protocol
+	if protocol == "" {
+		protocol = resolveProtocol(endpoint)
+	}
+	startedAt := f.StartedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now().Add(-time.Duration(latencyMs) * time.Millisecond)
+	}
+
 	h.LogFailure(
 		&UsageLogInfo{
-			Provider:            provider,
-			Model:               model,
-			ConnectionID:        connectionID,
-			ConnName:            connName,
-			ConnEmail:           connEmail,
-			Endpoint:            endpoint,
-			Egress:              resolveEgress(connData, providerCfg).LogValue(),
-			OriginalInputTokens: origTokens,
-			SavedTokens:         savedTokens,
-			SavedPercent:        savedPct,
+			Provider:               provider,
+			Model:                  model,
+			RequestedModel:         reqModel,
+			ComboName:              f.ComboName,
+			Protocol:               protocol,
+			StartedAt:              startedAt,
+			ConnectionID:           connectionID,
+			ConnName:               connName,
+			ConnEmail:              connEmail,
+			APIKey:                 apiKey,
+			Endpoint:               endpoint,
+			Egress:                 resolveEgress(connData, providerCfg).LogValue(),
+			OriginalInputTokens:   origTokens,
+			SavedTokens:           savedTokens,
+			SavedPercent:          savedPct,
+			CompressionDurationMs: compressDurMs,
 		},
 		usage,
 		fwdErr,
@@ -800,6 +857,9 @@ func isClientCanceled(ctx context.Context, err error) bool {
 // a role:"system" message is rejected by the Anthropic API.
 // false from compress/inject means nothing changed (or unparseable) — keep original, not a failure.
 func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool) ([]byte, int, int, int) {
+	if h.TokenSaver == nil {
+		return body, 0, 0, 0
+	}
 	// Prompt-injection guard: tag (never block) flagged user content. Early
 	// detection here means operators can see abuse before it reaches upstream.
 	// Toggle via settings.injectionGuardEnabled (off bypasses the scan).
@@ -811,7 +871,8 @@ func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool) ([]byte, 
 	out := body
 	var origTokens, savedTokens, savedPct int
 	if h.TokenSaver.RTKEnabled() {
-		if next, did := tokensaver.CompressMessages(out); did {
+		rtkCfg := h.TokenSaver.RTKConfig()
+		if next, did := tokensaver.CompressMessagesWithConfig(out, rtkCfg); did {
 			origTokens = len(out) / 4
 			compressedTokens := len(next) / 4
 			savedTokens = origTokens - compressedTokens
@@ -828,14 +889,25 @@ func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool) ([]byte, 
 			out = next
 		}
 	}
+	if h.TokenSaver.CavemanInputMode() {
+		if next, did := tokensaver.CompressInputMessages(out, h.TokenSaver.CavemanPreserveKeywords()); did {
+			out = next
+		}
+	}
 	inject := tokensaver.InjectSystemPrompt
 	if claudeNative {
 		inject = tokensaver.InjectSystemPromptClaude
 	}
 	if h.TokenSaver.CavemanEnabled() {
-		prompt := tokensaver.GetCavemanPrompt(h.TokenSaver.CavemanLevel())
-		if next, did := inject(out, prompt); did {
-			out = next
+		bypass := false
+		if h.TokenSaver.CavemanAutoClarity() && tokensaver.ShouldBypassCaveman(out) {
+			bypass = true
+		}
+		if !bypass {
+			prompt := tokensaver.GetCavemanPromptWithLang(h.TokenSaver.CavemanLevel(), h.TokenSaver.CavemanLanguage())
+			if next, did := inject(out, prompt); did {
+				out = next
+			}
 		}
 	}
 	if h.TokenSaver.PonytailEnabled() {
@@ -851,6 +923,23 @@ func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool) ([]byte, 
 		}
 	}
 	return out, origTokens, savedTokens, savedPct
+}
+
+func resolveProtocol(endpoint string) string {
+	if endpoint == "/v1/messages" {
+		return "Claude-Messages"
+	}
+	if strings.Contains(endpoint, "gemini") {
+		return "Gemini"
+	}
+	return "OpenAI-Chat"
+}
+
+func resolveCacheSource(u *translator.OpenAIUsage) string {
+	if u != nil && (u.CachedTokens > 0 || (u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0)) {
+		return "Upstream (Provider)"
+	}
+	return "None"
 }
 
 // extractErrorText attempts to extract a human-readable error message from an upstream error JSON body.
@@ -1052,4 +1141,25 @@ func claudeSessionIDFromBody(body []byte) string {
 	}
 	userID, _ := meta["user_id"].(string)
 	return extractClaudeSessionIdFromUserId(userID)
+}
+
+// isModelScopedQuotaError reports whether an upstream retryable error is
+// a model-specific quota exhaustion (e.g. Antigravity Claude QUOTA_EXHAUSTED)
+// rather than an account-scoped rate limit or credential failure.
+// For model-scoped quota exhaustion, only LockConnectionModel should be set
+// so that unrelated healthy models (e.g. Gemini) on the same account remain available.
+func isModelScopedQuotaError(statusCode int, errorText string, model string) bool {
+	if model == "" {
+		return false
+	}
+	if statusCode != http.StatusTooManyRequests && statusCode != http.StatusForbidden && statusCode != http.StatusServiceUnavailable {
+		return false
+	}
+	upper := strings.ToUpper(errorText)
+	if strings.Contains(upper, "QUOTA_EXHAUSTED") ||
+		strings.Contains(errorText, "Individual quota reached") ||
+		strings.Contains(upper, "MODEL_CAPACITY_EXHAUSTED") {
+		return true
+	}
+	return false
 }

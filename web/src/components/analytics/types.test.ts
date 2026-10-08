@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'bun:test'
 import {
   cachedTokensFor,
+  calculateTPS,
   fmt,
+  formatDuration,
   latencyBadgeTone,
   latencyClass,
   latencyTextClass,
@@ -118,5 +120,20 @@ describe('providerDisplayName', () => {
   it('renders missing provider as unknown', () => {
     expect(providerDisplayName(undefined)).toBe('unknown')
     expect(providerDisplayName('')).toBe('unknown')
+  })
+})
+
+describe('formatDuration and calculateTPS', () => {
+  it('formats ms and seconds', () => {
+    expect(formatDuration(null)).toBe('—')
+    expect(formatDuration(450)).toBe('450ms')
+    expect(formatDuration(5376)).toBe('5.4s')
+    expect(formatDuration(13300)).toBe('13.3s')
+  })
+
+  it('calculates tokens per second', () => {
+    expect(calculateTPS(null, null, null)).toBeNull()
+    expect(calculateTPS(1241, 13300, 1100)).toBe('101.7 tps')
+    expect(calculateTPS(1241, 13300, 0)).toBe('93.3 tps')
   })
 })

@@ -151,7 +151,6 @@ func (r *Repo) UpdateApiKeyAllowedProviders(id string, allowedProviders string) 
 	apikeycache.Invalidate()
 	return nil
 }
-
 // hashedKeyPrefix marks a `key` column as a hashed row standing in for the
 // original secret. `apiKeys.key` is TEXT UNIQUE NOT NULL, so every row cannot
 // simply be blanked to the same value — the second hashed key would collide

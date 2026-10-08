@@ -82,7 +82,6 @@ func RequireApiKey(repo *db.Repo) func(http.Handler) http.Handler {
 				}
 				defer release()
 			}
-
 			// F-14: Check key expiry
 			if apiKeyObj.ExpiresAt != nil && *apiKeyObj.ExpiresAt != "" {
 				expires, err := time.Parse(time.RFC3339, *apiKeyObj.ExpiresAt)

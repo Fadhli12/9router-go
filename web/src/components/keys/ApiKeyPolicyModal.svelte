@@ -22,7 +22,6 @@
   // provider allowlist.
   let maxConcurrent = $state(apiKey.maxConcurrent ?? 0)
   let allowedProviders = $state(apiKey.allowedProviders ?? '')
-
   // expiresAt is stored as RFC3339. The input is a plain datetime-local because
   // the browser needs a local time and the server needs UTC; convert at the edge
   // instead of asking the operator to type a timezone.
@@ -244,7 +243,6 @@
           </div>
         </div>
       </section>
-
       <!-- Expiry -->
       <section class="space-y-3">
         <div>

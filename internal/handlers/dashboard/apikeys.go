@@ -79,7 +79,6 @@ func (h *DashboardHandler) HandleKeysConcurrency(w http.ResponseWriter, r *http.
 		"active": concurrency.GlobalLimiter.GetActiveCounts(),
 	})
 }
-
 // apiKeySecretFor returns the stored secret to a dashboard credential and the
 // masked value to everyone else. Rows written before issue #199 hold only an
 // argon2id verifier, so their plaintext is unrecoverable and the caller gets an

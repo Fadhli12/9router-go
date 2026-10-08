@@ -5,11 +5,14 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"9router/proxy/internal/db"
-	"9router/proxy/internal/middleware"
 	"9router/proxy/internal/handlers/shared"
+	"9router/proxy/internal/middleware"
 	"9router/proxy/internal/models"
 	"9router/proxy/internal/proxy"
+	"9router/proxy/internal/semanticcache"
 )
 
 type comboStickyState struct {
@@ -30,9 +33,14 @@ type ChatHandler struct {
 	// The handler holds it so the metering path can reconcile a TPM
 	// reservation once the real usage is known: the estimate is taken
 	// pre-dispatch, but only the response knows what the turn actually cost.
-	RateLimiter *middleware.RateLimiter
-	stickyMu    sync.Mutex
-	stickyState map[string]*comboStickyState
+	RateLimiter   *middleware.RateLimiter
+	SemanticCache *semanticcache.Cache
+	stickyMu      sync.Mutex
+	stickyState   map[string]*comboStickyState
+	// oauthRefreshFlight collapses concurrent refreshes of one provider token
+	// into a single upstream exchange, so a burst of requests on an expired
+	// token does not spend the refresh window several times over.
+	oauthRefreshFlight singleflight.Group
 	// modelsCache memoizes the /v1/models catalog per ModelsListMode. It is a
 	// value field (not a pointer) so a zero-value ChatHandler is usable; the
 	// handler is only ever used through *ChatHandler, never copied.
@@ -46,6 +54,7 @@ type ChatHandler struct {
 
 // Type aliases for shared types
 type ModelInfo = shared.ModelInfo
+
 // ProviderConnection is the stored connection row.
 type ProviderConnection = models.ProviderConnection
 type ConnectionData = shared.ConnectionData
