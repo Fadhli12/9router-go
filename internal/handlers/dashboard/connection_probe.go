@@ -167,7 +167,7 @@ var oauthProbeConfigs = map[string]oauthProbeConfig{
 		method:         http.MethodPost,
 		authHeader:     "Authorization",
 		extraHeaders:   map[string]string{"Content-Type": "application/json", "originator": "codex_cli_rs", "User-Agent": providers.CodexCLIUserAgent, "version": providers.CodexCLIVersionHeader},
-		body:           `{"model":"gpt-5.3-codex","input":[],"stream":false,"store":false}`,
+		body:           `{"model":"gpt-6-luna","input":[],"stream":false,"store":false}`,
 		acceptStatuses: []int{http.StatusBadRequest},
 		refreshable:    true,
 	},
