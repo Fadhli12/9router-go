@@ -239,6 +239,7 @@
     'media-image': { title: 'Text to Image', description: 'Image generation and transformation models' },
     'media-tts': { title: 'Text to Speech', description: 'Voice synthesis and audio generation models' },
     'media-stt': { title: 'Speech to Text', description: 'Audio transcription and speech recognition models' },
+    'media-video': { title: 'Video', description: 'Video generation and analysis models' },
     'media-systemone': { title: 'System One', description: 'Structured state evaluation models' },
     'media-web': { title: 'Web Fetch & Search', description: 'Configure web search and scrape tools' },
     'proxy-pools': { title: 'Proxy Pools', description: 'Manage your proxy pool configurations' },
@@ -246,6 +247,8 @@
     'console-log': { title: 'Console Log', description: 'Live server console output' },
     terminal: { title: 'Console Log', description: 'Live server console output' },
     settings: { title: 'Settings', description: 'Manage your preferences and configuration' },
+    security: { title: 'Security', description: 'Vault and guardrails for credential and content protection' },
+    keys: { title: 'Endpoint & Key', description: 'API endpoint and key configuration' },
   }
 
   function handleOpenNewCombo() {
