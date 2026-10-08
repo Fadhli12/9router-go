@@ -7,25 +7,18 @@
     CloudUpload,
     Copy,
     ExternalLink,
-    Eye,
-    EyeOff,
-    Key,
     Loader2,
     Plus,
-    RefreshCw,
     Power,
     Radio,
     Shield,
-    ShieldCheck,
-    Trash2,
-    Users,
     X
   } from 'lucide-svelte'
   import Card from '../lib/ui/Card.svelte'
   import Toggle from '../lib/ui/Toggle.svelte'
   import { copyToClipboard } from '../lib/clipboard'
+  import ApiKeysTable from './keys/ApiKeysTable.svelte'
   import { api, type APIKey, type Settings, type TunnelStatusResponse } from '../api/client'
-  import { PROVIDER_CATALOG } from '../lib/providers'
 
   interface Props {
     apiKeys?: APIKey[]
@@ -39,14 +32,15 @@
     onRefresh
   }: Props = $props()
 
-  // Local state for keys & settings
-  let localKeys = $state<APIKey[]>([])
+  // Local state for the endpoint + tunnel settings. The key list owns its own
+  // state in ApiKeysTable (issue #199); nothing here mirrors it any more.
   let requireApiKey = $state(false)
   let requireLogin = $state(true)
   let hasPassword = $state(true)
   let tunnelDashboardAccess = $state(false)
+  // copiedId is also used for the endpoint/tunnel URL buttons below, so it
+  // stays here rather than moving into the table.
   let copiedId = $state<string | null>(null)
-  let shownKeyIds = $state<Set<string>>(new Set())
 
   // Origin resolution (SSR fallback uses the Go default port 20130)
   let localOrigin = $state('http://localhost:20130')
@@ -55,7 +49,6 @@
     if (typeof window !== 'undefined') {
       localOrigin = window.location.origin
     }
-    loadStatus()
   })
   // Tunnel state
   let tunnelEnabled = $state(false)
@@ -86,40 +79,14 @@
   let showTailscaleModal = $state(false)
   let showDisableTailscaleModal = $state(false)
 
-  // Keys modal state
+  // Create-key modal state. The table drives every other key action itself;
+  // only issuing a new key still belongs to the endpoint page, because it is
+  // what the integration snippets above point an operator at.
   let isCreateKeyOpen = $state(false)
   let newKeyName = $state('')
-  let newKeyMaxConcurrent = $state(0)
-  let newKeyAllowedProviders = $state('')
   let isSubmittingKey = $state(false)
   let newlyCreatedKey = $state<string | null>(null)
 
-  // Edit Limit modal state
-  let isEditLimitOpen = $state(false)
-  let editingKey = $state<APIKey | null>(null)
-  let editLimitVal = $state(0)
-  let isSavingLimit = $state(false)
-  let editProvidersVal = $state('')
-  let isSavingProviders = $state(false)
-  let isEditProvidersOpen = $state(false)
-  let editingProvidersKey = $state<APIKey | null>(null)
-  let rotatingKeyId = $state<string | null>(null)
-
-  // Confirmation modal
-  let confirmModal = $state<{
-    title: string
-    message: string
-    confirmLabel?: string
-    isDanger?: boolean
-    onConfirm: () => void
-  } | null>(null)
-
-  // Sync props to state
-  $effect(() => {
-    if (apiKeys && apiKeys.length > 0) {
-      localKeys = [...apiKeys]
-    }
-  })
   $effect(() => {
     if (settings) {
       requireApiKey = !!settings.requireApiKey
@@ -173,15 +140,11 @@
   // Load status
   async function loadStatus() {
     try {
-      const [keysRes, settingsRes, tunnelRes] = await Promise.all([
-        api.getApiKeys().catch(() => null),
+      const [settingsRes, tunnelRes] = await Promise.all([
         api.getSettings().catch(() => null),
         api.getTunnelStatus().catch(() => null)
       ])
 
-      if (keysRes) {
-        localKeys = keysRes
-      }
       if (settingsRes) {
         requireApiKey = !!settingsRes.requireApiKey
         tunnelDashboardAccess = !!settingsRes.tunnelDashboardAccess
@@ -242,72 +205,12 @@
     }
   })
 
-  async function copy(text: string, id: string) {
-    const ok = await copyToClipboard(text)
-    if (!ok) return
+  function copy(text: string, id: string) {
+    copyToClipboard(text)
     copiedId = id
     setTimeout(() => {
       if (copiedId === id) copiedId = null
     }, 2000)
-  }
-
-  function toggleShowKey(id: string) {
-    const next = new Set(shownKeyIds)
-    if (next.has(id)) {
-      next.delete(id)
-    } else {
-      next.add(id)
-    }
-    shownKeyIds = next
-  }
-
-  function maskKey(key: string): string {
-    if (!key) return ''
-    // The backend already masks keys for callers that are not fully
-    // authenticated (maskClientKey returns "***" or "sk-123…abcd"). Re-masking
-    // that value would double-mask and garble the display, so pass it through.
-    if (key.includes('…') || key === '***') return key
-    if (key.length <= 10) return key
-    return key.slice(0, 6) + '••••••' + key.slice(-4)
-  }
-
-  function splitProviders(val: string | undefined | null): string[] {
-    return (val ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
-  }
-
-  function toggleProviderIn(val: string, id: string): string {
-    const set = new Set(splitProviders(val))
-    if (set.has(id)) {
-      set.delete(id)
-    } else {
-      set.add(id)
-    }
-    return [...set].join(',')
-  }
-
-  function openEditProviders(key: APIKey) {
-    editingProvidersKey = key
-    editProvidersVal = key.allowedProviders ?? ''
-    isEditProvidersOpen = true
-  }
-
-  async function handleSaveProviders(e: SubmitEvent) {
-    e.preventDefault()
-    if (!editingProvidersKey) return
-    try {
-      isSavingProviders = true
-      await api.updateApiKeyAllowedProviders(editingProvidersKey.id, editProvidersVal.trim())
-      isEditProvidersOpen = false
-      editingProvidersKey = null
-      onRefresh?.()
-    } catch (err) {
-      alert(`Failed to update allowed providers: ${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      isSavingProviders = false
-    }
   }
 
   // Toggle Require API Key
@@ -459,18 +362,11 @@
 
     isSubmittingKey = true
     try {
-      const allowed = newKeyAllowedProviders.trim()
-      const res = await api.createApiKey({
-        name: newKeyName.trim(),
-        maxConcurrent: Number(newKeyMaxConcurrent) || 0,
-        ...(allowed ? { allowedProviders: allowed } : {})
-      })
+      const res = await api.createApiKey({ name: newKeyName.trim() })
       if (res.key) {
         newlyCreatedKey = res.key
         localStorage.setItem('9router_key', res.key)
         newKeyName = ''
-        newKeyMaxConcurrent = 0
-        newKeyAllowedProviders = ''
         isCreateKeyOpen = false
         await loadStatus()
         onRefresh?.()
@@ -482,96 +378,6 @@
     }
   }
 
-  async function handleRotateKey(key: APIKey) {
-    if (!confirm('Rotate API key "' + (key.name || 'API Key') + '"? The old secret key will stop working immediately.')) {
-      return
-    }
-    try {
-      rotatingKeyId = key.id
-      const res = await api.rotateApiKey(key.id)
-      if (res && res.key) {
-        localKeys = localKeys.map((k) => (k.id === key.id ? { ...k, key: res.key } : k))
-        newlyCreatedKey = res.key
-        onRefresh?.()
-      }
-    } catch (err) {
-      alert('Failed to rotate key: ' + (err instanceof Error ? err.message : String(err)))
-    } finally {
-      rotatingKeyId = null
-    }
-  }
-
-  function openEditLimit(key: APIKey) {
-    editingKey = key
-    editLimitVal = key.maxConcurrent ?? 0
-    isEditLimitOpen = true
-  }
-
-  async function handleSaveLimit(e: SubmitEvent) {
-    e.preventDefault()
-    if (!editingKey) return
-    try {
-      isSavingLimit = true
-      await api.updateApiKeyLimit(editingKey.id, Number(editLimitVal))
-      localKeys = localKeys.map((k) =>
-        k.id === editingKey!.id ? { ...k, maxConcurrent: Number(editLimitVal) } : k
-      )
-      isEditLimitOpen = false
-      editingKey = null
-      onRefresh?.()
-    } catch (err) {
-      alert(`Failed to update concurrent limit: ${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      isSavingLimit = false
-    }
-  }
-
-  async function handleToggleKey(key: APIKey, nextActive: boolean) {
-    if (!nextActive && (key.isActive === 1 || key.isActive === true)) {
-      confirmModal = {
-        title: 'Pause API Key',
-        message: `Pause API key "${key.name || 'API Key'}"? This key will stop working immediately but can be resumed later.`,
-        confirmLabel: 'Pause Key',
-        isDanger: false,
-        onConfirm: async () => {
-          confirmModal = null
-          await executeToggleKey(key.id, false)
-        }
-      }
-    } else {
-      await executeToggleKey(key.id, nextActive)
-    }
-  }
-
-  async function executeToggleKey(id: string, active: boolean) {
-    try {
-      await api.toggleApiKey(id, active)
-      localKeys = localKeys.map((k) => (k.id === id ? { ...k, isActive: active ? 1 : 0 } : k))
-      onRefresh?.()
-    } catch (err) {
-      alert(`Failed to toggle key: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
-
-  function handleDeleteKey(key: APIKey) {
-    confirmModal = {
-      title: 'Delete API Key',
-      message: `Are you sure you want to permanently delete API key "${key.name || 'API Key'}"?`,
-      confirmLabel: 'Delete Key',
-      isDanger: true,
-      onConfirm: async () => {
-        confirmModal = null
-        try {
-          await api.deleteApiKey(key.id)
-          localKeys = localKeys.filter((k) => k.id !== key.id)
-          onRefresh?.()
-        } catch (err) {
-          alert(`Failed to delete key: ${err instanceof Error ? err.message : String(err)}`)
-        }
-      }
-    }
-  }
-
   const tunnelValueProps = [
     { icon: 'public', title: 'Access Anywhere', desc: 'Use your API from any network' },
     { icon: 'group', title: 'Share Endpoint', desc: 'Share URL with team members' },
@@ -579,24 +385,6 @@
     { icon: 'lock', title: 'Encrypted', desc: 'End-to-end TLS via Cloudflare' },
   ]
 </script>
-
-{#snippet providerPicker(value: string, onToggle: (id: string) => void)}
-  <div class="max-h-36 overflow-y-auto rounded-lg border border-border bg-bg p-2 flex flex-wrap gap-1.5">
-    {#each PROVIDER_CATALOG as p (p.id)}
-      {@const active = splitProviders(value).includes(p.id)}
-      <button
-        type="button"
-        onclick={() => onToggle(p.id)}
-        class="px-2 py-0.5 rounded-full text-[10px] font-code border cursor-pointer transition {active
-          ? 'bg-brand-500/15 text-brand-400 border-brand-500/40'
-          : 'bg-surface-2 text-text-subtle border-border hover:text-text-main'}"
-        title={p.name}
-      >
-        {p.id}
-      </button>
-    {/each}
-  </div>
-{/snippet}
 
 <div class="flex flex-col gap-6">
   <!-- TOP SECTION: API Endpoint Card -->
@@ -909,196 +697,10 @@
     {/if}
   </Card>
 
-  <!-- BOTTOM SECTION: API Keys Card -->
-  <Card padding="md" class="space-y-4">
-    <!-- Header with Create Key button -->
-    <div class="flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <div class="p-2 rounded-lg bg-brand-500/10 text-brand-500">
-          <Key class="w-5 h-5" />
-        </div>
-        <div>
-          <h2 class="text-lg font-semibold text-text-main flex items-center gap-2">
-            API Keys
-          </h2>
-          <p class="text-xs text-text-muted">Manage Bearer tokens for clients connecting to this endpoint</p>
-        </div>
-      </div>
-
-      <button
-        type="button"
-        onclick={() => (isCreateKeyOpen = true)}
-        class="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 text-white font-semibold text-xs shadow-md shadow-brand-500/20 transition cursor-pointer"
-      >
-        <Plus class="w-4 h-4" />
-        <span>Create Key</span>
-      </button>
-    </div>
-
-    <!-- Master Switch: Require API key -->
-    <div class="flex items-center justify-between pb-4 pt-2 border-b border-border">
-      <div class="space-y-0.5 pr-4">
-        <p class="font-medium text-sm text-text-main">Require API key</p>
-        <p class="text-xs text-text-muted">Requests without a valid key will be rejected</p>
-      </div>
-      <Toggle
-        checked={requireApiKey}
-        label="Require API key"
-        onChange={toggleRequireApiKey}
-      />
-    </div>
-
-    <!-- Warning if disabled -->
-    {#if !requireApiKey}
-      <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 text-xs">
-        <AlertTriangle class="w-4 h-4 shrink-0 text-amber-500" />
-        <span>Endpoint is exposed without an API key. Anyone who can reach this host can make requests.</span>
-      </div>
-    {/if}
-
-    <!-- Keys List / Table -->
-    {#if localKeys.length === 0}
-      <div class="text-center py-12 space-y-3">
-        <div class="inline-flex items-center justify-center w-14 h-14 rounded-full bg-brand-500/10 text-brand-500">
-          <Key class="w-7 h-7" />
-        </div>
-        <div class="space-y-1">
-          <p class="text-text-main font-medium text-sm">No API keys yet</p>
-          <p class="text-xs text-text-muted">Create your first API key to get started</p>
-        </div>
-        <button
-          type="button"
-          onclick={() => (isCreateKeyOpen = true)}
-          class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 text-white font-semibold text-xs shadow-sm transition cursor-pointer"
-        >
-          <Plus class="w-4 h-4" />
-          <span>Create Key</span>
-        </button>
-      </div>
-    {:else}
-      <div class="flex flex-col divide-y divide-border/40">
-        {#each localKeys as key (key.id)}
-          {@const isShown = shownKeyIds.has(key.id)}
-          {@const isActive = key.isActive === 1 || key.isActive === true}
-          {@const limit = key.maxConcurrent ?? 0}
-          <div class="group flex items-center justify-between py-3.5 transition {isActive ? '' : 'opacity-60'}">
-            <div class="flex-1 min-w-0 pr-4">
-              <p class="text-sm font-semibold text-text-main">{key.name || 'Default Key'}</p>
-              <div class="flex items-center gap-2 mt-1">
-                <code class="text-xs text-text-muted font-mono bg-surface-2 px-2 py-0.5 rounded border border-border/50 select-all">
-                  {isShown ? key.key : maskKey(key.key)}
-                </code>
-
-                <!-- Eye Toggle -->
-                <button
-                  type="button"
-                  onclick={() => toggleShowKey(key.id)}
-                  class="p-1 hover:bg-surface-2 rounded text-text-muted hover:text-text-main transition-colors cursor-pointer"
-                  title={isShown ? 'Hide key' : 'Show key'}
-                >
-                  {#if isShown}
-                    <EyeOff class="w-3.5 h-3.5" />
-                  {:else}
-                    <Eye class="w-3.5 h-3.5" />
-                  {/if}
-                </button>
-
-                <!-- Copy -->
-                <button
-                  type="button"
-                  onclick={() => copy(key.key, key.id)}
-                  class="p-1 hover:bg-surface-2 rounded text-text-muted hover:text-brand-500 transition-colors cursor-pointer"
-                  title="Copy key"
-                >
-                  {#if copiedId === key.id}
-                    <Check class="w-3.5 h-3.5 text-success" />
-                  {:else}
-                    <Copy class="w-3.5 h-3.5" />
-                  {/if}
-                </button>
-              </div>
-
-              <div class="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-text-subtle">
-                <span>Created {key.createdAt ? new Date(key.createdAt).toLocaleDateString() : '—'}</span>
-                {#if !isActive}
-                  <span>•</span>
-                  <span class="text-amber-500 font-medium">Paused</span>
-                {/if}
-                <span>•</span>
-                {#if splitProviders(key.allowedProviders).length === 0}
-                  <span class="text-text-subtle text-[11px]">All providers</span>
-                {:else}
-                  <div class="inline-flex flex-wrap gap-1 items-center">
-                    {#each splitProviders(key.allowedProviders) as prov}
-                      <span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-info/10 text-info border border-info/25">
-                        {prov}
-                      </span>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            </div>
-
-            <div class="flex items-center gap-2 shrink-0">
-              <!-- Rotate Key Button -->
-              <button
-                type="button"
-                onclick={() => handleRotateKey(key)}
-                disabled={rotatingKeyId === key.id}
-                class="p-1.5 rounded-lg border border-border bg-surface-2 text-text-subtle hover:text-brand-500 transition cursor-pointer"
-                title="Rotate key (generate new secret)"
-              >
-                <RefreshCw class="w-3.5 h-3.5 {rotatingKeyId === key.id ? 'animate-spin text-brand-500' : ''}" />
-              </button>
-
-              <!-- Concurrency Limit Badge & Quick Edit -->
-              <button
-                type="button"
-                onclick={() => openEditLimit(key)}
-                class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold border transition cursor-pointer {limit > 0
-                  ? 'bg-brand-500/10 text-brand-400 border-brand-500/25 hover:bg-brand-500/20'
-                  : 'bg-surface-2 text-text-subtle border-border hover:text-text-main hover:bg-surface-3'}"
-                title="Edit Concurrent Limit"
-              >
-                <Users class="w-3.5 h-3.5" />
-                <span>{limit > 0 ? `Max ${limit}` : 'Unlimited'}</span>
-              </button>
-
-              <!-- Edit Allowed Providers Button -->
-              <button
-                type="button"
-                onclick={() => openEditProviders(key)}
-                class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold border transition cursor-pointer bg-surface-2 text-text-subtle border-border hover:text-text-main hover:bg-surface-3"
-                title="Restrict Allowed Providers"
-              >
-                <ShieldCheck class="w-3.5 h-3.5" />
-                <span>Providers</span>
-              </button>
-
-              <!-- Active Switch -->
-              <Toggle
-                checked={isActive}
-                size="sm"
-                label={isActive ? 'Pause key' : 'Resume key'}
-                title={isActive ? 'Pause key' : 'Resume key'}
-                onChange={(nextActive) => handleToggleKey(key, nextActive)}
-              />
-
-              <!-- Delete Button -->
-              <button
-                type="button"
-                onclick={() => handleDeleteKey(key)}
-                class="p-2 hover:bg-danger/10 rounded-lg text-text-subtle hover:text-red-600 dark:hover:text-red-400 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all cursor-pointer"
-                title="Delete key"
-              >
-                <Trash2 class="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        {/each}
-      </div>
-    {/if}
-  </Card>
+  <!-- BOTTOM SECTION: API Keys. The key list lives here (issue #199) so the
+       endpoint a client calls and the token that authorises it are managed in
+       one place; the standalone "API Keys" tab was a duplicate of this card. -->
+  <ApiKeysTable {apiKeys} onRefresh={onRefresh} onCreate={() => (isCreateKeyOpen = true)} />
 </div>
 
 <!-- MODAL: Create API Key -->
@@ -1131,40 +733,6 @@
             placeholder="Production Key"
             class="w-full px-3 py-2 rounded-lg bg-bg border border-border text-sm text-text-main focus:outline-none focus:border-brand-500"
           />
-        </div>
-
-        <div class="space-y-1">
-          <label for="key-limit-input" class="block text-xs font-semibold text-text-muted">
-            Max Concurrent Sessions
-          </label>
-          <input
-            id="key-limit-input"
-            type="number"
-            min="0"
-            bind:value={newKeyMaxConcurrent}
-            placeholder="0 (Unlimited)"
-            class="w-full px-3 py-2 rounded-lg bg-bg border border-border text-sm text-text-main focus:outline-none focus:border-brand-500"
-          />
-          <span class="text-[10px] text-text-subtle block">
-            0 or leave empty for unlimited concurrent requests.
-          </span>
-        </div>
-
-        <div class="space-y-1">
-          <label for="key-providers-input" class="block text-xs font-semibold text-text-muted">
-            Allowed Providers (optional)
-          </label>
-          <input
-            id="key-providers-input"
-            type="text"
-            placeholder="e.g. openai,anthropic,gemini (empty for all)"
-            bind:value={newKeyAllowedProviders}
-            class="w-full px-3 py-2 rounded-lg bg-bg border border-border text-sm text-text-main focus:outline-none focus:border-brand-500 mb-2"
-          />
-          {@render providerPicker(newKeyAllowedProviders, (id) => { newKeyAllowedProviders = toggleProviderIn(newKeyAllowedProviders, id) })}
-          <span class="text-[10px] text-text-subtle block">
-            Click provider chips to toggle, or type comma-separated provider IDs. Empty allows all providers.
-          </span>
         </div>
 
         <div class="flex gap-2 pt-2">
@@ -1207,7 +775,8 @@
       <div class="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 space-y-1 text-amber-700 dark:text-amber-300">
         <p class="text-sm font-bold">Save this key now!</p>
         <p class="text-xs leading-relaxed">
-          This is the only time you will see this key. Store it securely.
+          This key can be revealed and copied again from the table below, but treat it as a
+          credential: anyone who reaches this dashboard can read it.
         </p>
       </div>
 
@@ -1240,47 +809,6 @@
           class="w-full py-2 px-4 rounded-lg bg-brand-500 hover:bg-brand-600 text-white font-semibold text-xs transition cursor-pointer"
         >
           Done
-        </button>
-      </div>
-    </div>
-  </div>
-{/if}
-
-<!-- MODAL: Confirmation (Delete / Pause) -->
-{#if confirmModal}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-    <div class="w-full max-w-md p-6 rounded-2xl bg-surface border border-border shadow-2xl space-y-4">
-      <div class="flex items-center justify-between pb-2 border-b border-border">
-        <h3 class="text-base font-bold text-text-main">{confirmModal.title}</h3>
-        <button
-          type="button"
-          onclick={() => (confirmModal = null)}
-          class="text-text-muted hover:text-text-main cursor-pointer"
-        >
-          <X class="w-4 h-4" />
-        </button>
-      </div>
-
-      <p class="text-sm text-text-muted leading-relaxed">
-        {confirmModal.message}
-      </p>
-
-      <div class="flex gap-2 pt-2">
-        <button
-          type="button"
-          onclick={confirmModal.onConfirm}
-          class="flex-1 py-2 px-4 rounded-lg text-white font-semibold text-xs transition cursor-pointer {confirmModal.isDanger
-            ? 'bg-danger hover:bg-danger/90'
-            : 'bg-brand-500 hover:bg-brand-600'}"
-        >
-          {confirmModal.confirmLabel || 'Confirm'}
-        </button>
-        <button
-          type="button"
-          onclick={() => (confirmModal = null)}
-          class="flex-1 py-2 px-4 rounded-lg bg-surface-2 hover:bg-surface-3 text-text-main font-semibold text-xs transition cursor-pointer border border-border"
-        >
-          Cancel
         </button>
       </div>
     </div>
@@ -1475,138 +1003,6 @@
           Cancel
         </button>
       </div>
-    </div>
-  </div>
-{/if}
-
-<!-- MODAL: Edit Allowed Providers -->
-{#if isEditProvidersOpen && editingProvidersKey}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-    <div class="w-full max-w-md p-6 rounded-2xl bg-surface border border-border shadow-2xl space-y-4">
-      <div class="flex items-center justify-between pb-3 border-b border-border">
-        <h3 class="text-base font-bold text-text-main">Restrict Allowed Providers</h3>
-        <button
-          type="button"
-          onclick={() => {
-            isEditProvidersOpen = false
-            editingProvidersKey = null
-          }}
-          class="text-text-muted hover:text-text-main cursor-pointer"
-        >
-          <X class="w-4 h-4" />
-        </button>
-      </div>
-
-      <form onsubmit={handleSaveProviders} class="space-y-4">
-        <div>
-          <span class="block text-text-subtle text-xs mb-1">Token Label:</span>
-          <div class="font-bold text-text-main text-sm mb-2">{editingProvidersKey.name || 'API Key'}</div>
-          <label for="edit-key-providers" class="block text-xs font-semibold text-text-muted mb-1">
-            Allowed Providers
-          </label>
-          <input
-            id="edit-key-providers"
-            type="text"
-            placeholder="e.g. openai,anthropic,gemini (empty for all)"
-            bind:value={editProvidersVal}
-            class="w-full px-3 py-2 rounded-lg bg-bg border border-border text-sm text-text-main focus:outline-none focus:border-brand-500 mb-2"
-          />
-          {@render providerPicker(editProvidersVal, (id) => { editProvidersVal = toggleProviderIn(editProvidersVal, id) })}
-          <span class="text-[10px] text-text-subtle block mt-1">
-            Click provider chips to toggle. Leave empty to allow access to all providers.
-          </span>
-        </div>
-
-        <div class="flex gap-2 pt-2">
-          <button
-            type="submit"
-            disabled={isSavingProviders}
-            class="flex-1 py-2 px-4 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-white font-semibold text-xs transition cursor-pointer flex items-center justify-center gap-1.5"
-          >
-            {#if isSavingProviders}
-              <Loader2 class="w-3.5 h-3.5 animate-spin" />
-              <span>Saving...</span>
-            {:else}
-              <Check class="w-3.5 h-3.5" />
-              <span>Save Providers</span>
-            {/if}
-          </button>
-          <button
-            type="button"
-            onclick={() => {
-              isEditProvidersOpen = false
-              editingProvidersKey = null
-            }}
-            class="flex-1 py-2 px-4 rounded-lg bg-surface-2 hover:bg-surface-3 text-text-main font-semibold text-xs transition cursor-pointer border border-border"
-          >
-            Cancel
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-{/if}
-
-<!-- MODAL: Edit Concurrency Limit -->
-{#if isEditLimitOpen && editingKey}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-    <div class="w-full max-w-sm p-6 rounded-2xl bg-surface border border-border shadow-2xl space-y-4">
-      <div class="flex items-center justify-between pb-3 border-b border-border">
-        <h3 class="text-base font-bold text-text-main">Set Concurrency Limit</h3>
-        <button
-          type="button"
-          onclick={() => {
-            isEditLimitOpen = false
-            editingKey = null
-          }}
-          class="text-text-muted hover:text-text-main cursor-pointer"
-        >
-          <X class="w-4 h-4" />
-        </button>
-      </div>
-
-      <form onsubmit={handleSaveLimit} class="space-y-3 font-body text-xs">
-        <div>
-          <span class="block text-text-subtle text-[11px] mb-1 font-body">Token Label:</span>
-          <div class="font-bold text-text-main mb-2 font-headline">{editingKey.name || 'API Key'}</div>
-          <label for="edit-key-limit-endpoint" class="block font-semibold text-text-muted mb-1">
-            Max Concurrent Sessions
-          </label>
-          <input
-            id="edit-key-limit-endpoint"
-            type="number"
-            min="0"
-            bind:value={editLimitVal}
-            class="w-full bg-surface-2 border border-border rounded-lg px-3 py-2 font-code text-xs text-text-main focus:outline-none focus:border-brand-500"
-          />
-          <span class="text-[10px] text-text-subtle mt-1 block">
-            Set to 0 for unlimited concurrent requests.
-          </span>
-        </div>
-
-        <div class="flex justify-end gap-2 pt-3 border-t border-border">
-          <button
-            type="button"
-            onclick={() => {
-              isEditLimitOpen = false
-              editingKey = null
-            }}
-            class="px-4 py-2 rounded-lg text-text-muted hover:text-text-main cursor-pointer"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={isSavingLimit}
-            class="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-white font-bold shadow-md shadow-brand-500/25 cursor-pointer"
-          >
-            {#if isSavingLimit}
-              <Loader2 class="w-3.5 h-3.5 animate-spin" />
-            {/if}
-            <span>Save Limit</span>
-          </button>
-        </div>
-      </form>
     </div>
   </div>
 {/if}

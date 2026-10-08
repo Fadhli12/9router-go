@@ -9,18 +9,21 @@ import (
 	"github.com/google/uuid"
 
 	"9router/proxy/internal/concurrency"
+	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/keikey"
 	"9router/proxy/internal/log"
+	"9router/proxy/internal/middleware"
 	"9router/proxy/internal/models"
 )
 
 // HandleGetApiKeys handles GET /api/keys.
 //
-// F-6: client keys are stored as argon2id verifiers, so this read path can
-// only ever return the masked display value — not even a fully authenticated
-// dashboard caller (session cookie, CLI token, or requireLogin=false) gets
-// the secret back. The full value is returned once, by HandleCreateApiKey.
+// Issue #199 makes the secret readable again so the dashboard can reveal and
+// copy it, which reverses the F-6 contract. That reversal is scoped to
+// dashboard credentials: a caller holding only an engine client key — the
+// credential handed to Cursor or Claude Code — still gets the masked value, so
+// one leaked key cannot dump the whole key set.
 //
 // Each key also carries `activeCount`, its current in-flight request count
 // from the process-local concurrency limiter (0 when unlimited or idle).
@@ -31,6 +34,7 @@ func (h *DashboardHandler) HandleGetApiKeys(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	active := concurrency.GlobalLimiter.GetActiveCounts()
+	privileged := middleware.CallerIsDashboardPrivileged(h.Repo, r)
 	sanitized := make([]map[string]any, 0, len(keys))
 	for _, k := range keys {
 		if k == nil {
@@ -47,7 +51,7 @@ func (h *DashboardHandler) HandleGetApiKeys(w http.ResponseWriter, r *http.Reque
 			allowedProviders = *k.AllowedProviders
 		}
 		sanitized = append(sanitized, map[string]any{
-			"id": k.ID, "key": apiKeyDisplay(k), "keyDisplay": apiKeyDisplay(k), "name": k.Name,
+			"id": k.ID, "key": apiKeySecretFor(k, privileged), "keyDisplay": apiKeyDisplay(k), "name": k.Name,
 			"machineId": k.MachineID, "isActive": k.IsActive, "createdAt": k.CreatedAt,
 			"maxConcurrent":    k.MaxConcurrent,
 			"activeCount":      activeCount,
@@ -76,8 +80,19 @@ func (h *DashboardHandler) HandleKeysConcurrency(w http.ResponseWriter, r *http.
 	})
 }
 
-// apiKeyDisplay returns the masked value for a key. Hashed rows keep it in
-// keyDisplay; legacy rows that have not been hashed yet are masked on the fly.
+// apiKeySecretFor returns the stored secret to a dashboard credential and the
+// masked value to everyone else. Rows written before issue #199 hold only an
+// argon2id verifier, so their plaintext is unrecoverable and the caller gets an
+// empty string; the row falls back to its masked display in the UI.
+func apiKeySecretFor(k *models.APIKey, privileged bool) string {
+	if !privileged || db.IsHashedKeyRow(k) {
+		return ""
+	}
+	return k.Key
+}
+
+// apiKeyDisplay returns the masked value for a key, falling back to masking
+// the plaintext on the fly for a row that never recorded one.
 func apiKeyDisplay(k *models.APIKey) string {
 	if k.KeyDisplay != nil && *k.KeyDisplay != "" {
 		return *k.KeyDisplay
@@ -86,7 +101,7 @@ func apiKeyDisplay(k *models.APIKey) string {
 }
 
 // maskClientKey shows the first/last few chars of a client key (dashboard
-// display only); the full value is returned once at creation.
+// display only).
 func maskClientKey(key string) string {
 	if len(key) <= 12 {
 		return "***"
@@ -148,18 +163,15 @@ func (h *DashboardHandler) HandleCreateApiKey(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// F-6: derive the argon2id verifier and blank the plaintext column before
-	// responding. The full value is still returned here, exactly once — the
-	// dashboard's media example cards use it as a Bearer credential right
-	// after creation.
-	hash, err := keikey.Hash(req.Key)
-	if err != nil {
-		log.Error("apikeys", "hash api key failed", "error", err)
-		handlerutil.WriteJSONError(w, http.StatusInternalServerError, "failed to secure api key")
-		return
-	}
-	if err := h.Repo.HashApiKeyRow(req.ID, hash, keikey.LookupHash(req.Key), keikey.Mask(req.Key)); err != nil {
-		log.Error("apikeys", "store api key hash failed", "error", err)
+	// The secret is stored in the clear so the dashboard can reveal and copy
+	// it again later (issue #199). This reopens the F-6/DB-02 trade-off — a
+	// database dump exposes every client key — but an operator who cannot
+	// read a key back cannot use the row they just created either.
+
+	// The masked value is kept alongside it: the list still renders a compact
+	// identifier, and a row that predates this change has no plaintext to show.
+	if err := h.Repo.SetApiKeyDisplay(req.ID, keikey.Mask(req.Key)); err != nil {
+		log.Error("apikeys", "store api key display failed", "error", err)
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -173,11 +185,9 @@ func (h *DashboardHandler) HandleCreateApiKey(w http.ResponseWriter, r *http.Req
 
 // HandleRotateApiKey handles POST /api/keys/{id}/rotate.
 //
-// F-6 removes "reveal", so rotation is the only way an operator can replace a
-// leaked key: the old secret is invalidated at once and the new one is
-// returned exactly once, the same contract as creation. Without it a key that
-// leaks can only be deleted, which is the wrong tool when the caller still
-// needs the row — its policy, its usage history, its allowlist.
+// Rotation mints a replacement secret in place: the row keeps its id, policy,
+// usage history and allowlist, so a leaked key can be replaced without
+// deleting the record.
 func (h *DashboardHandler) HandleRotateApiKey(w http.ResponseWriter, r *http.Request) {
 	id := getURLParam(r, "id")
 	if id == "" {
@@ -195,14 +205,8 @@ func (h *DashboardHandler) HandleRotateApiKey(w http.ResponseWriter, r *http.Req
 	}
 
 	plaintext := "sk-" + strings.ReplaceAll(uuid.New().String(), "-", "")
-	hash, err := keikey.Hash(plaintext)
-	if err != nil {
-		log.Error("apikeys", "rotate: hash failed", "error", err)
-		handlerutil.WriteJSONError(w, http.StatusInternalServerError, "failed to secure api key")
-		return
-	}
-	if err := h.Repo.HashApiKeyRow(id, hash, keikey.LookupHash(plaintext), keikey.Mask(plaintext)); err != nil {
-		log.Error("apikeys", "rotate: store hash failed", "error", err)
+	if err := h.Repo.RotateApiKeySecret(id, plaintext, keikey.Mask(plaintext)); err != nil {
+		log.Error("apikeys", "rotate: store secret failed", "error", err)
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
