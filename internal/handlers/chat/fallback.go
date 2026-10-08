@@ -145,6 +145,12 @@ func (h *ChatHandler) handleAccountFallback(
 			// Classify error to get dynamic cooldown
 			classification := providers.ClassifyError(ue.StatusCode, errorText, currentBackoffLevel)
 			cooldownSec := retryableCooldownSec(ue.StatusCode, time.Duration(classification.CooldownMs)*time.Millisecond, ue)
+			// A 402 is a spent quota/billing window, not a transient blip. Kiro
+			// resets its monthly request count on the 1st, so park the account
+			// until the next month instead of letting the 2-hour cap re-pick it.
+			if ue.StatusCode == http.StatusPaymentRequired {
+				cooldownSec = monthlyQuotaCooldownSec(time.Now())
+			}
 			errMsg := errorText
 			if errMsg == "" {
 				errMsg = fmt.Sprintf("%d upstream error", ue.StatusCode)

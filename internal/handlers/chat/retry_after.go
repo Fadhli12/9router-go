@@ -298,3 +298,13 @@ func ceilSeconds(d time.Duration) int {
 	}
 	return int((d + time.Second - 1) / time.Second)
 }
+
+// monthlyQuotaCooldownSec returns the seconds until the first day of the next
+// month. Kiro resets its monthly request quota on the 1st of every month, so an
+// account that reports 402 "You have reached the limit" (MONTHLY_REQUEST_COUNT)
+// must stay parked until then — a 2-minute or 2-hour cooldown would just
+// re-pick the same spent account and burn a request on every sweep.
+func monthlyQuotaCooldownSec(now time.Time) int {
+	next := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location())
+	return ceilSeconds(next.Sub(now))
+}

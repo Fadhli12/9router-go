@@ -30,8 +30,9 @@ const TransientCooldownMs = 30 * 1000 // 30 seconds
 
 // cooldown durations (ms) used by ERROR_RULES
 const (
-	cooldownLong  = 2 * 60 * 1000 // 2 minutes
-	cooldownShort = 5 * 1000      // 5 seconds
+	cooldownLong    = 2 * 60 * 1000       // 2 minutes
+	cooldownPayment = 60 * 60 * 1000      // 1 hour (quota/billing exhausted, e.g. Kiro MONTHLY_REQUEST_COUNT)
+	cooldownShort   = 5 * 1000            // 5 seconds
 )
 
 // ErrorRules is the ordered list of error classification rules, matching Next.js ERROR_RULES.
@@ -53,7 +54,7 @@ var ErrorRules = []ErrorRule{
 
 	// --- Status-based rules (fallback when text doesn't match) ---
 	{Status: 401, CooldownMs: cooldownLong},
-	{Status: 402, CooldownMs: cooldownLong},
+	{Status: 402, CooldownMs: cooldownPayment},
 	{Status: 403, CooldownMs: cooldownLong},
 	{Status: 404, CooldownMs: cooldownLong},
 	{Status: 408, Backoff: true},

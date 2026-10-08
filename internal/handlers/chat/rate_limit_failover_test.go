@@ -165,6 +165,15 @@ func TestComboRateLimitFailover(t *testing.T) {
 			failFirstHits: 1, wantHits: 2, wantStatus: http.StatusOK,
 		},
 		{
+			// Kiro reports a spent monthly quota as 402 "You have reached the
+			// limit". It must fail over to the next account exactly like a 429,
+			// not fall through to a cheaper fallback model.
+			name:     "402 spent quota fails over to the next account",
+			accounts: 2, status: http.StatusPaymentRequired,
+			body:          func() string { return `{"message":"You have reached the limit.","reason":"MONTHLY_REQUEST_COUNT"}` },
+			failFirstHits: 1, wantHits: 2, wantStatus: http.StatusOK,
+		},
+		{
 			name:     "429 retryinfo window is not retried once the pool is spent",
 			accounts: 2, status: http.StatusTooManyRequests,
 			body:          func() string { return retryInfoBody("120s") },

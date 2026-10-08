@@ -80,3 +80,24 @@ func TestRetryableCooldownSec_Non429Unchanged(t *testing.T) {
 		t.Errorf("non-429 cooldown %d unexpectedly reached the 429 floor %d", got, minRateLimitCooldownSec)
 	}
 }
+
+func TestMonthlyQuotaCooldownSec(t *testing.T) {
+	// Jan 15 -> Feb 1. The exact span depends on the month, so pin the two
+	// boundaries rather than a hard-coded second count.
+	jan := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	got := monthlyQuotaCooldownSec(jan)
+	feb1 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	want := int(feb1.Sub(jan) / time.Second)
+	if got != want {
+		t.Errorf("monthlyQuotaCooldownSec(%v) = %d, want %d", jan, got, want)
+	}
+
+	// Dec 31 -> Jan 1 (year rollover).
+	dec := time.Date(2026, 12, 31, 23, 0, 0, 0, time.UTC)
+	got = monthlyQuotaCooldownSec(dec)
+	jan1 := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	want = int(jan1.Sub(dec) / time.Second)
+	if got != want {
+		t.Errorf("monthlyQuotaCooldownSec(%v) = %d, want %d", dec, got, want)
+	}
+}
