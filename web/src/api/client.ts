@@ -872,11 +872,6 @@ return conns.map(normalizeConnection)
       body: isActive === undefined ? undefined : JSON.stringify({ isActive }),
     }),
 
-  /** Mints a replacement secret, keeping the row's id, policy and history. */
-  rotateApiKey: (id: string) =>
-    request<{ status: string; id: string; key: string }>(`/api/keys/${encodeURIComponent(id)}/rotate`, {
-      method: 'POST',
-    }),
   setApiKeyActive: (id: string, isActive: boolean) =>
     request<{ status: string; id: string; isActive: boolean }>(
       `/api/keys/${encodeURIComponent(id)}/toggle`,
