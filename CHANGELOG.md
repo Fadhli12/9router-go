@@ -88,6 +88,20 @@
   20 pass / 0 fail setelah binary dibangun dan Chromium terinstal;
   `bun run ratchet:svelte` → 0 unresolved identifier, 83 error = baseline.
 
+### 🐛 fix(dashboard): "Check All Models" hanya menguji model yang aktif (Closes #230)
+
+- **Latar belakang**: report #230 — operator menonaktifkan sebuah model, tetapi
+  tombol **Check All Models** tetap mem-probe model itu.
+- **Akibat**: dua-duanya. Request ke upstream terbuang untuk model yang
+  sengaja dimatikan, dan verdict probe-nya tidak punya baris di tabel, karena
+  tabel merender `visibleModels`. Hasilnya verdict yang tidak terlihat dan
+  tidak bisa dibersihkan dari layar.
+- **Perbaikan**: `handleCheckAllModels` menyapu `visibleModels`, dan kondisi
+  serta label tombol ikut menghitung `visibleModels.length`.
+- **Verifikasi**: `bun test src scripts` → 321 pass / 0 fail; `bun test e2e/` →
+  20 pass / 0 fail; `bun run build` bersih; `bun run ratchet:svelte` →
+  0 unresolved identifier, 83 error = baseline.
+
 ### 🐛 fix(models): /api/models/test read-only terhadap cooldown produksi agar sweep tidak memicu cascade (#220)
 
 - **Latar belakang**: `POST /api/models/test` (tombol Test dan sweep "Check All Models")

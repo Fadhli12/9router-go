@@ -2570,7 +2570,10 @@
     modelTestStatuses = {}
     modelTestErrors = {}
     checkAllSummary = null
-    await runModelSweep(allAvailableModels.map((m) => m.id))
+    // visibleModels, not allAvailableModels: the table below renders exactly
+    // this list, so probing a disabled model produced a verdict no row could
+    // show and spent an upstream request on a model the operator switched off.
+    await runModelSweep(visibleModels.map((m) => m.id))
   }
 
   // A blocked model was never asked anything, so re-testing only those is
@@ -3840,7 +3843,7 @@
         </button>
       {/if}
 
-      {#if allAvailableModels.length > 0}
+      {#if visibleModels.length > 0}
         <button
           type="button"
           onclick={handleCheckAllModels}
@@ -3851,7 +3854,7 @@
           <span class="material-symbols-outlined text-sm">{isCheckingAll ? 'progress_activity' : 'troubleshoot'}</span>
           {isCheckingAll
             ? `Checking ${checkAllProgress.done}/${checkAllProgress.total}...`
-            : `Check All Models (${allAvailableModels.length})`}
+            : `Check All Models (${visibleModels.length})`}
         </button>
       {/if}
 
