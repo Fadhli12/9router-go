@@ -60,6 +60,7 @@
   import EditCompatibleNodeModal from './EditCompatibleNodeModal.svelte'
   import FreebuffSessionBanner from './FreebuffSessionBanner.svelte'
   import ProviderIcon from './ProviderIcon.svelte'
+  import Modal from '../../lib/ui/Modal.svelte'
 
   interface Props {
     providerId: string
@@ -314,6 +315,8 @@
   // Modals state
   let showRiskNoticeModal = $state(false)
   let showOAuthModal = $state(false)
+  let showErrorModal = $state(false)
+  let errorModalText = $state('')
   let oauthAuthUrl = $state('')
   let copiedAuthUrl = $state(false)
   let callbackInput = $state('')
@@ -3222,9 +3225,22 @@
                       {/if}
                       <!-- Last error tooltip -->
                       {#if lastErr && lastErr !== 'Provider test not supported'}
-                        <span class="max-w-full truncate text-xs text-red-500 sm:max-w-[300px]" title={lastErr}>
-                          {lastErr.length > 50 ? lastErr.slice(0, 50) + '...' : lastErr}
-                        </span>
+                        <button
+                          type="button"
+                          class="inline-flex items-center gap-1.5 max-w-full truncate text-xs text-red-500 hover:text-red-600 sm:max-w-[300px] cursor-pointer text-left group"
+                          title={lastErr}
+                          onclick={() => {
+                            errorModalText = lastErr
+                            showErrorModal = true
+                          }}
+                        >
+                          <span class="truncate group-hover:underline">
+                            {lastErr.length > 50 ? lastErr.slice(0, 50) + '...' : lastErr}
+                          </span>
+                          <span class="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 group-hover:bg-red-500/20 shrink-0">
+                            Show
+                          </span>
+                        </button>
                       {/if}
 
                       <!-- Priority tag -->
@@ -4458,3 +4474,29 @@
   onSubmit={handleAddKeyConnection}
   onBulkDone={onRefresh}
 />
+
+
+<!-- 7. Connection Error Details Modal -->
+<Modal
+  isOpen={showErrorModal}
+  title="Connection Error Details"
+  size="lg"
+  onClose={() => {
+    showErrorModal = false
+  }}
+>
+  <div class="flex flex-col gap-4">
+    <div class="rounded-lg bg-surface-2 p-3 border border-border-subtle max-h-[60vh] overflow-y-auto custom-scrollbar">
+      <pre class="font-mono text-xs text-red-500 whitespace-pre-wrap break-all select-all">{errorModalText}</pre>
+    </div>
+    <div class="flex justify-end gap-2">
+      <button
+        type="button"
+        onclick={() => (showErrorModal = false)}
+        class="px-3 py-1.5 text-xs font-semibold rounded-[8px] bg-surface-2 hover:bg-surface-3 text-text-main border border-border cursor-pointer transition-colors"
+      >
+        Close
+      </button>
+    </div>
+  </div>
+</Modal>
