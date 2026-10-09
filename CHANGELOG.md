@@ -68,6 +68,26 @@
   - **Bukti**: mengembalikan `TopBar.svelte` ke kondisi pra-#224 membuat **6 dari
     10 test** di file itu gagal, sementara keempat gate lama tetap hijau.
 
+### 🐛 fix(ci): `bun test` ikut menjalankan suite E2E sebelum binary ada
+
+- **Gejala**: job `test` gagal dengan 6 fail + 3 unhandled error, padahal 325 test
+  lain lulus. Baris pertama log sudah menyebut penyebabnya:
+  `ENOENT ... posix_spawn '/home/runner/work/9router-go/9router-go/9router-go'`.
+- **Akar masalah**: step `Test web` memakai `bun test` polos, yang ikut memindai
+  `web/e2e/*.test.ts`. Suite itu boot binary gateway asli, yang baru dibangun
+  **dua step kemudian** di `Build binary for E2E`. Semua file E2E mati di
+  `beforeAll`, lalu `afterAll` menabrak `app.stop()` pada handle yang belum
+  terisi — satu binary hilang terbaca sebagai enam kegagalan.
+- **Perbaikan**: step unit di-scope ke `bun test src scripts`, sehingga unit test
+  tidak lagi bergantung pada biner yang belum ada. `web/e2e` tetap punya
+  jalurnya sendiri lewat `bun run e2e`, setelah binary dan Chromium siap.
+- **Diagnostik**: `web/e2e/harness.ts` kini mengecek keberadaan binary sebelum
+  spawn, jadi lingkungan yang salah konfigurasi menyebut dirinya sendiri
+  (path biner yang dicari) alih-alih muncul sebagai hook timeout.
+- **Bukti**: `bun test src scripts` → 321 pass / 0 fail; `bun test e2e/` →
+  20 pass / 0 fail setelah binary dibangun dan Chromium terinstal;
+  `bun run ratchet:svelte` → 0 unresolved identifier, 83 error = baseline.
+
 ### 🐛 fix(models): /api/models/test read-only terhadap cooldown produksi agar sweep tidak memicu cascade (#220)
 
 - **Latar belakang**: `POST /api/models/test` (tombol Test dan sweep "Check All Models")

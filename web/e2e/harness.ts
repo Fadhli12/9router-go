@@ -14,7 +14,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -27,6 +27,9 @@ const REPO_ROOT = resolve(import.meta.dirname, '..', '..')
 // The release build appends .exe on Windows and nothing elsewhere; CI runs
 // this suite on ubuntu, so the name has to follow the platform or the suite
 // only ever works on the machine that wrote it.
+// Checked before the spawn, in startDashboard: bun reports a rejected beforeAll
+// as a 5s hook timeout followed by an afterAll crash on the undefined handle,
+// so one missing file used to read as six failures.
 const BINARY = join(REPO_ROOT, process.platform === 'win32' ? '9router-go.exe' : '9router-go')
 
 export interface Dashboard {
@@ -49,6 +52,10 @@ export interface Dashboard {
  * the loser's `afterAll` would close a browser the winner was still driving.
  */
 export async function startDashboard(port: number): Promise<Dashboard> {
+  if (!existsSync(BINARY)) {
+    throw new Error(`gateway binary not found at ${BINARY}; build it before running the e2e suite`)
+  }
+
   const dataDir = mkdtempSync(join(tmpdir(), '9router-e2e-'))
   const server = spawn(BINARY, [], {
     cwd: REPO_ROOT,
