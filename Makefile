@@ -39,7 +39,7 @@ AUTO_UPDATE ?= false
 # single-quoted form passed a quoted symbol name straight to the linker.
 LDFLAGS := -s -w -X "9router/proxy/internal/updater.CurrentVersion=$(VERSION)"
 
-.PHONY: build run dev version update test test-short test-live test-integration vet vet-integration bench bench-go cross mitm-enable mitm-disable mitm-status docker docker-build clean help web-build web-dev
+.PHONY: build run dev version update test test-short test-live test-integration vet vet-integration bench bench-go cross mitm-enable mitm-disable mitm-status docker docker-build clean help web-build web-dev changelog-merge
 
 ## web-build — build frontend static assets (Svelte/Vite) into web/dist
 #
@@ -106,6 +106,23 @@ version: build
 ## update — check and install binary self-update
 update: build
 	$(BINARY) update
+
+# changelog-merge — fold the pending .changes/ fragments into CHANGELOG.md
+#
+# Release-time only. CHANGELOG.md is written by exactly this step and by nothing
+# else, which is the whole point: while every PR edited the top of
+# `## [Unreleased]`, any two PRs landing in the same window collided there, and
+# GitHub's web merge ignores .gitattributes merge drivers so no setting could
+# have merged them. A per-PR fragment is a unique file and cannot collide.
+#
+# Run it once per release, after `scripts/bump-version.sh` has established the
+# tag. TAG is required — without it the fragments would be filed under a heading
+# release.yml's awk cannot find, and the release page would fall back to raw
+# commit subjects.
+## changelog-merge — file .changes/ fragments into CHANGELOG.md under TAG
+changelog-merge:
+	@test -n "$(TAG)" || { echo "TAG is required: make changelog-merge TAG=v1.9.11"; exit 1; }
+	go run ./cmd/changelog-merge --tag $(TAG)
 
 ## test — run all unit tests
 test:

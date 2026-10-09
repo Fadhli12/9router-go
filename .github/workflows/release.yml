@@ -166,6 +166,24 @@ jobs:
             fi
           fi
           if [ -z "$NOTES" ]; then
+            # Per-PR fragments in .changes/ are the pending changelog (§7.6 of
+            # AGENTS.md). They are the fallback between the curated sections and
+            # the commit log because they carry the written explanation a release
+            # page needs, and because most tags are pushed without anyone running
+            # `make changelog-merge` first — which, before this step existed,
+            # meant a release page of bare commit subjects.
+            #
+            # Newest first, matching what the dashboard renders. The PR number is
+            # pulled out as a bare integer before sorting: `sort -k1,1n` on
+            # `900-z` treats the field as text and interleaves 88 and 1000
+            # anyway, so the order would disagree with the changelog modal.
+            if compgen -G ".changes/*.md" > /dev/null; then
+              NOTES=$(cat $(for f in $(ls .changes/*.md | grep -v '/README\.md$'); do \
+                echo "$(basename "$f" .md | cut -d- -f1) $f"; \
+              done | sort -rn | cut -d' ' -f2-))
+            fi
+          fi
+          if [ -z "$NOTES" ]; then
             # Last resort: the commit log. `grep '^v'` finds nothing before the
             # first tagged release, and under `set -euo pipefail` that empty
             # result aborted the whole step — a missing CHANGELOG.md took the

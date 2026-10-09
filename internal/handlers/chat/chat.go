@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"9router/proxy/internal/changelogfrag"
 	json "9router/proxy/internal/fastjson"
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
@@ -15,7 +16,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 )
@@ -357,18 +357,21 @@ func (h *ChatHandler) HandleVersionStatus(w http.ResponseWriter, r *http.Request
 	handlerutil.WriteJSON(w, http.StatusOK, status)
 }
 
-// HandleChangelog serves the CHANGELOG.md file or fetches it from remote with fallbacks.
+// HandleChangelog serves the changelog the dashboard renders: the released
+// CHANGELOG.md plus the pending per-PR fragments in .changes/, so work merged
+// but not yet released is still visible. See internal/changelogfrag for why
+// entries live in fragments rather than at the top of CHANGELOG.md.
+//
+// Each candidate directory is tried in turn because the binary runs from the
+// repository root in a dev checkout but from its own directory once installed;
+// the remote copy stays the last resort for a packaged build that ships neither.
 func (h *ChatHandler) HandleChangelog(w http.ResponseWriter, r *http.Request) {
-	candidates := []string{
-		"CHANGELOG.md",
-		"../CHANGELOG.md",
-		"../../CHANGELOG.md",
-	}
-	for _, path := range candidates {
-		if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+	for _, dir := range changelogDirs() {
+		result := changelogfrag.Assemble(dir)
+		if result.Err == nil && result.Markdown != "" {
 			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(data)
+			_, _ = w.Write([]byte(result.Markdown))
 			return
 		}
 	}
@@ -399,6 +402,14 @@ func (h *ChatHandler) HandleChangelog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	handlerutil.WriteJSONError(w, http.StatusNotFound, "changelog not found")
+}
+
+// changelogDirs lists the directories that may hold CHANGELOG.md and .changes/,
+// nearest first. It stays relative to the working directory rather than
+// resolving from the executable path, which is what lets a dev run started
+// from a subdirectory find the repository root.
+func changelogDirs() []string {
+	return []string{".", "..", "../.."}
 }
 
 // HandleToggleAutoUpdate enables or disables automatic updates in settings and runtime.
