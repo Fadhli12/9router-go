@@ -16,11 +16,9 @@
   let tpm = $state(apiKey.rateLimitTpm ?? 0)
   let concurrency = $state(apiKey.rateLimitConcurrency ?? 0)
 
-  // Local per-key fields (concurrency limiter + provider restriction). These
-  // are separate from the upstream rate-limit policy above: maxConcurrent gates
-  // concurrent in-flight requests, and allowedProviders is a comma-separated
-  // provider allowlist.
-  let maxConcurrent = $state(apiKey.maxConcurrent ?? 0)
+  // Local per-key field (provider restriction). allowedProviders is a
+  // comma-separated provider allowlist, distinct from the upstream rate-limit
+  // policy above.
   let allowedProviders = $state(apiKey.allowedProviders ?? '')
   // expiresAt is stored as RFC3339. The input is a plain datetime-local because
   // the browser needs a local time and the server needs UTC; convert at the edge
@@ -93,7 +91,6 @@
         metadata: metadataValue
       }
       await api.updateApiKeyPolicy(apiKey.id, policy)
-      await api.updateApiKeyLimit(apiKey.id, nonNegative(maxConcurrent))
       await api.updateApiKeyAllowedProviders(apiKey.id, allowedProviders.trim())
       onSaved()
       onClose()
@@ -205,42 +202,26 @@
         </div>
       </section>
 
-      <!-- Local limits: concurrent sessions + provider restriction -->
+      <!-- Local limits: provider restriction -->
       <section class="space-y-3">
         <div>
           <h3 class="font-headline text-xs font-bold text-text-main">Session & provider limits</h3>
           <p class="text-text-subtle mt-0.5">
-            Concurrent sessions caps in-flight requests for this key;
-            <span class="font-code">0</span> means unlimited. Allowed providers is a
-            comma-separated provider allowlist — empty means every provider.
+            Allowed providers is a comma-separated provider allowlist —
+            <span class="font-code">empty</span> means every provider.
           </p>
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label for="pol-maxconc" class="block font-semibold text-text-muted mb-1">
-              Concurrent sessions
-            </label>
-            <input
-              id="pol-maxconc"
-              type="number"
-              min="0"
-              step="1"
-              bind:value={maxConcurrent}
-              class="w-full bg-surface border border-border rounded-lg px-3 py-2 font-code text-xs text-text-main focus:outline-none focus:border-brand-500"
-            />
-          </div>
-          <div>
-            <label for="pol-providers" class="block font-semibold text-text-muted mb-1">
-              Allowed providers
-            </label>
-            <input
-              id="pol-providers"
-              type="text"
-              placeholder="e.g. kiro, codex, antigravity"
-              bind:value={allowedProviders}
-              class="w-full bg-surface border border-border rounded-lg px-3 py-2 font-code text-xs text-text-main focus:outline-none focus:border-brand-500"
-            />
-          </div>
+        <div>
+          <label for="pol-providers" class="block font-semibold text-text-muted mb-1">
+            Allowed providers
+          </label>
+          <input
+            id="pol-providers"
+            type="text"
+            placeholder="e.g. kiro, codex, antigravity"
+            bind:value={allowedProviders}
+            class="w-full bg-surface border border-border rounded-lg px-3 py-2 font-code text-xs text-text-main focus:outline-none focus:border-brand-500"
+          />
         </div>
       </section>
       <!-- Expiry -->
