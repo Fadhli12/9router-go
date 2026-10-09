@@ -23,6 +23,31 @@
   berhasil juga dilewati, karena satu klik "Test" akan menghapus backoff yang dicatat traffic
   produksi. `UpdateConnectionLastUsed` tetap berjalan — probe memang memakai koneksi tersebut.
 
+### 🎨 feat(dashboard): Check All Models tri-state status (passed, failed, blocked) dan retry blocked models (#222)
+
+- **Latar belakang**: tombol sweep "Check All Models" sebelumnya memperlakukan semua hasil non-ok sebagai
+  warna merah "Error". Ketika koneksi memasuki masa cooldown, semua model berikutnya yang belum sempat diuji
+  langsung ditandai merah sama persis seperti model yang benar-benar gagal di upstream.
+- **Fiks**: UI kini membedakan status tri-state: hijau `Passed`, merah `Failed` (upstream merespons gagal),
+  dan amber `Blocked` (terhalang cooldown, menyertakan estimasi waktu `resetAt`). Banner ringkasan menampilkan
+  `X passed · Y failed · Z blocked` serta menyediakan tombol "Retry blocked" untuk menguji ulang hanya model
+  yang sebelumnya terhalang cooldown.
+
+- **Perbaikan review**: klasifikasi verdict `Blocked` dipindahkan sepenuhnya ke backend dan tidak lagi
+  bergantung pada status HTTP. `readProbeResult` semula hanya memeriksa 502, padahal error yang sama muncul
+  sebagai 404 pada lane media, dan `forwardSystemoneRequest`/`forwardMediaRequest` menimpanya dengan
+  `"no active connections for provider: %s"` sehingga informasi jam mulai cooldown hilang.
+- **Perbaikan review**: pencocokan substring di SPA (`'cooldown'`, `'rate limit'`) dihapus. Pola itu tidak pernah
+  aktif — gateway menulis `rate-limited` dengan tanda hubung — dan berisiko menandai penolakan kuota milik
+  provider sebagai `Blocked`, padahal verdict tersebut tidak pernah selesai dengan menunggu. Backend kini
+  memakai whitelist kalimat milik gateway sendiri, dan `resetAt` dirender sebagai waktu lokal.
+- **Perbaikan review**: "Retry blocked" memakai bounded worker pool yang sama dengan sweep (6 konkuren) plus guard
+  `providerId`, menggantikan loop serial yang membuat tombol tampak macet selama masa cooldown.
+- **Catatan setelah #220**: dengan probe kini menembus cooldown akun (#220), jalur `Blocked` yang tersisa adalah
+  lane combo ketika member-nya terkunci model — lock punya masa berlaku, sehingga verdict "blocked" tetap jujur
+  dan tombol "Retry blocked" tetap aksi yang tepat. Test integrasi dipin agar kedua sisi itu tidak regresi.
+
+
 ### 🐛 fix(chat): error model-gated (402 funds, 401 unsupported) tidak mengunci seluruh akun (#218)
 
 - **Latar belakang**: pada provider multi-model seperti OpenCode Zen (atau Antigravity), request ke model
