@@ -360,6 +360,7 @@ PRs follow the checks CI runs: `go vet ./...`, `go test -count=1 ./...`, `make t
 - [`DATABASE.md`](DATABASE.md) — SQLite schema & operator contract
 - [`ROADMAP.md`](ROADMAP.md) — proposals only, not current behavior
 - [`CHANGELOG.md`](CHANGELOG.md) — release history (Go **v1.9.9**, upstream baseline `decolua/9router` v0.5.85). Work merged since the last tag lives in [`.changes/`](.changes/) and is folded in at the next release; the dashboard's changelog modal shows both.
+- [`docs/TELEGRAM_RELEASE_NOTIFICATIONS.md`](docs/TELEGRAM_RELEASE_NOTIFICATIONS.md) — one-time setup for the release notice posted to Telegram
 
 ## Credits
 
