@@ -166,6 +166,24 @@ jobs:
             fi
           fi
           if [ -z "$NOTES" ]; then
+            # Per-PR fragments in .changes/ are the pending changelog (§7.6 of
+            # AGENTS.md). They are the fallback between the curated sections and
+            # the commit log because they carry the written explanation a release
+            # page needs, and because most tags are pushed without anyone running
+            # `make changelog-merge` first — which, before this step existed,
+            # meant a release page of bare commit subjects.
+            #
+            # Newest first, matching what the dashboard renders. The PR number is
+            # pulled out as a bare integer before sorting: `sort -k1,1n` on
+            # `900-z` treats the field as text and interleaves 88 and 1000
+            # anyway, so the order would disagree with the changelog modal.
+            if compgen -G ".changes/*.md" > /dev/null; then
+              NOTES=$(cat $(for f in $(ls .changes/*.md | grep -v '/README\.md$'); do \
+                echo "$(basename "$f" .md | cut -d- -f1) $f"; \
+              done | sort -rn | cut -d' ' -f2-))
+            fi
+          fi
+          if [ -z "$NOTES" ]; then
             # Last resort: the commit log. `grep '^v'` finds nothing before the
             # first tagged release, and under `set -euo pipefail` that empty
             # result aborted the whole step — a missing CHANGELOG.md took the
@@ -213,6 +231,19 @@ jobs:
           fi
           printf '%s\n' "$NOTES" >> /tmp/notes.md
           cat /tmp/notes.md
+
+      # The notify job runs on its own runner, where /tmp/notes.md does not
+      # exist. An artifact carries the exact text the release page was built
+      # from, so the Telegram message cannot drift from what users actually
+      # read — regenerating the notes in a second job would duplicate the
+      # 40-line fallback chain and let the two answers disagree.
+      - name: Share release notes with the notify job
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: /tmp/notes.md
+          retention-days: 1
+          if-no-files-found: error
 
       - name: Upload binaries to release
         uses: softprops/action-gh-release@v2
@@ -271,3 +302,35 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Announce the release to the Telegram group.
+  #
+  # `needs: [binaries, docker]` is the whole design: it runs only after the
+  # release page and the image both exist, so the link in the message resolves.
+  # A separate workflow triggered by the tag push would fire in parallel with
+  # the build and routinely publish a 404 link.
+  #
+  # continue-on-error is deliberate. A Telegram outage or a revoked token must
+  # not turn a successful release red — the artifacts are already published by
+  # this point, and a failed job here reads as "the release failed" to anyone
+  # watching the run list.
+  notify:
+    name: Notify Telegram
+    needs: [binaries, docker]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: /tmp
+
+      - name: Send release notification
+        run: bash scripts/notify-telegram.sh --tag "${GITHUB_REF_NAME}" --notes /tmp/notes.md
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_ID: ${{ secrets.TELEGRAM_TOPIC_ID }}

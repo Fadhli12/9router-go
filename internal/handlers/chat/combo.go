@@ -570,7 +570,7 @@ func (h *ChatHandler) handleComboFallback(ctx context.Context, w http.ResponseWr
 				} else {
 					var cData *ConnectionData
 					var err error
-					picked, cData, err = h.getBestConnection(modelInfo.Provider, modelInfo.ConnectionID, excludeIDs, modelInfo.Model)
+					picked, cData, err = h.getBestConnectionWithContext(ctx, modelInfo.Provider, modelInfo.ConnectionID, excludeIDs, modelInfo.Model)
 					if err != nil {
 						break
 					}
@@ -650,13 +650,13 @@ func (h *ChatHandler) handleComboFallback(ctx context.Context, w http.ResponseWr
 						// lock recordModelDeprecation writes is per provider/model,
 						// which is the scope that actually matters.
 						if providers.IsModelDeprecation(ue.StatusCode, ue.Body) {
-							h.recordModelDeprecation(modelInfo.Provider, modelInfo.Model, connID, ue)
+							h.recordModelDeprecation(ctx, modelInfo.Provider, modelInfo.Model, connID, ue)
 							retry.note(ue)
 							lastErr = ue
 							break
 						}
 						if providers.RetryableStatusCodes[ue.StatusCode] {
-							h.comboLockRetryable(&excludeIDs, connID, modelInfo.Provider, modelInfo.Model, ue)
+							h.comboLockRetryable(ctx, &excludeIDs, connID, modelInfo.Provider, modelInfo.Model, ue)
 						}
 						if ue.StatusCode == http.StatusServiceUnavailable || ue.StatusCode == http.StatusBadGateway || ue.StatusCode == http.StatusGatewayTimeout {
 							// In combo loops, fail over immediately to the next connection/model without blocking the client turn
@@ -787,7 +787,7 @@ func (h *ChatHandler) handleMessagesComboFallback(ctx context.Context, w http.Re
 				} else {
 					var cData *ConnectionData
 					var err error
-					picked, cData, err = h.getBestConnection(modelInfo.Provider, modelInfo.ConnectionID, excludeIDs, modelInfo.Model)
+					picked, cData, err = h.getBestConnectionWithContext(ctx, modelInfo.Provider, modelInfo.ConnectionID, excludeIDs, modelInfo.Model)
 					if err != nil {
 						break
 					}
@@ -851,13 +851,13 @@ func (h *ChatHandler) handleMessagesComboFallback(ctx context.Context, w http.Re
 						// list spans the pass, and a single-account provider
 						// would have nothing left to fail over to.
 						if providers.IsModelDeprecation(ue.StatusCode, ue.Body) {
-							h.recordModelDeprecation(modelInfo.Provider, modelInfo.Model, connID, ue)
+							h.recordModelDeprecation(ctx, modelInfo.Provider, modelInfo.Model, connID, ue)
 							retry.note(ue)
 							lastErr = ue
 							break
 						}
 						if providers.RetryableStatusCodes[ue.StatusCode] {
-							h.comboLockRetryable(&excludeIDs, connID, modelInfo.Provider, modelInfo.Model, ue)
+							h.comboLockRetryable(ctx, &excludeIDs, connID, modelInfo.Provider, modelInfo.Model, ue)
 						}
 						if ue.StatusCode == http.StatusServiceUnavailable || ue.StatusCode == http.StatusBadGateway || ue.StatusCode == http.StatusGatewayTimeout {
 							// In combo loops, fail over immediately to the next connection/model without blocking the client turn
@@ -921,7 +921,11 @@ func (h *ChatHandler) handleMessagesComboFallback(ctx context.Context, w http.Re
 // combo models on the same account, and Google rate-limited it forever. The
 // connection is also appended to excludeIDs so the remaining combo models in
 // this request skip it instead of re-hitting the same quota bucket.
-func (h *ChatHandler) comboLockRetryable(excludeIDs *[]string, connID, provider, model string, ue *upstreamError) {
+func (h *ChatHandler) comboLockRetryable(ctx context.Context, excludeIDs *[]string, connID, provider, model string, ue *upstreamError) {
+	if handlerutil.IsProbeContext(ctx) {
+		*excludeIDs = append(*excludeIDs, connID)
+		return
+	}
 	if connID == "" {
 		return
 	}
@@ -945,8 +949,8 @@ func (h *ChatHandler) comboLockRetryable(excludeIDs *[]string, connID, provider,
 	// can skip this account before spending a request (upstream applyErrorState).
 	// Only lock if error is account-scoped, not model-scoped (e.g. 401 auth issues),
 	// so unrelated models stay available.
-	if isModelScopedQuotaError(ue.StatusCode, extractErrorText(ue.Body), model) {
-		if recErr := h.Repo.RecordConnectionError(connID, ue.StatusCode, extractErrorText(ue.Body), cls.NewBackoffLevel); recErr != nil {
+	if isModelScopedError(ue.StatusCode, extractErrorText(ue.Body), model) {
+		if recErr := h.Repo.RecordConnectionScopedError(connID, model, "chat", ue.StatusCode, extractErrorText(ue.Body), cls.NewBackoffLevel); recErr != nil {
 			log.Warn("combo", "record connection error failed", "conn", connID, "error", recErr)
 		}
 	} else {

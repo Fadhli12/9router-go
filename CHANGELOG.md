@@ -2,6 +2,268 @@
 
 ## [Unreleased]
 
+### ✨ feat(dashboard): sertakan flag free pada GET /api/models/caps (#232)
+
+- **Latar belakang**: daftar model di dashboard menampilkan campuran model free dan berbayar
+  tanpa pembeda visual. Data klasifikasi free di backend sudah ada (`IsFreeTierModel` dan tabel pricing),
+  namun `GET /api/models/caps` sebelumnya belum mengirimkan flag `free` ke frontend.
+- **Fiks**: menambahkan field `free` pada struct `modelCaps`, menggabungkan sinyal suffix
+  (`:free`, `/free`, `-free`) dan rate pricing nol (`InputPer1M == 0 && OutputPer1M == 0`).
+
+### ✨ feat(dashboard): satukan enam baris kontrol menjadi satu menu (Closes #224)
+
+- **Latar belakang**: report #224 — enam surface dashboard punya deretan
+  kontrol yang membuat baris header atau baris tabel wrap di layar sempit, dan
+  dropdown Cache Analytics keluar dari layar di lebar ponsel.
+ **Akibat**: operator harus menggulir ke baris kedua di Quota Tracker, dan
+  tombol `Delete` pada baris API key bisa terdorong keluar viewport sehingga
+  tidak bisa ditekan di ponsel.
+ **Perubahan UI**:
+  - **Top bar**: donate, install, theme, language, changelog, dan logout —
+    enam kontrol — kini satu tombol `Menu` (`TopBar.svelte`). Dropdown language
+    dan app-drawer yang sebelumnya terpisah dihapus.
+  - **Quota Tracker**: provider filter + account filter tetap terlihat; email
+    masking, expiring-first, disable/enable massal, auto-refresh, dan refresh
+    pindah ke satu `Menu`.
+  - **Proxy Pools**: dua modal (single add dan batch import) menjadi satu dialog
+    bertab `Single` / `Bulk Add`; tombol `Batch Import` membuka tab yang sama.
+  - **Provider connections**: refresh / edit / delete per baris menjadi satu
+    `more_horiz` menu. Tombol proxy tetap kontrol tersendiri karena itu pilihan
+    nilai, bukan verb.
+  - **API keys**: action per baris menjadi satu `more_horiz` menu; checkbox per
+    baris menambah **batch bar** (enable / pause / delete) untuk banyak key
+    sekaligus.
+ **Fix mobile dropdown**: panel menu kini `position: fixed` dan diposisikan
+  dari `getBoundingClientRect()` trigger, lalu di-clamp ke viewport
+  (`lib/ui/menuPosition.ts`). Sebelumnya `absolute` di dalam wrapper, sehingga
+  terpotong oleh ancestor `overflow-x-auto` — inilah penyebab dropdown Cache
+  Analytics keluar layar di ponsel. `ViewSelect`, `SectionMenu`, `PeriodSelect`,
+  dan provider filter Quota Tracker semuanya memakai penempatan yang sama.
+ **Rename API key**: `PUT /api/keys/{id}` menerima field `name` (partial
+  update; string kosong = hapus nama). Field rename ada di dialog policy yang
+  sama dengan rate limit/expiry/allowlist, jadi mengedit satu key = satu
+  dialog. Dibatasi 200 karakter.
+ **Verifikasi**: `bun run build`, `make vet-svelte` (0 unresolved identifier,
+  83 error = baseline), `go test ./...` (3650 pass), plus smoke check di browser
+  pada 1440px dan 390px — rename tersimpan, batch pause menandai kedua key,
+  dan kedua dropdown Cache Analytics tampil utuh di 390px.
+
+### ✅ test(dashboard): E2E suite yang menutup celah tsc/vite/svelte-check/go-test
+
+ **Latar belakang**: collapsing action API key jadi satu menu (#224) menghapus
+  `confirm()` pada delete dan regenerate — dan **semua gate tetap hijau**.
+  `tsc` membaca type, `vite build` membundel, ratchet svelte-check menghitung
+  diagnostic, `go test` menguji HTTP API tanpa pernah merender komponen.
+  Tidak satu pun melihat DOM.
+ **Perubahan**: `web/e2e/` (Playwright + Chromium) menjalankan binary Go asli
+  terhadap SQLite sementara, lalu menguji konsekuensi yang bisa diamati:
+  - dismiss dialog delete → baris **tetap ada**; accept → baris hilang
+  - dismiss dialog regenerate → secret **tidak berubah**
+  - prompt delete **menyebut nama key** yang akan dihapus
+  - batch bar mengubah semua key terpilih jadi `Paused`
+  - panel dropdown di 390px dan di viewport 200px **tetap di dalam layar**
+ **Bug tersembunyi yang ketahuan**: `style:min-width` pada panel mengalahkan
+  `width` hasil clamp, sehingga di viewport 200px panel 224px tetap meluber
+  32px. `placePanel` kini ikut meng-cap `minWidth`, dan semua panel meneruskan
+  nilai tersebut alih-alih menulis `min-width` sendiri.
+ **Bukti test menangkap regresi**: dengan clamp dimatikan, test mobile gagal
+  `232 > 200`; dengan `confirm()` dihapus, 4 dari 5 test API key gagal —
+  sementara keempat gate lama tetap hijau.
+
+ **Empat surface lain (#224)** — top bar, header Quota Tracker, dialog Add Proxy
+  Pools bertab, dan halaman Providers — ditutup di
+  `web/e2e/unifiedControls.test.ts`, sehingga suite-nya 20 test.
+  - **Bukti**: mengembalikan `TopBar.svelte` ke kondisi pra-#224 membuat **6 dari
+    10 test** di file itu gagal, sementara keempat gate lama tetap hijau.
+
+### 🐛 fix(translator): `tool_call.id` paralel dari Gemini bertabrakan, dan nama tool tidak lagi dibaca dari id (#229)
+
+- **Latar belakang**: streaming translator membuat id tool call dari
+  `fmt.Sprintf("call_%s_%d", fnName, time.Now().UnixNano())`. Dua `functionCall`
+  dalam satu chunk dipancarkan berjarak <1 ms, sedangkan `UnixNano()` hanya
+  berubah setiap ~0,5–1 ms pada mesin dev — sehingga dua panggilan paralel
+  mendapat **id yang identik**. Klien yang mencocokkan hasil tool dengan
+  `tool_call_id` tidak bisa membedakan keduanya.
+- **Akar masalah**: `time.Now().UnixNano()` tidak men-tick di dalam satu chunk,
+  dan id tidak membawa indeks panggilan. Selain itu, fallback nama tool di
+  `TranslateOpenAIToGemini` membaca nama dari id dengan memotong segmen setelah
+  underscore terakhir — logika itu hanya benar untuk id format `call_<nama>_...`,
+  dan akan salah jika gateway memakai `functionCall.id` milik Gemini sendiri
+  (token opaque seperti `call_abc123`).
+- **Fiks**: id memakai `functionCall.id` milik Gemini bila ada (satu-satunya id
+  yang akan dicocokkan Gemini untuk functionResponse); jika tidak, id hasil
+  generator membawa indeks panggilan sehingga paralel tetap berbeda. Pasangan
+  id→tool dicatat saat tool call dipancarkan (`toolNameStore`, sejajar dengan
+  `thoughtSignatureStore` yang sudah memakai skema key yang sama, termasuk
+  suffix `__ts__` dan namespace sesi), dan fallback membaca penyimpanan itu.
+  Id tidak pernah di-parse lagi: id yang tidak dikenal dijawab apa adanya,
+  bukan dengan nama tool yang dikarang.
+- **Parity**: `open-sse/translator/response/gemini-to-openai.js`
+  (`functionCall.id || \`${name}-${Date.now()}-${index}\``).
+- **Catatan**: id ganda ini sudah ada sebelum #228 dan tidak diperparah olehnya;
+  perlakuannya sudah aman karena `tcID2Names`/`nextToolNameForID` (
+  `gemini.go`, parity #4273/#4589) mengantre nama per id. PR ini menutup celah
+  id opaque dan membuat id paralel benar-benar unik.
+
+### 🐛 fix(dashboard): "Check All Models" hanya menguji model yang aktif (Closes #230)
+
+- **Latar belakang**: report #230 — operator menonaktifkan sebuah model, tetapi
+  tombol **Check All Models** tetap mem-probe model itu.
+- **Akibat**: dua-duanya. Request ke upstream terbuang untuk model yang
+  sengaja dimatikan, dan verdict probe-nya tidak punya baris di tabel, karena
+  tabel merender `visibleModels`. Hasilnya verdict yang tidak terlihat dan
+  tidak bisa dibersihkan dari layar.
+- **Perbaikan**: `handleCheckAllModels` menyapu `visibleModels`, dan kondisi
+  serta label tombol ikut menghitung `visibleModels.length`.
+- **Verifikasi**: `bun test src scripts` → 321 pass / 0 fail; `bun test e2e/` →
+  20 pass / 0 fail; `bun run build` bersih; `bun run ratchet:svelte` →
+  0 unresolved identifier, 83 error = baseline.
+
+### 🐛 fix(models): /api/models/test read-only terhadap cooldown produksi agar sweep tidak memicu cascade (#220)
+
+- **Latar belakang**: `POST /api/models/test` (tombol Test dan sweep "Check All Models")
+  menjalankan probe lewat handler chat produksi (`HandleChatCompletions`). Ketika sebuah
+  model gagal diuji, loop fallback menulis cooldown produksi (`LockConnectionModel`,
+  `RecordConnectionError`, `LockConnectionRateLimit`, dan menaikkan backoff level). Akibatnya,
+  pada sweep puluhan model, beberapa model awal yang gagal mengunci seluruh koneksi akun,
+  sehingga sisa model lainnya langsung 502 "all in cooldown" tanpa pernah mencapai upstream.
+- **Akar masalah**: request probe tidak membawa pembeda konteks, sehingga diperlakukan identik
+  dengan traffic produksi yang memicu state locking.
+- **Fiks**: `WithProbeContext` disuntikkan ke dalam probe request context (`internal/handlerutil/probe.go`).
+  `handleAccountFallback` dan `comboLockRetryable` melewati penulisan cooldown dan bump backoff
+  ketika mendeteksi probe context. `getBestConnectionWithContext` mengizinkan probe menembus cooldown
+  agar dapat menguji pemulihan upstream yang sebenarnya. Hasil probe juga menyertakan field terstruktur
+  `blocked` dan `resetAt`.
+  Jalur media (embedding, image, tts, stt, video, systemone) memakai
+  `GetBestConnectionWithContext`, sehingga probe juga menembus cooldown di sana. Probe tidak
+  menulis cooldown pada jalur gagal maupun jalur sukses: `UnlockConnectionModel` setelah probe
+  berhasil juga dilewati, karena satu klik "Test" akan menghapus backoff yang dicatat traffic
+  produksi. `UpdateConnectionLastUsed` tetap berjalan — probe memang memakai koneksi tersebut.
+
+### 🎨 feat(dashboard): Check All Models tri-state status (passed, failed, blocked) dan retry blocked models (#222)
+
+- **Latar belakang**: tombol sweep "Check All Models" sebelumnya memperlakukan semua hasil non-ok sebagai
+  warna merah "Error". Ketika koneksi memasuki masa cooldown, semua model berikutnya yang belum sempat diuji
+  langsung ditandai merah sama persis seperti model yang benar-benar gagal di upstream.
+- **Fiks**: UI kini membedakan status tri-state: hijau `Passed`, merah `Failed` (upstream merespons gagal),
+  dan amber `Blocked` (terhalang cooldown, menyertakan estimasi waktu `resetAt`). Banner ringkasan menampilkan
+  `X passed · Y failed · Z blocked` serta menyediakan tombol "Retry blocked" untuk menguji ulang hanya model
+  yang sebelumnya terhalang cooldown.
+
+- **Perbaikan review**: klasifikasi verdict `Blocked` dipindahkan sepenuhnya ke backend dan tidak lagi
+  bergantung pada status HTTP. `readProbeResult` semula hanya memeriksa 502, padahal error yang sama muncul
+  sebagai 404 pada lane media, dan `forwardSystemoneRequest`/`forwardMediaRequest` menimpanya dengan
+  `"no active connections for provider: %s"` sehingga informasi jam mulai cooldown hilang.
+- **Perbaikan review**: pencocokan substring di SPA (`'cooldown'`, `'rate limit'`) dihapus. Pola itu tidak pernah
+  aktif — gateway menulis `rate-limited` dengan tanda hubung — dan berisiko menandai penolakan kuota milik
+  provider sebagai `Blocked`, padahal verdict tersebut tidak pernah selesai dengan menunggu. Backend kini
+  memakai whitelist kalimat milik gateway sendiri, dan `resetAt` dirender sebagai waktu lokal.
+- **Perbaikan review**: "Retry blocked" memakai bounded worker pool yang sama dengan sweep (6 konkuren) plus guard
+  `providerId`, menggantikan loop serial yang membuat tombol tampak macet selama masa cooldown.
+- **Catatan setelah #220**: dengan probe kini menembus cooldown akun (#220), jalur `Blocked` yang tersisa adalah
+  lane combo ketika member-nya terkunci model — lock punya masa berlaku, sehingga verdict "blocked" tetap jujur
+  dan tombol "Retry blocked" tetap aksi yang tepat. Test integrasi dipin agar kedua sisi itu tidak regresi.
+
+
+### 🐛 fix(chat): error model-gated (402 funds, 401 unsupported) tidak mengunci seluruh akun (#218)
+
+- **Latar belakang**: pada provider multi-model seperti OpenCode Zen (atau Antigravity), request ke model
+  berbayar yang gagal (`402 Insufficient account funds`) atau model unsupported (`401 Model ... is not supported`)
+  malah mengunci seluruh akun koneksi via `rateLimitedUntil` selama ~2 menit. Karena loop fallback mencoba
+  seluruh koneksi pada provider tersebut, satu model yang gagal melumpuhkan seluruh akun sehingga model-model
+  gratis/sehat lainnya (`space-bunny-free`, `mimo-v2.6-flash-free`, dll.) ikut mati terkena error 502
+  "no available connections (all in cooldown)".
+- **Akar masalah**: `isModelScopedQuotaError` sebelumnya hanya mencocokkan status 429/403/503 dengan string
+  kuota spesifik. Error 402 dana dan 401 model-unsupported jatuh ke `LockConnectionRateLimit` akun secara global.
+- **Fiks**: `isModelScopedError` diperluas dan di-gate positif: status dibatasi pada 400/401/402/403, body
+  harus menyebutkan nama model yang bersangkutan atau membawa pesan dana ("insufficient account funds"),
+  dan error autentikasi akun asli (invalid API key, token expired, account suspended) tetap mengunci akun
+  secara global. Status 402 juga ditambahkan ke `RetryableStatusCodes`.
+
+### 🐛 Modal policy key: allowlist tidak tampil dan pattern baru tidak tersimpan (Closes #216)
+
+- **Latar belakang**: report #216 — API balas `200 ok`, tapi `model access`
+  di modal policy tidak menyimpan dan tidak menampilkan kembali nilai yang
+  disimpan, dan tombol `load` juga tidak memuat apa pun.
+- **Backend-nya benar, jadi tidak ada perubahan Go.** Direproduksi lewat
+  `app.ProvideRouter` (router produksi, DB SQLite sungguhan): `PUT
+  /api/keys/{id}/models` menulis baris ke `api_key_model_access`, dan `GET
+  /api/keys/{id}/models` membacanya kembali. `resale metadata`, rate limit,
+  dan expiry sudah benar sejak awal — diverifikasi lewat UI, tidak diubah.
+- **Akar masalahnya di `ApiKeyPolicyModal.svelte`, di dua tempat.**
+  1. Allowlist tidak pernah dimuat saat modal dibuka. Listanya dimulai kosong
+     dan baru terisi setelah tombol `Load` ditekan, sehingga untuk key yang
+     sebenarnya dibatasi modal tetap menulis *"every model is allowed"*.
+  2. Tombol **Save Policy** hanya menulis kolom policy; allowlist disimpan lewat
+     endpoint terpisah yang tidak pernah dipanggil dari alur utama. Pattern
+     yang diketik lalu di-`Save` akan diterima `200` lalu hilang.
+  Kedua bug itu saling mengunci: draft kosong dari (1) menimpa daftar yang
+  tersimpan begitu operator menyimpan policy lain.
+- **Fiks**: allowlist diambil saat modal dibuka, dan **Save Policy** sekarang
+  menulis allowlist juga — satu aksi menyimpan satu policy utuh. Tombol `Load`
+  jadi `Reload`, dan `Save allowlist only` dihapus karena sudah tercakup;
+  `saveModels()` dan `isSavingModels` ikut dibersihkan karena tidak ada
+  pemanggilnya lagi.
+- **Penulisan allowlist dikunci sampai daftarnya benar-benar dibaca.** Kalau
+  hanya dilewati saat request berjalan, ada dua keadaan berbeda dengan hasil
+  identik — `models` kosong — dan keduanya berarti "hapus allowlist": request
+  yang masih berjalan, dan request yang **gagal**. Versi pertama hanya menutup
+  yang pertama; pada yang kedua `hasLoadedModels` sempat bernilai true di
+  `finally`, sehingga `Save Policy` menulis daftar kosong di atas daftar yang
+  tersimpan — persis kelas kehilangan data yang sedang diperbaiki di sini.
+  Sekarang penulisan hanya boleh jalan setelah allowlist benar-benar termuat;
+  selain itu simpan ditolak dengan pesan yang menyebut alasannya, dan modal
+  tetap terbuka supaya operator tidak mengira policy utuh sudah tersimpan.
+- **Regresi dijaga** di `internal/integration/keys_policy_test.go`:
+  `TestKeyPolicyRoundTrip`, `TestKeyModelAllowlistRoundTrip`, dan
+  `TestKeyPolicySavePreservesAllowlist` — semuanya membaca ulang lewat router
+  produksi setelah `GET` baru, bukan dari respons write yang selalu sukses.
+  Skor `svelte-check` turun 84 → 83 (`web/scripts/svelte-check-baseline.json`).
+
+### 🔀 Seluruh `encoding/json` v1 pindah ke `encoding/json/v2`
+
+- **Latar belakang**: repo sudah migrasiMayor ke `encoding/json/v2`, tapi 50
+  file masih tertinggal di `encoding/json` v1 — 25 di antaranya file produksi.
+  Akibatnya satu binary memakai **dua** mesin JSON dengan semantik berbeda di
+  jalur yang sama: v1 mencocokkan nama field tanpa membedakan huruf
+  besar/kecil, v2 secara default membedakannya; v1 menerima UTF-8 rusak, v2
+  menolaknya.
+- **Fiks**: seluruh file kini mengimpor `encoding/json/v2`. Empat API v1 yang
+  tidak ada di v2 dipetakan ke padanannya, bukan dibungkus:
+  `json.RawMessage` → `jsontext.Value` (perilaku `MarshalJSON`/`UnmarshalJSON`
+  dan ketiadaan nilai untuk member yang absen identik — sudah diverifikasi),
+  `json.Valid` → `jsontext.Value.IsValid()`,
+  `json.NewEncoder(w).Encode(v)` → `json.MarshalWrite(w, v)`,
+  `json.NewDecoder(r).Decode(&v)` → `json.UnmarshalRead(r, &v)`.
+- **Body dari provider dan dari client dibaca lenient, bukan strict.** v2
+  menolak nama member yang berulang di satu objek, menolak UTF-8 rusak di
+  string (v1 diam-diam mengganti U+FFFD), dan mencocokkan nama member secara
+  case-sensitive. Untuk JSON yang dihasilkan gateway sendiri itu benar, tapi body
+  dari provider atau client bukan JSON milik gateway — dan `internal/handlerutil`
+  kini menyediakan satu set opsi (`UpstreamBody` / `ClientBody`) yang melonggarkan
+  ketiganya. Tanpa itu, `proxy.EmptyUpstreamError` akan mengubah jawaban yang sah
+  menjadi 502 (body dengan key berulang, byte non-UTF-8, atau kunci `Content`),
+  `parseInbandError` tidak akan melihat error yang diinjeksi provider,
+  `parseChatChunk` akan membuang chunk yang membawa content delta, dan
+  `museModel` akan menolak body `{"Model": ...}`.
+  `TestEmptyUpstreamError_LenientAboutProviderBodies`,
+  `TestDetectInbandSSEError_LenientAboutProviderFrames`,
+  `TestParseChatChunk_LenientAboutProviderChunks` dan
+  `TestMuseModel_LenientAboutClientBodies` menjaga tiap arah.
+- **`internal/fastjson` sekarang tipis di atas v2.** Shim ini sebelumnya
+  membungkus `bytedance/sonic`; kedua backend (sonic dan std) dihapus, dan
+  `github.com/bytedance/sonic` beserta 6 dependensi transitifnya dicabut dari
+  `go.mod`. Panggilan dari 12 file chat/semanticcache tidak berubah.
+- **Determinisme tetap terjaga.** `fastjson.Marshal` memasang
+  `json.Deterministic(true)` karena prompt cache hulu (DeepSeek, Anthropic)
+  mengunci kunci pada byte request yang persis, dan v2 tidak mengurutkan member
+  map kecuali diminta. (Sonic yang lama juga tidak mengurutkannya — sebab itu
+  `marshalStable`, fingerprint, dan dedupe tool memasang opsi Deterministic
+  masing-masing sejak #186.) `TestMarshalIsDeterministic` menjaga kontrak
+  seam ini; call site yang sudah punya opsi sendiri tidak tersentuh.
+- **Biaya pada payload request 6,5 KB**: marshal 16,2 µs (v1) → 15,3 µs
+  (v2 deterministik), unmarshal 26,1 µs → 23,3 µs. Tidak ada regresi.
+
 ### 🐛 Halaman Cache Analytics balas 503 — agregasi 35 detik untuk 82.143 baris
 
 - **Gejala**: `/dashboard/usage/cache` gagal total. Di browser endpoint-nya
@@ -1367,6 +1629,70 @@ is green; `go test -count=8 -run TestTranscribeGeminiLive ./internal/handlers/me
 is green; 20 consecutive runs of the formerly flaky test are green. The workflow
 file is run by an ubuntu runner (cgo is available there), not a local machine
 without a C compiler.
+
+### 🔒 OAuth refresh singleflight, email masking, & backend test coverage
+
+- **OAuth refresh singleflight**: `refreshOAuthTokenIfExpired` and
+  `forceRefreshOAuthToken` (`internal/handlers/chat/gemini_handler.go`) run
+  inside a `singleflight.Group` keyed per connection, so an expired token costs
+  one upstream round-trip instead of one per concurrent request. The forced
+  refresh uses a `\x00`-prefixed key, which a connection id can never contain,
+  so the two flights cannot collide.
+- **Routing unchanged**: Antigravity-prefixed models (`ag/muse-spark-*`) still
+  route to their owning executor via `routeModelToOwningProvider` in
+  `internal/handlers/chat/resolution.go`.
+- **Email masking**: `web/src/lib/privacy.ts` adds `maskEmail` /
+  `formatEmailLabel` plus an `emailPrivacy` store persisted to
+  `localStorage['9router_mask_email']`, with a toggle in Quota Tracker,
+  Provider Detail, and the Media views so account emails can be hidden while
+  screen sharing. `maskEmail` is idempotent, the store follows the `storage`
+  event so a second window stays in sync, and the toggle also appears in the
+  Model picker, Analytics topology, and the Media header — the tabs that never
+  mount the Providers view and therefore had no way to reach it.
+- **A masked label can never be written back**: the shared
+  `EditConnectionModal` seeds the name field through `formatEmailLabel` and
+  submits `undefined` unless the field differs from both the raw and the
+  masked value. Saving a priority change with masking on leaves the stored
+  name alone instead of persisting `l***m@gmail.com` into
+  `providerConnections.name`.
+- **Backend test coverage**: unit tests added across `config`, `codexquota`,
+  `usagetracker`, `middleware`, `translator`, `app`, `handlerutil`, and `proc`.
+  Measured on this tree: config 90.8 · codexquota 87.3 · usagetracker 87.6 ·
+  middleware 89.2 · translator 85.4 · proc 85.9 are at or above 85%;
+  `handlerutil` 80.2 and `app` 82.1 are not. `internal/proc` also dropped from
+  ~60s to under a second by killing the child process instead of waiting out
+  its lifetime. The two envelope-unwrap tests assert the envelope key is
+  gone, so they fail when the unwrap is a no-op.
+
+**Regression coverage added with this change:** an unexpired token must return
+the caller's own token, and a waiter sharing a collapsed flight must not be
+handed the leader's. Both are new — no test previously sent a connection whose
+`apiKey` differs from its `accessToken`, which is exactly the iFlow shape
+(HMAC platform key plus a separate OAuth token), and that gap is why a token
+substitution in this path passed the full suite while signing iFlow requests
+with the wrong secret.
+
+**Found while reviewing this change, and fixed here.** Each was proven by
+reverting the fix and watching the test fail, not by inspection:
+
+- **A refresher returning no result crashed the gateway.** The lazy path
+  passed the result straight to `BuildConnectionUpdate`, which dereferences it;
+  the forced path already guarded this shape. A provider reporting success
+  with no token therefore panicked — and singleflight re-panicked that on
+  every waiter instead of returning an error.
+- **The write-back guard compared against a freshly derived mask.** Toggling
+  masking in a second window while the modal was open made the untouched
+  masked field compare as a rename, and persisted `l***m@gmail.com`. The
+  comparison is now against the value the field opened with, in
+  `submittedConnectionName`, with both sides trimmed so a stored name padded
+  with whitespace still matches.
+- **A Gemini turn carrying only a tool result skipped the name fit.** The
+  quick-check token list named `functionCall` but not `functionResponse`, so a
+  history-only turn returned unshortened while the declaration beside it was
+  fitted.
+- **`maskEmail` was never tested with two addresses in one label.** The regex
+  is global; dropping `/g` left the second address in the clear and the suite
+  green.
 
 Job baru `race` menjalankan `go test -race -count=1 -timeout 10m ./...`.
 Dipisah dari job `test`, bukan menambah step, supaya laporan race bernama sendiri

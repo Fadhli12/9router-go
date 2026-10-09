@@ -395,6 +395,38 @@
         `Inherits host agent's model config via 9router-go.`,
       ],
     },
+    {
+      id: 'pi',
+      name: 'Pi',
+      category: 'cli',
+      image: '/providers/pi.png',
+      color: '#111827',
+      description: 'pi coding agent — point ~/.pi/agent/models.json at the 9router-go gateway',
+      configType: 'guide',
+      instructions: [
+        `Add a 9router-go provider to ~/.pi/agent/models.json (Windows: %USERPROFILE%\\.pi\\agent\\models.json):`,
+        `{"providers":{"9router":{"baseUrl":"${localOrigin}/v1","api":"openai-completions","apiKey":"${effectiveApiKey}","models":[{"id":"kr/claude-sonnet-4.5","name":"9router kr/claude-sonnet-4.5","reasoning":true,"contextWindow":200000,"maxTokens":64000}]}}}`,
+        `Run 'pi', then /model to pick the model — models.json is re-read without a restart.`,
+        `If the model does not show up, set "api" to "openai-responses"; the gateway serves both lanes.`,
+        `List every routable id with: curl -s ${localOrigin}/v1/models -H "Authorization: Bearer ${effectiveApiKey}"`,
+      ],
+    },
+    {
+      id: 'omp',
+      name: 'Oh My Pi',
+      category: 'cli',
+      color: '#7C3AED',
+      image: '/providers/omp.png',
+      description: 'omp coding agent — register the gateway in ~/.omp/agent/models.yml',
+      configType: 'guide',
+      instructions: [
+        `Add a 9router-go provider to ~/.omp/agent/models.yml (profiles live in ~/.omp/profiles/<name>/agent/):`,
+        `providers:\n  9router:\n    baseUrl: ${localOrigin}/v1\n    api: openai-completions\n    authHeader: true\n    apiKey: 9ROUTER_API_KEY\n    models:\n      - id: kr/claude-sonnet-4.5\n        name: 9router kr/claude-sonnet-4.5\n        reasoning: true\n        contextWindow: 200000\n        maxTokens: 64000`,
+        `export 9ROUTER_API_KEY="${effectiveApiKey}" before starting 'omp' — the key is read from the environment first, and an unset variable is sent as its literal name.`,
+        `Run 'omp', then /model to select the model. 'omp models' lists everything the gateway exposes.`,
+        `Use api: openai-responses instead if a model does not stream correctly over Chat Completions.`,
+      ],
+    },
   ])
   let filteredTools = $derived(
     toolsCatalog.filter((tool) => {

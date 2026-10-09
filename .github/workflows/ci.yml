@@ -29,9 +29,13 @@ jobs:
       # The web suite ran nowhere before this: CI only built the SPA, so a PR
       # breaking client.ts or router.ts still went green. bun:test needs no
       # extra dependency — the runner already has bun and the install above.
+      #
+      # src/ and scripts/ are named explicitly because bare `bun test` also
+      # collected web/e2e, which boots the gateway binary this job builds two
+      # steps later. Those suites died on ENOENT and buried 325 passing tests.
       - name: Test web
         working-directory: web
-        run: bun test
+        run: bun test src scripts
 
       # tsc -b cannot read .svelte files, so every Svelte script block in this
       # repo went untyped until svelte-check was added. That hole shipped a
@@ -72,6 +76,24 @@ jobs:
             exit 1
           }
           go version -m /tmp/9router-go | grep -- '-pgo='
+
+      # Every gate above is structurally blind to the DOM. `tsc` reads types,
+      # `vite build` bundles, the ratchet counts diagnostics, and `go test`
+      # exercises the HTTP API without rendering a component — so a destructive
+      # action losing its confirmation dialog passes all of them. That is not
+      # hypothetical: collapsing the API-key row controls into a menu (#224)
+      # dropped the confirm() on delete and regenerate, and every gate stayed
+      # green. This job drives the real binary in a real browser.
+      - name: Build binary for E2E
+        run: go build -o 9router-go ./cmd/9router-go/
+
+      - name: Install Chromium
+        working-directory: web
+        run: bunx playwright install --with-deps chromium
+
+      - name: Dashboard E2E
+        working-directory: web
+        run: bun run e2e
 
   # The `test` job above runs `go test ./...` without -race, so a data race
   # could merge green and only surface on a user's machine under load. The

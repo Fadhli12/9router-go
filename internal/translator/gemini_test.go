@@ -850,8 +850,8 @@ func TestGeminiStreamFinishReason_ToolCallsInSeparateChunk(t *testing.T) {
 	if got != "tool_calls" {
 		t.Errorf("expected finish_reason %q when tool calls were streamed, got %q", "tool_calls", got)
 	}
-	if !state.HasToolCalls {
-		t.Error("expected state.HasToolCalls to be true after emitting a tool call")
+	if state.ToolCallCount == 0 {
+		t.Error("expected state.ToolCallCount to be > 0 after emitting a tool call")
 	}
 }
 
@@ -924,8 +924,8 @@ func TestGeminiStreamFinishReason_StopWithoutToolCalls(t *testing.T) {
 	if got != "stop" {
 		t.Errorf("expected finish_reason %q for text-only stream, got %q", "stop", got)
 	}
-	if state.HasToolCalls {
-		t.Error("expected state.HasToolCalls to stay false for a text-only stream")
+	if state.ToolCallCount > 0 {
+		t.Error("expected state.ToolCallCount to stay 0 for a text-only stream")
 	}
 }
 
@@ -1028,8 +1028,8 @@ func TestGeminiStreamFinishReason_StateIsolatedPerStream(t *testing.T) {
 	if _, err := TranslateGeminiChunkToOpenAI([]byte(toolChunk), first); err != nil {
 		t.Fatalf("tool chunk failed: %v", err)
 	}
-	if !first.HasToolCalls {
-		t.Fatal("first stream state should have HasToolCalls=true")
+	if first.ToolCallCount == 0 {
+		t.Fatal("first stream state should have ToolCallCount > 0")
 	}
 
 	second := &GeminiStreamState{}

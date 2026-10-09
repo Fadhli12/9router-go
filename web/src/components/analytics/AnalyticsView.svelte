@@ -24,7 +24,7 @@
   import UsageBreakdownTable from './UsageBreakdownTable.svelte'
   import RequestDetailsTab from './RequestDetailsTab.svelte'
   import ProviderTopologyCard from './ProviderTopologyCard.svelte'
-
+  import { emailPrivacy, formatEmailLabel } from '../../lib/privacy'
   interface Props {
     connections?: ProviderConnection[]
     providerNodes?: ProviderNode[]
@@ -276,13 +276,13 @@
     const canonical = providerId.toLowerCase().trim()
     const cat = PROVIDER_CATALOG.find((p) => p.id.toLowerCase() === canonical || (p.alias && p.alias.toLowerCase() === canonical))
     if (cat?.name) return cat.name
-    // If the provider ID is a custom node, use its name
+    // If the provider ID is a custom node, use its name (masked for privacy).
     const nodeName = nodeNameById.get(canonical)
-    if (nodeName) return nodeName
-    // Only fall back to customName if it's not a numeric ID and not an email/user label of a connection
+    if (nodeName) return formatEmailLabel(nodeName, $emailPrivacy)
+    // Only fall back to the connection label if it isn't a numeric ID (a
+    // connection label like "12"), so custom nodes never render as "12".
     if (fallbackName && fallbackName !== providerId) {
-      const trimmed = fallbackName.trim()
-      if (!/^\d+$/.test(trimmed) && !trimmed.includes('@')) return fallbackName
+      if (!/^\d+$/.test(fallbackName.trim())) return formatEmailLabel(fallbackName, $emailPrivacy)
     }
     return providerId
   }

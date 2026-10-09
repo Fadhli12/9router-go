@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"encoding/json"
+	json "encoding/json/v2"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -234,10 +234,22 @@ func TestUsageWindowCache_DistinctWindowsDoNotShareTotals(t *testing.T) {
 	t.Cleanup(resetUsageWindowCache)
 
 	now := time.Now()
+	// `today` starts at LOCAL midnight (resolveUsagePeriod builds the boundary
+	// from now.Location()), so the row that must fall outside it has to be
+	// placed against that boundary rather than at a fixed -20h. Two separate
+	// assumptions break otherwise:
+	//   - at UTC+7 local midnight is 17:00 UTC, so a -20h row lands INSIDE
+	//     today and both windows report the same count;
+	//   - in the hour before local midnight, one hour before midnight is
+	//     more than 24h old, so it drops out of the 24h window entirely.
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	// The pre-midnight row is inside the rolling 24h window but outside the
-	// calendar "today" window; the second row is inside both.
-	seedHistoryAt(t, repo, midnight.Add(-time.Minute), "openai", "gpt-5.5", "conn-1", "sk-a", 100, 10, 0.01, 0)
+	yesterday := midnight.Add(-time.Second) // outside today by a hair
+	if since := now.Sub(yesterday); since >= 24*time.Hour {
+		// Right after local midnight there is no instant that is both outside
+		// today and inside 24h, so skip rather than assert the impossible.
+		t.Skipf("local midnight is only %s ago: today and 24h cannot differ yet", since)
+	}
+	seedHistoryAt(t, repo, yesterday, "openai", "gpt-5.5", "conn-1", "sk-a", 100, 10, 0.01, 0)
 	seedHistoryAt(t, repo, now.Add(-time.Hour), "openai", "gpt-5.5", "conn-1", "sk-a", 100, 10, 0.01, 0)
 
 	today := usageStatsBody(t, repo, "today")

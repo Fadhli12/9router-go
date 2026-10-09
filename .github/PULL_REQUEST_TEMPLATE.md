@@ -92,9 +92,12 @@ body:
   - type: textarea
     id: changelog
     attributes:
-      label: CHANGELOG entry
+      label: Changelog entry
       description: |
-        Added under `## [Unreleased]` in `CHANGELOG.md`? Newest entry first; bug fixes above features.
+        Name the fragment you added, e.g. `.changes/219-chat-402-model-scoped.md`.
+        Do not edit `CHANGELOG.md` — it is written only at release time by
+        `make changelog-merge`, which is what keeps it conflict-free. Write "None"
+        if this needs no changelog entry.
     validations:
       required: true
 

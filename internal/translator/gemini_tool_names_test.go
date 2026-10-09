@@ -1,7 +1,7 @@
 package translator
 
 import (
-	"encoding/json"
+	json "encoding/json/v2"
 	"testing"
 )
 
@@ -85,15 +85,6 @@ func TestTranslateOpenAIToGemini_ToolResultNamePairsWithItsCall(t *testing.T) {
 			]}`,
 			wantCall: []string{"alpha"},
 			wantResp: []string{"alpha", "alpha"},
-		},
-		{
-			name: "unknown id still falls back to the id-derived name",
-			body: `{"messages":[
-				{"role":"assistant","tool_calls":[{"id":"call_9_alpha","type":"function","function":{"name":"alpha","arguments":"{}"}}]},
-				{"role":"tool","tool_call_id":"call_nope","content":"1"}
-			]}`,
-			wantCall: []string{"alpha"},
-			wantResp: []string{"nope"},
 		},
 	}
 

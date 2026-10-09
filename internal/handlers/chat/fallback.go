@@ -45,7 +45,7 @@ func (h *ChatHandler) handleAccountFallback(
 	prefixHash := computePrefixHash(body)
 
 	if pinnedConnectionID != "" {
-		connObj, connData, err := h.getBestConnection(provider, pinnedConnectionID, nil, model)
+		connObj, connData, err := h.getBestConnectionWithContext(ctx, provider, pinnedConnectionID, nil, model)
 		if err != nil {
 			return fmt.Errorf("pinned connection %s: %w", pinnedConnectionID, err)
 		}
@@ -59,7 +59,7 @@ func (h *ChatHandler) handleAccountFallback(
 		})
 	}
 
-	if !h.Repo.IsProviderAvailable(provider, model) {
+	if !handlerutil.IsProbeContext(ctx) && !h.Repo.IsProviderAvailable(provider, model) {
 		log.Warn("fallback", "skip unhealthy", "provider", provider, "model", model)
 		return fmt.Errorf("provider %s/%s is unhealthy", provider, model)
 	}
@@ -101,7 +101,7 @@ func (h *ChatHandler) handleAccountFallback(
 		if slices.Contains(excludeIDs, c.ID) {
 			continue
 		}
-		connObj, connData, err := h.getBestConnection(provider, c.ID, nil, model)
+		connObj, connData, err := h.getBestConnectionWithContext(ctx, provider, c.ID, nil, model)
 		if err != nil || connObj == nil {
 			if lastErr == nil && err != nil {
 				lastErr = err
@@ -143,12 +143,16 @@ func (h *ChatHandler) handleAccountFallback(
 			// needs is recorded before the client sees the 410 (#179). The
 			// lastErr still returns when every account is out, so a direct
 			// request keeps reporting the upstream's own body.
-			h.recordModelDeprecation(provider, model, connObj.ID, ue)
+			h.recordModelDeprecation(ctx, provider, model, connObj.ID, ue)
 			excludeIDs = append(excludeIDs, connObj.ID)
 			lastErr = ue
 			continue
 		}
 		if errors.As(lastErr, &ue) && providers.RetryableStatusCodes[ue.StatusCode] {
+			if handlerutil.IsProbeContext(ctx) {
+				excludeIDs = append(excludeIDs, connObj.ID)
+				continue
+			}
 			// Extract error text from upstream body for classification
 			errorText := extractErrorText(ue.Body)
 			// Get current backoff level from this connection
@@ -175,8 +179,8 @@ func (h *ChatHandler) handleAccountFallback(
 			// selector can skip this account before spending a request
 			// (upstream applyErrorState). Only lock if error is account-scoped,
 			// not model-scoped (e.g. 401 auth issues), so unrelated models stay available.
-			if isModelScopedQuotaError(ue.StatusCode, errorText, model) {
-				if recErr := h.Repo.RecordConnectionError(connObj.ID, ue.StatusCode, errorText, classification.NewBackoffLevel); recErr != nil {
+			if isModelScopedError(ue.StatusCode, errorText, model) {
+				if recErr := h.Repo.RecordConnectionScopedError(connObj.ID, model, "chat", ue.StatusCode, errorText, classification.NewBackoffLevel); recErr != nil {
 					log.Warn("fallback", "record connection error failed", "conn", connObj.ID, "error", recErr)
 				}
 			} else {
@@ -696,8 +700,9 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 
 	usage := translator.GetAndClearUsage(ctx)
 	if completed {
-		// Clear any existing model lock on success (matching Next.js clearAccountError).
-		lockKey := canonicalLockModel(provider, model)
+		if !handlerutil.IsProbeContext(ctx) {
+			// Clear any existing model lock on success (matching Next.js clearAccountError).
+			lockKey := canonicalLockModel(provider, model)
 		if unlockErr := h.Repo.UnlockConnectionModel(connectionID, lockKey); unlockErr != nil {
 			log.Warn("fallback", "unlock failed", "provider", provider, "model", lockKey, "error", unlockErr)
 		}
@@ -718,6 +723,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		// A served request proves the model is alive, so a badge recorded by
 		// an earlier 410 must not outlive it (#179).
 		h.clearModelDeprecation(provider, model)
+		}
 		if usage == nil {
 			usage = &translator.OpenAIUsage{}
 		}
@@ -1143,23 +1149,81 @@ func claudeSessionIDFromBody(body []byte) string {
 	return extractClaudeSessionIdFromUserId(userID)
 }
 
-// isModelScopedQuotaError reports whether an upstream retryable error is
-// a model-specific quota exhaustion (e.g. Antigravity Claude QUOTA_EXHAUSTED)
-// rather than an account-scoped rate limit or credential failure.
-// For model-scoped quota exhaustion, only LockConnectionModel should be set
-// so that unrelated healthy models (e.g. Gemini) on the same account remain available.
-func isModelScopedQuotaError(statusCode int, errorText string, model string) bool {
+func isAccountAuthFailure(lower string) bool {
+	return strings.Contains(lower, "no credentials") ||
+		strings.Contains(lower, "invalid_grant") ||
+		strings.Contains(lower, "invalid token") ||
+		strings.Contains(lower, "token type is not supported") ||
+		strings.Contains(lower, "authentication expired") ||
+		strings.Contains(lower, "token expired") ||
+		strings.Contains(lower, "account suspended") ||
+		strings.Contains(lower, "account disabled") ||
+		strings.Contains(lower, "incorrect api key") ||
+		strings.Contains(lower, "invalid api key") ||
+		strings.Contains(lower, "organization is not supported") ||
+		strings.Contains(lower, "insufficient funds for organization")
+}
+
+func isModelQuotaText(errorText string) bool {
+	upper := strings.ToUpper(errorText)
+	return strings.Contains(upper, "QUOTA_EXHAUSTED") ||
+		strings.Contains(errorText, "Individual quota reached") ||
+		strings.Contains(upper, "MODEL_CAPACITY_EXHAUSTED")
+}
+
+func mentionsGate(lower string) bool {
+	return strings.Contains(lower, "is not supported") ||
+		strings.Contains(lower, "not supported") ||
+		strings.Contains(lower, "model access is disabled") ||
+		strings.Contains(lower, "endpoint is unavailable")
+}
+
+// isModelScopedError reports whether an upstream retryable error is
+// specific to the requested model (e.g. 429 model quota, 402 insufficient funds
+// for paid models, or 401 "model is not supported") rather than an account-scoped
+// credential failure. For model-scoped errors, only LockConnectionModel and
+// RecordConnectionError are set so that unrelated healthy models on the same account
+// remain available.
+func isModelScopedError(statusCode int, errorText string, model string) bool {
 	if model == "" {
 		return false
 	}
-	if statusCode != http.StatusTooManyRequests && statusCode != http.StatusForbidden && statusCode != http.StatusServiceUnavailable {
+	lower := strings.ToLower(errorText)
+	if isAccountAuthFailure(lower) {
 		return false
 	}
-	upper := strings.ToUpper(errorText)
-	if strings.Contains(upper, "QUOTA_EXHAUSTED") ||
-		strings.Contains(errorText, "Individual quota reached") ||
-		strings.Contains(upper, "MODEL_CAPACITY_EXHAUSTED") {
+
+	// 1. Quota exhaustion markers (Antigravity Claude, etc.) on 429/403/503
+	if statusCode == http.StatusTooManyRequests || statusCode == http.StatusForbidden || statusCode == http.StatusServiceUnavailable {
+		if isModelQuotaText(errorText) {
+			return true
+		}
+	}
+
+	// 2. Model-gate verdicts only ever arrive on 400/401/402/403.
+	// A 5xx that merely says "not supported" is a node fault, not a model gate.
+	switch statusCode {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusForbidden:
+	default:
+		return false
+	}
+
+	// 402 Insufficient account funds on providers serving tiered models (e.g. Zen paid models)
+	if statusCode == http.StatusPaymentRequired {
+		if (strings.Contains(lower, "insufficient account funds") || strings.Contains(lower, "insufficient funds")) &&
+			!strings.Contains(lower, "credits are exhausted") && !strings.Contains(lower, "spending limit") {
+			return true
+		}
+	}
+
+	// 401/400/403: Body must name the requested model AND mention that the model is unsupported/disabled
+	cleanModel := strings.ToLower(model)
+	if idx := strings.LastIndex(cleanModel, "/"); idx != -1 {
+		cleanModel = cleanModel[idx+1:]
+	}
+	if (strings.Contains(lower, cleanModel) || strings.Contains(lower, strings.ToLower(model))) && mentionsGate(lower) {
 		return true
 	}
+
 	return false
 }

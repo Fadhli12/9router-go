@@ -33,6 +33,9 @@
   import { emailPrivacy, formatEmailLabel } from '../../lib/privacy'
   import { loadDeprecations, refreshDeprecations, subscribeDeprecations } from '../../lib/modelDeprecations.svelte'
   import DeprecatedBadge from '../../lib/ui/DeprecatedBadge.svelte'
+  import Modal from '../../lib/ui/Modal.svelte'
+  import Menu from '../../lib/ui/Menu.svelte'
+  import MenuItem from '../../lib/ui/MenuItem.svelte'
   import {
     buildAvailableModels,
     fetchProviderModelsData,
@@ -45,6 +48,13 @@
   } from './types'
   import { proxyBadgeInfo } from './proxyBadge'
   import {
+    formatCheckAllSummary,
+    getBlockedModelIds,
+    parseModelTestVerdict,
+    type CheckAllSummary,
+    type ModelTestStatus,
+  } from './modelCheckAll'
+  import {
     badgeFor,
     canProbeRow,
     probeOutcomeFrom,
@@ -56,11 +66,9 @@
   import AddConnectionModal from './AddConnectionModal.svelte'
   import AddCustomModelModal from './AddCustomModelModal.svelte'
   import ProviderHeaderOverridesModal from './ProviderHeaderOverridesModal.svelte'
-  import AddCompatibleNodeModal from './AddCompatibleNodeModal.svelte'
   import EditCompatibleNodeModal from './EditCompatibleNodeModal.svelte'
   import FreebuffSessionBanner from './FreebuffSessionBanner.svelte'
   import ProviderIcon from './ProviderIcon.svelte'
-  import Modal from '../../lib/ui/Modal.svelte'
 
   interface Props {
     providerId: string
@@ -308,15 +316,16 @@
   let dropdownPos = $state<{ top: number; right: number }>({ top: 0, right: 0 })
   let updatingProxyConnId = $state<string | null>(null)
   let copiedModelId = $state<string | null>(null)
-  let modelTestStatuses = $state<Record<string, 'ok' | 'error' | 'testing'>>({})
+  let modelTestStatuses = $state<Record<string, ModelTestStatus>>({})
   let modelTestErrors = $state<Record<string, string | null>>({})
   let activeModelTestError = $state<string | null>(null)
+  let checkAllSummary = $state<CheckAllSummary | null>(null)
 
   // Modals state
   let showRiskNoticeModal = $state(false)
-  let showOAuthModal = $state(false)
   let showErrorModal = $state(false)
   let errorModalText = $state('')
+  let showOAuthModal = $state(false)
   let oauthAuthUrl = $state('')
   let copiedAuthUrl = $state(false)
   let callbackInput = $state('')
@@ -1126,7 +1135,7 @@
   }
 
   async function handleDeleteConnection(conn: ProviderConnection) {
-    if (!confirm(`Delete connection "${conn.name || conn.id}"? This cannot be undone.`)) return
+    if (!confirm(`Delete connection "${formatEmailLabel(conn.name || conn.id, $emailPrivacy)}"? This cannot be undone.`)) return
     try {
       await api.deleteConnection(conn.id)
       onRefresh()
@@ -2078,14 +2087,11 @@
     try {
       const res = await api.testModel(`${storageAlias}/${modelId}`)
       if (pid !== providerId) return
-      if (res.ok) {
-        modelTestStatuses[modelId] = 'ok'
-        modelTestErrors[modelId] = null
-      } else {
-        modelTestStatuses[modelId] = 'error'
-        const err = res.error || 'Model test failed'
-        modelTestErrors[modelId] = err
-        if (!silent) activeModelTestError = `${modelId}: ${err}`
+      const verdict = parseModelTestVerdict(res)
+      modelTestStatuses[modelId] = verdict.status
+      modelTestErrors[modelId] = verdict.error
+      if (!silent && verdict.error) {
+        activeModelTestError = `${modelId}: ${verdict.error}`
       }
     } catch (err) {
       if (pid !== providerId) return
@@ -2446,6 +2452,7 @@
     checkAllProgress = { done: 0, total: 0 }
     modelTestStatuses = {}
     modelTestErrors = {}
+    checkAllSummary = null
     activeModelTestError = null
   })
 
@@ -2531,15 +2538,13 @@
   // the browser (a ~30-model provider fires 30 simultaneous fetches).
   const TEST_CONCURRENCY = 6
 
-  async function handleCheckAllModels() {
-    if (isCheckingAll) return
+  // Runs ids through the bounded pool, then publishes the sweep summary. A
+  // run that outlives its provider panel publishes nothing: the verdicts it
+  // produced belong to a provider this panel no longer shows.
+  async function runModelSweep(ids: string[]) {
     const pid = providerId
     isCheckingAll = true
-    const ids = allAvailableModels.map((m) => m.id)
     checkAllProgress = { done: 0, total: ids.length }
-    // Reset previous verdicts so the run is not confused with stale ones.
-    modelTestStatuses = {}
-    modelTestErrors = {}
     try {
       let cursor = 0
       const workers = Array.from({ length: Math.min(TEST_CONCURRENCY, ids.length) }, async () => {
@@ -2552,15 +2557,37 @@
       })
       await Promise.allSettled(workers)
       if (pid !== providerId) return
-      const failed = Object.values(modelTestStatuses).filter((s) => s === 'error')
-      if (failed.length > 0) {
-        activeModelTestError = `${failed.length} of ${ids.length} model(s) failed — see per-row status. Delete unusable models individually.`
-      } else {
-        activeModelTestError = null
-      }
+      const summary = formatCheckAllSummary(modelTestStatuses)
+      checkAllSummary = summary
+      activeModelTestError = summary.message
     } finally {
       if (pid === providerId) isCheckingAll = false
     }
+  }
+
+  async function handleCheckAllModels() {
+    if (isCheckingAll) return
+    // Reset previous verdicts so the run is not confused with stale ones.
+    // Only the full sweep clears them — a retry must keep the passed and
+    // failed verdicts it is not re-testing.
+    modelTestStatuses = {}
+    modelTestErrors = {}
+    checkAllSummary = null
+    // visibleModels, not allAvailableModels: the table below renders exactly
+    // this list, so probing a disabled model produced a verdict no row could
+    // show and spent an upstream request on a model the operator switched off.
+    await runModelSweep(visibleModels.map((m) => m.id))
+  }
+
+  // A blocked model was never asked anything, so re-testing only those is
+  // cheap. It reuses the same bounded pool: a serial loop would leave the
+  // button looking hung for as long as the cooldown, which is exactly the
+  // wait the operator is sitting through.
+  async function handleRetryBlockedModels() {
+    if (isCheckingAll) return
+    const blockedIds = getBlockedModelIds(modelTestStatuses)
+    if (blockedIds.length === 0) return
+    await runModelSweep(blockedIds)
   }
 
   // Delete is only real for custom models; registry models are static, so an
@@ -2935,7 +2962,7 @@
           {/if}
           {#if isTestingOneByOne && oneByOneCurrentId}
             <span>
-              Running: {providerConnections.find((conn) => conn.id === oneByOneCurrentId)?.name || oneByOneCurrentId}
+              Running: {formatEmailLabel(providerConnections.find((conn) => conn.id === oneByOneCurrentId)?.name || oneByOneCurrentId, $emailPrivacy)}
             </span>
           {/if}
         </div>
@@ -3225,19 +3252,24 @@
                       {/if}
                       <!-- Last error tooltip -->
                       {#if lastErr && lastErr !== 'Provider test not supported'}
+                        {@const isModelScoped = Boolean(conn.lastErrorModel)}
+                        {@const isHealthy = connBadge !== 'error'}
                         <button
                           type="button"
-                          class="inline-flex items-center gap-1.5 max-w-full truncate text-xs text-red-500 hover:text-red-600 sm:max-w-[300px] cursor-pointer text-left group"
-                          title={lastErr}
+                          class="inline-flex items-center gap-1.5 min-w-0 max-w-full sm:max-w-[360px] cursor-pointer text-left group"
+                          title={isModelScoped ? `[${conn.lastErrorModel}] ${lastErr}` : lastErr}
                           onclick={() => {
                             errorModalText = lastErr
                             showErrorModal = true
                           }}
                         >
-                          <span class="truncate group-hover:underline">
+                          {#if isModelScoped}
+                            <span class="font-mono text-[11px] text-text-muted shrink-0">[{conn.lastErrorModel}]</span>
+                          {/if}
+                          <span class="truncate text-xs {isHealthy ? 'text-text-muted' : 'text-red-500'} group-hover:underline">
                             {lastErr.length > 50 ? lastErr.slice(0, 50) + '...' : lastErr}
                           </span>
-                          <span class="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 group-hover:bg-red-500/20 shrink-0">
+                          <span class="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-500/10 {isHealthy ? 'text-text-muted' : 'text-red-500'} group-hover:bg-red-500/20 shrink-0">
                             Show
                           </span>
                         </button>
@@ -3250,7 +3282,12 @@
                     {#if lastErr && lastErr !== 'Provider test not supported' && (status?.state === 'failed' || conn.testStatus === 'failed' || conn.testStatus === 'error')}
                       <div class="mt-1.5 flex items-start gap-1.5 text-xs text-red-500 bg-red-500/10 px-2.5 py-1.5 rounded-md border border-red-500/20 max-w-full">
                         <span class="material-symbols-outlined text-sm shrink-0 mt-0.5">error</span>
-                        <span class="break-words font-medium leading-relaxed">{lastErr}</span>
+                        <span class="break-words font-medium leading-relaxed">
+                          {#if conn.lastErrorModel}
+                            <span class="font-mono text-[11px] mr-1">[{conn.lastErrorModel}]</span>
+                          {/if}
+                          {lastErr}
+                        </span>
                       </div>
                     {/if}
                     <!-- Proxy detail line: pool/legacy label, masked endpoint, no_proxy -->
@@ -3284,10 +3321,11 @@
 
                 <!-- Right actions -->
                 <div class="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-end">
-                  <!-- One implicit column per action (proxy / refresh / edit /
-                       delete, plus Session for Freebuff). auto-cols-fr keeps them
-                       on a single row as buttons are added; a fixed
-                       grid-cols-N silently wrapped once a fourth button landed. -->
+                  <!-- The proxy picker stays a control of its own: it is a
+                       two-tap choice between pools, not a verb. Everything that
+                       runs and is done moved into one menu, because four to five
+                       labelled buttons in a row left the connection name almost
+                       no width (issue #224). -->
                   <div class="grid flex-1 grid-flow-col auto-cols-fr gap-1 sm:flex sm:flex-none">
                     <!-- Proxy dropdown -->
                     <div class="relative">
@@ -3361,50 +3399,33 @@
                         </div>
                       {/if}
                     </div>
-                    <!-- Freebuff session manage button -->
-                    {#if isFreebuff}
-                    <button
-                      type="button"
-                      onclick={() => selectFreebuffAccount(conn.id)}
-                      class="flex flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 {targetFreebuffConn?.id === conn.id ? 'text-primary font-medium' : 'text-text-muted hover:text-primary'} cursor-pointer"
-                      title="Manage session for this account"
+                    <Menu
+                      label="Actions for this connection"
+                      triggerIcon="more_horiz"
+                      hideLabel
+                      minWidth="13rem"
                     >
-                      <span class="material-symbols-outlined text-[18px]">lock_clock</span>
-                      <span class="text-[10px] leading-tight">Session</span>
-                    </button>
-                    {/if}
+                      {#if isFreebuff}
+                        <MenuItem
+                          label="Manage session"
+                          icon="lock_clock"
+                          onSelect={() => selectFreebuffAccount(conn.id)}
+                        />
+                        <div class="my-1 border-t border-border-subtle" role="separator"></div>
+                      {/if}
 
-                    <!-- Refresh (single-account test) button -->
-                    <button
-                      type="button"
-                      onclick={() => refreshOneConnection(conn)}
-                      disabled={isTestingOneByOne || status?.state === 'testing'}
-                      title="Test this account and refresh its status"
-                      class="flex flex-col items-center rounded px-2 py-1 text-text-muted hover:bg-black/5 hover:text-primary dark:hover:bg-white/5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                    >
-                      <span class="material-symbols-outlined text-[18px] {status?.state === 'testing' ? 'animate-spin' : ''}">sync</span>
-                      <span class="text-[10px] leading-tight">Refresh</span>
-                    </button>
+                      <MenuItem
+                        label="Refresh"
+                        icon="sync"
+                        disabled={isTestingOneByOne || status?.state === 'testing'}
+                        onSelect={() => refreshOneConnection(conn)}
+                      />
+                      <MenuItem label="Edit" icon="edit" onSelect={() => openEditConnection(conn)} />
 
-                    <!-- Edit button -->
-                    <button
-                      type="button"
-                      onclick={() => openEditConnection(conn)}
-                      class="flex flex-col items-center rounded px-2 py-1 text-text-muted hover:bg-black/5 hover:text-primary dark:hover:bg-white/5 cursor-pointer"
-                    >
-                      <span class="material-symbols-outlined text-[18px]">edit</span>
-                      <span class="text-[10px] leading-tight">Edit</span>
-                    </button>
+                      <div class="my-1 border-t border-border-subtle" role="separator"></div>
 
-                    <!-- Delete button -->
-                    <button
-                      type="button"
-                      onclick={() => handleDeleteConnection(conn)}
-                      class="flex flex-col items-center rounded px-2 py-1 text-red-500 hover:bg-red-500/10 cursor-pointer"
-                    >
-                      <span class="material-symbols-outlined text-[18px]">delete</span>
-                      <span class="text-[10px] leading-tight">Delete</span>
-                    </button>
+                      <MenuItem label="Delete" icon="delete" danger onSelect={() => handleDeleteConnection(conn)} />
+                    </Menu>
                   </div>
 
                   <!-- Active toggle switch -->
@@ -3635,15 +3656,27 @@
     </div>
 
     {#if activeModelTestError}
-      <div class="mb-3 flex items-start gap-2.5 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-600 dark:text-red-400">
-        <span class="material-symbols-outlined shrink-0 text-base">error</span>
-        <div class="flex-1 font-medium leading-relaxed">
-          {activeModelTestError}
+      {@const isBlockedSeverity = checkAllSummary?.severity === 'blocked'}
+      {@const blockedCount = getBlockedModelIds(modelTestStatuses).length}
+      <div class="mb-3 flex items-start gap-2.5 rounded-lg border {isBlockedSeverity ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400' : 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400'} p-3 text-xs">
+        <span class="material-symbols-outlined shrink-0 text-base">{isBlockedSeverity ? 'schedule' : 'error'}</span>
+        <div class="flex-1 font-medium leading-relaxed flex items-center justify-between gap-2 flex-wrap">
+          <span>{activeModelTestError}</span>
+          {#if blockedCount > 0}
+            <button
+              type="button"
+              onclick={handleRetryBlockedModels}
+              disabled={isCheckingAll}
+              class="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-700 dark:text-amber-300 font-semibold text-xs cursor-pointer disabled:opacity-50"
+            >
+              Retry blocked ({blockedCount})
+            </button>
+          {/if}
         </div>
         <button
           type="button"
-          onclick={() => (activeModelTestError = null)}
-          class="text-red-600 dark:text-red-400 hover:opacity-75 cursor-pointer"
+          onclick={() => { activeModelTestError = null; checkAllSummary = null; }}
+          class="hover:opacity-75 cursor-pointer shrink-0"
           title="Dismiss"
         >
           <span class="material-symbols-outlined text-sm">close</span>
@@ -3684,7 +3717,7 @@
         {@const isTestingThis = testStatus === 'testing'}
         {@const isSessionActive = checkIsActiveSession(model.id)}
         <div
-          class="group min-w-0 max-w-full rounded-lg border px-3 py-2 {testStatus === 'ok' ? 'border-green-500/40' : testStatus === 'error' ? 'border-red-500/40' : 'border-border'} hover:bg-sidebar/50 transition-colors"
+          class="group min-w-0 max-w-full rounded-lg border px-3 py-2 {testStatus === 'ok' ? 'border-green-500/40' : testStatus === 'blocked' ? 'border-amber-500/40' : testStatus === 'error' ? 'border-red-500/40' : 'border-border'} hover:bg-sidebar/50 transition-colors"
         >
           <div class="flex min-w-0 items-start gap-2 sm:items-center">
             <span class="material-symbols-outlined shrink-0 text-base text-text-muted">smart_toy</span>
@@ -3693,6 +3726,11 @@
                 <code class="max-w-[72vw] truncate rounded bg-sidebar px-1.5 py-0.5 font-mono text-xs text-text-muted sm:max-w-[360px]">
                   {fullModelId}
                 </code>
+                {#if rowCaps?.free}
+                  <span class="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                    FREE
+                  </span>
+                {/if}
                 {#if isSessionActive}
                   <span class="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
                     <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -3724,7 +3762,7 @@
               </span>
             </div>
               {#if modelTestErrors[model.id]}
-                <span class="text-[9px] text-red-500 dark:text-red-400 font-medium pl-1 truncate max-w-[280px]" title={modelTestErrors[model.id]}>
+                <span class="text-[9px] {testStatus === 'blocked' ? 'text-amber-500 dark:text-amber-400' : 'text-red-500 dark:text-red-400'} font-medium pl-1 truncate max-w-[280px]" title={modelTestErrors[model.id]}>
                   {modelTestErrors[model.id]}
                 </span>
               {/if}
@@ -3742,6 +3780,8 @@
                   <span class="material-symbols-outlined text-sm animate-spin text-primary">progress_activity</span>
                 {:else if testStatus === 'ok'}
                   <span class="material-symbols-outlined text-sm text-green-500">check</span>
+                {:else if testStatus === 'blocked'}
+                  <span class="material-symbols-outlined text-sm text-amber-500">schedule</span>
                 {:else if testStatus === 'error'}
                   <span class="material-symbols-outlined text-sm text-red-500">error</span>
                 {:else}
@@ -3753,6 +3793,8 @@
                   Testing...
                 {:else if testStatus === 'ok'}
                   Passed
+                {:else if testStatus === 'blocked'}
+                  {modelTestErrors[model.id] || 'Blocked — account in cooldown'}
                 {:else if testStatus === 'error'}
                   {modelTestErrors[model.id] || 'Failed'}
                 {:else}
@@ -3832,7 +3874,7 @@
         </button>
       {/if}
 
-      {#if allAvailableModels.length > 0}
+      {#if visibleModels.length > 0}
         <button
           type="button"
           onclick={handleCheckAllModels}
@@ -3843,7 +3885,7 @@
           <span class="material-symbols-outlined text-sm">{isCheckingAll ? 'progress_activity' : 'troubleshoot'}</span>
           {isCheckingAll
             ? `Checking ${checkAllProgress.done}/${checkAllProgress.total}...`
-            : `Check All Models (${allAvailableModels.length})`}
+            : `Check All Models (${visibleModels.length})`}
         </button>
       {/if}
 
@@ -4474,7 +4516,6 @@
   onSubmit={handleAddKeyConnection}
   onBulkDone={onRefresh}
 />
-
 
 <!-- 7. Connection Error Details Modal -->
 <Modal

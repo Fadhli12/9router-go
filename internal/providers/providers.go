@@ -1028,7 +1028,7 @@ var KnownProviders = map[string]ProviderConfig{
 var RetryableStatusCodes = map[int]bool{
 	http.StatusRequestTimeout:     true, // 408
 	http.StatusUnauthorized:       true, // 401
-	http.StatusPaymentRequired:    true, // 402 (Kiro quota "You have reached the limit", Gemini billing)
+http.StatusPaymentRequired:    true, // 402 (Kiro quota "You have reached the limit", Gemini billing)
 	http.StatusForbidden:          true, // 403 (Gemini/antigravity daily-quota errors can come as 403)
 	http.StatusTooManyRequests:    true, // 429
 	http.StatusBadGateway:         true, // 502

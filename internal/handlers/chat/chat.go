@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"9router/proxy/internal/changelogfrag"
 	json "9router/proxy/internal/fastjson"
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
@@ -15,7 +16,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 )
@@ -124,7 +124,7 @@ func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 	requiredCaps := DetectRequiredCapabilities(body)
 
 	if len(modelInfo.ComboModels) > 0 {
-		augmented, comboStrategy, injected := h.applyCapacityAdapter(modelInfo.ComboModels, requiredCaps, modelInfo.Strategy, reqBody.Model)
+		augmented, comboStrategy, injected := h.applyCapacityAdapter(modelInfo.ComboModels, requiredCaps, modelInfo.Strategy, reqBody.Model, requestKeyID(r))
 		if modelInfo.Strategy == "fusion" {
 			// Upstream hands the fusion panel the combo's own models, never the
 			// augmented list: a capacity-adapter model is a serial fallback, and
@@ -141,7 +141,7 @@ func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 	if !strings.Contains(targetEntry, "/") && modelInfo != nil && modelInfo.Provider != "" {
 		targetEntry = modelInfo.Provider + "/" + modelInfo.Model
 	}
-	augmented, strat := h.AugmentModelsWithCapacityAdapter([]string{targetEntry}, requiredCaps)
+	augmented, strat := h.AugmentModelsWithCapacityAdapter([]string{targetEntry}, requiredCaps, requestKeyID(r))
 	if len(augmented) > 1 {
 		injected := augmented[:len(augmented)-1]
 		log.Info("chat", "capacity adapter auto-switch", "target", reqBody.Model, "switched_to", augmented[0], "caps", keysString(requiredCaps))
@@ -165,8 +165,8 @@ func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 // absent from the combo appeared to leak out of it. An augmented list is
 // therefore governed by the adapter's own strategy; the combo's strategy
 // applies only when nothing was injected.
-func (h *ChatHandler) applyCapacityAdapter(comboModels []string, required map[string]bool, comboStrategy, requestedModel string) ([]string, string, []string) {
-	augmented, adapterStrategy := h.AugmentModelsWithCapacityAdapter(comboModels, required)
+func (h *ChatHandler) applyCapacityAdapter(comboModels []string, required map[string]bool, comboStrategy, requestedModel, keyID string) ([]string, string, []string) {
+	augmented, adapterStrategy := h.AugmentModelsWithCapacityAdapter(comboModels, required, keyID)
 	if len(augmented) == len(comboModels) {
 		return augmented, comboStrategy, nil
 	}
@@ -291,7 +291,7 @@ func (h *ChatHandler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	requiredCaps := DetectRequiredCapabilities(body)
 
 	if len(modelInfo.ComboModels) > 0 {
-		augmented, comboStrategy, injected := h.applyCapacityAdapter(modelInfo.ComboModels, requiredCaps, modelInfo.Strategy, reqBody.Model)
+		augmented, comboStrategy, injected := h.applyCapacityAdapter(modelInfo.ComboModels, requiredCaps, modelInfo.Strategy, reqBody.Model, requestKeyID(r))
 		if modelInfo.Strategy == "fusion" {
 			bodyJSON, err := json.Marshal(workingBody)
 			if err != nil {
@@ -310,7 +310,7 @@ func (h *ChatHandler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if !strings.Contains(targetEntry, "/") && modelInfo != nil && modelInfo.Provider != "" {
 		targetEntry = modelInfo.Provider + "/" + modelInfo.Model
 	}
-	augmented, strat := h.AugmentModelsWithCapacityAdapter([]string{targetEntry}, requiredCaps)
+	augmented, strat := h.AugmentModelsWithCapacityAdapter([]string{targetEntry}, requiredCaps, requestKeyID(r))
 	if len(augmented) > 1 {
 		injected := augmented[:len(augmented)-1]
 		log.Info("chat", "capacity adapter auto-switch messages", "target", reqBody.Model, "switched_to", augmented[0], "caps", keysString(requiredCaps))
@@ -366,18 +366,21 @@ func (h *ChatHandler) HandleVersionStatus(w http.ResponseWriter, r *http.Request
 	handlerutil.WriteJSON(w, http.StatusOK, status)
 }
 
-// HandleChangelog serves the CHANGELOG.md file or fetches it from remote with fallbacks.
+// HandleChangelog serves the changelog the dashboard renders: the released
+// CHANGELOG.md plus the pending per-PR fragments in .changes/, so work merged
+// but not yet released is still visible. See internal/changelogfrag for why
+// entries live in fragments rather than at the top of CHANGELOG.md.
+//
+// Each candidate directory is tried in turn because the binary runs from the
+// repository root in a dev checkout but from its own directory once installed;
+// the remote copy stays the last resort for a packaged build that ships neither.
 func (h *ChatHandler) HandleChangelog(w http.ResponseWriter, r *http.Request) {
-	candidates := []string{
-		"CHANGELOG.md",
-		"../CHANGELOG.md",
-		"../../CHANGELOG.md",
-	}
-	for _, path := range candidates {
-		if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+	for _, dir := range changelogDirs() {
+		result := changelogfrag.Assemble(dir)
+		if result.Err == nil && result.Markdown != "" {
 			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(data)
+			_, _ = w.Write([]byte(result.Markdown))
 			return
 		}
 	}
@@ -408,6 +411,14 @@ func (h *ChatHandler) HandleChangelog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	handlerutil.WriteJSONError(w, http.StatusNotFound, "changelog not found")
+}
+
+// changelogDirs lists the directories that may hold CHANGELOG.md and .changes/,
+// nearest first. It stays relative to the working directory rather than
+// resolving from the executable path, which is what lets a dev run started
+// from a subdirectory find the repository root.
+func changelogDirs() []string {
+	return []string{".", "..", "../.."}
 }
 
 // HandleToggleAutoUpdate enables or disables automatic updates in settings and runtime.

@@ -297,7 +297,7 @@ func TestResolveDataDir_PrefersOSEnvOverDotEnv(t *testing.T) {
 // shape of every compose deployment that configures the gateway through .env.
 func TestResolveDataDir_FallsBackToDotEnv(t *testing.T) {
 	dir := t.TempDir()
-fromFile := filepath.Join(dir, "from-file")
+	fromFile := filepath.Join(dir, "from-file")
 	writeDotEnv(t, dir, "DATA_DIR="+fromFile+"\n")
 	t.Chdir(dir)
 	t.Setenv("DATA_DIR", "")
@@ -317,10 +317,10 @@ func TestResolveDataDir_DotEnvWithoutDataDirUsesDefault(t *testing.T) {
 
 	got := ResolveDataDir()
 	if got == "" {
-	t.Fatal("ResolveDataDir() returned empty; want the platform default")
+		t.Fatal("ResolveDataDir() returned empty; want the platform default")
 	}
 	if strings.Contains(got, ".env") {
-	t.Errorf("ResolveDataDir() = %q, want the platform default rather than a config path", got)
+		t.Errorf("ResolveDataDir() = %q, want the platform default rather than a config path", got)
 	}
 }
 

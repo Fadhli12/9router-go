@@ -33,13 +33,13 @@ type ChatHandler struct {
 	// The handler holds it so the metering path can reconcile a TPM
 	// reservation once the real usage is known: the estimate is taken
 	// pre-dispatch, but only the response knows what the turn actually cost.
-	RateLimiter   *middleware.RateLimiter
+RateLimiter   *middleware.RateLimiter
 	SemanticCache *semanticcache.Cache
 	stickyMu      sync.Mutex
 	stickyState   map[string]*comboStickyState
-	// oauthRefreshFlight collapses concurrent refreshes of one provider token
-	// into a single upstream exchange, so a burst of requests on an expired
-	// token does not spend the refresh window several times over.
+	// oauthRefreshFlight collapses concurrent OAuth token refreshes for the
+	// same connection, so an expired token triggers one upstream round-trip
+	// instead of one per in-flight request.
 	oauthRefreshFlight singleflight.Group
 	// modelsCache memoizes the /v1/models catalog per ModelsListMode. It is a
 	// value field (not a pointer) so a zero-value ChatHandler is usable; the

@@ -10,7 +10,7 @@
 [![Release](https://github.com/luqman-v1/9router-go/actions/workflows/release.yml/badge.svg)](https://github.com/luqman-v1/9router-go/actions/workflows/release.yml)
 [![GitHub release](https://img.shields.io/github/v/release/luqman-v1/9router-go)](https://github.com/luqman-v1/9router-go/releases/latest)
 [![License](https://img.shields.io/github/license/luqman-v1/9router-go)](https://github.com/luqman-v1/9router-go/blob/main/LICENSE)
-[![Telegram](https://img.shields.io/badge/Telegram-Join%20Group-26A5E1?logo=telegram&logoColor=white)](https://t.me/+eW9d0UanBFU4ODNl)
+[![Telegram](https://img.shields.io/badge/Telegram-Join%20Group-26A5E1?logo=telegram&logoColor=white)](https://luqman-v1.github.io/9router-go/tg)
 
 [🚀 Quick Start](#-quick-start) • [💡 Features](#-key-features) • [⚙️ Setup](#-setup-guide) • [🔄 Share DB with 9Router](#-sharing-a-database-with-9router) • [🌐 Upstream](https://github.com/decolua/9router)
 
@@ -359,7 +359,8 @@ PRs follow the checks CI runs: `go vet ./...`, `go test -count=1 ./...`, `make t
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — routing, providers, runtime layout
 - [`DATABASE.md`](DATABASE.md) — SQLite schema & operator contract
 - [`ROADMAP.md`](ROADMAP.md) — proposals only, not current behavior
-- [`CHANGELOG.md`](CHANGELOG.md) — release history (Go **v1.9.9**, upstream baseline `decolua/9router` v0.5.85)
+- [`CHANGELOG.md`](CHANGELOG.md) — release history (Go **v1.9.9**, upstream baseline `decolua/9router` v0.5.85). Work merged since the last tag lives in [`.changes/`](.changes/) and is folded in at the next release; the dashboard's changelog modal shows both.
+- [`docs/TELEGRAM_RELEASE_NOTIFICATIONS.md`](docs/TELEGRAM_RELEASE_NOTIFICATIONS.md) — one-time setup for the release notice posted to Telegram
 
 ## Credits
 
@@ -367,4 +368,4 @@ PRs follow the checks CI runs: `go vet ./...`, `go test -count=1 ./...`, `make t
 
 ## 📄 License
 
-MIT — see [`LICENSE`](LICENSE). Portions derive from [9Router](https://github.com/decolua/9router) (MIT, © 2024-2026 decolua and contributors); its notice is retained there.
+MIT License — lihat [`LICENSE`](https://github.com/luqman-v1/9router-go/blob/main/LICENSE).
