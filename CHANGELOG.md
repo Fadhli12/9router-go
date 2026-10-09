@@ -2,6 +2,72 @@
 
 ## [Unreleased]
 
+### ✨ feat(dashboard): satukan enam baris kontrol menjadi satu menu (Closes #224)
+
+- **Latar belakang**: report #224 — enam surface dashboard punya deretan
+  kontrol yang membuat baris header atau baris tabel wrap di layar sempit, dan
+  dropdown Cache Analytics keluar dari layar di lebar ponsel.
+- **Akibat**: operator harus menggulir ke baris kedua di Quota Tracker, dan
+  tombol `Delete` pada baris API key bisa terdorong keluar viewport sehingga
+  tidak bisa ditekan di ponsel.
+- **Perubahan UI**:
+  - **Top bar**: donate, install, theme, language, changelog, dan logout —
+    enam kontrol — kini satu tombol `Menu` (`TopBar.svelte`). Dropdown language
+    dan app-drawer yang sebelumnya terpisah dihapus.
+  - **Quota Tracker**: provider filter + account filter tetap terlihat; email
+    masking, expiring-first, disable/enable massal, auto-refresh, dan refresh
+    pindah ke satu `Menu`.
+  - **Proxy Pools**: dua modal (single add dan batch import) menjadi satu dialog
+    bertab `Single` / `Bulk Add`; tombol `Batch Import` membuka tab yang sama.
+  - **Provider connections**: refresh / edit / delete per baris menjadi satu
+    `more_horiz` menu. Tombol proxy tetap kontrol tersendiri karena itu pilihan
+    nilai, bukan verb.
+  - **API keys**: action per baris menjadi satu `more_horiz` menu; checkbox per
+    baris menambah **batch bar** (enable / pause / delete) untuk banyak key
+    sekaligus.
+- **Fix mobile dropdown**: panel menu kini `position: fixed` dan diposisikan
+  dari `getBoundingClientRect()` trigger, lalu di-clamp ke viewport
+  (`lib/ui/menuPosition.ts`). Sebelumnya `absolute` di dalam wrapper, sehingga
+  terpotong oleh ancestor `overflow-x-auto` — inilah penyebab dropdown Cache
+  Analytics keluar layar di ponsel. `ViewSelect`, `SectionMenu`, `PeriodSelect`,
+  dan provider filter Quota Tracker semuanya memakai penempatan yang sama.
+- **Rename API key**: `PUT /api/keys/{id}` menerima field `name` (partial
+  update; string kosong = hapus nama). Field rename ada di dialog policy yang
+  sama dengan rate limit/expiry/allowlist, jadi mengedit satu key = satu
+  dialog. Dibatasi 200 karakter.
+- **Verifikasi**: `bun run build`, `make vet-svelte` (0 unresolved identifier,
+  83 error = baseline), `go test ./...` (3650 pass), plus smoke check di browser
+  pada 1440px dan 390px — rename tersimpan, batch pause menandai kedua key,
+  dan kedua dropdown Cache Analytics tampil utuh di 390px.
+
+### ✅ test(dashboard): E2E suite yang menutup celah tsc/vite/svelte-check/go-test
+
+- **Latar belakang**: collapsing action API key jadi satu menu (#224) menghapus
+  `confirm()` pada delete dan regenerate — dan **semua gate tetap hijau**.
+  `tsc` membaca type, `vite build` membundel, ratchet svelte-check menghitung
+  diagnostic, `go test` menguji HTTP API tanpa pernah merender komponen.
+  Tidak satu pun melihat DOM.
+- **Perubahan**: `web/e2e/` (Playwright + Chromium) menjalankan binary Go asli
+  terhadap SQLite sementara, lalu menguji konsekuensi yang bisa diamati:
+  - dismiss dialog delete → baris **tetap ada**; accept → baris hilang
+  - dismiss dialog regenerate → secret **tidak berubah**
+  - prompt delete **menyebut nama key** yang akan dihapus
+  - batch bar mengubah semua key terpilih jadi `Paused`
+  - panel dropdown di 390px dan di viewport 200px **tetap di dalam layar**
+- **Bug tersembunyi yang ketahuan**: `style:min-width` pada panel mengalahkan
+  `width` hasil clamp, sehingga di viewport 200px panel 224px tetap meluber
+  32px. `placePanel` kini ikut meng-cap `minWidth`, dan semua panel meneruskan
+  nilai tersebut alih-alih menulis `min-width` sendiri.
+- **Bukti test menangkap regresi**: dengan clamp dimatikan, test mobile gagal
+  `232 > 200`; dengan `confirm()` dihapus, 4 dari 5 test API key gagal —
+  sementara keempat gate lama tetap hijau.
+
+- **Empat surface lain (#224)** — top bar, header Quota Tracker, dialog Add Proxy
+  Pools bertab, dan halaman Providers — ditutup di
+  `web/e2e/unifiedControls.test.ts`, sehingga suite-nya 20 test.
+  - **Bukti**: mengembalikan `TopBar.svelte` ke kondisi pra-#224 membuat **6 dari
+    10 test** di file itu gagal, sementara keempat gate lama tetap hijau.
+
 ### 🐛 fix(models): /api/models/test read-only terhadap cooldown produksi agar sweep tidak memicu cascade (#220)
 
 - **Latar belakang**: `POST /api/models/test` (tombol Test dan sweep "Check All Models")
