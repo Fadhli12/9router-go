@@ -8,6 +8,9 @@ BINARY_NAME := 9router-go$(BINARY_SUFFIX)
 # -X CurrentVersion into the binary.
 VERSION ?= $(strip $(file <VERSION))
 ifeq ($(VERSION),)
+VERSION := $(strip $(shell cat VERSION 2>/dev/null))
+endif
+ifeq ($(VERSION),)
 VERSION := $(strip $(shell cat version.json 2>/dev/null | grep -o '"latestVersion": *"[^"]*"' | cut -d'"' -f4))
 endif
 ifeq ($(VERSION),)
