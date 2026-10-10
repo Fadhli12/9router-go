@@ -23,7 +23,59 @@ type ProviderConfig struct {
 	SystemoneURL  string            // override /systemone endpoint (System One structured evaluation)
 	FetchURL      string            // override /web/fetch endpoint (Jina, Firecrawl, etc.)
 	FetchMethod   string            // HTTP method for fetch: GET or POST (default POST)
-	UsageURL       string            // override /usage endpoint (quota tracker)
+	UsageURL      string            // override /usage endpoint (quota tracker)
+
+	// UpstreamIsAnthropic marks an entry whose upstream speaks Anthropic Messages while
+	// the client may speak OpenAI, on a host that is not api.anthropic.com. The existing
+	// detection keys off that host, so a gateway like Bedrock needs its own flag for the
+	// response to be translated rather than passed through.
+	UpstreamIsAnthropic bool
+}
+
+// Bedrock protocol constants. Region is substituted per request by the executor, so the
+// BaseURL below documents the shape rather than being dialed directly.
+const (
+	BedrockService          = "bedrock"
+	BedrockAnthropicVersion = "bedrock-2023-05-31"
+	BedrockStreamPath       = "invoke-with-response-stream"
+	BedrockInvokePath       = "invoke"
+	// BedrockChunkEvent is the only event type InvokeModelWithResponseStream defines
+	// today; each chunk payload is {"bytes": "<base64 of one Anthropic event>"}.
+	BedrockChunkEvent = "chunk"
+	// BedrockTerminalEvent is how Anthropic closes a well-formed Bedrock stream.
+	// Tracking it is what lets us tell a finished answer from an upstream that hung up
+	// cleanly halfway through one.
+	BedrockTerminalEvent = "message_stop"
+
+	// BedrockProbePath is ListFoundationModels on the control-plane host, used by the
+	// dashboard's validate and Test paths.
+	BedrockProbePath         = "foundation-models"
+	BedrockErrorTypeHeader   = "x-amzn-errortype"
+	BedrockAccessDeniedError = "AccessDeniedException"
+)
+
+// BedrockModelFamily reports whether a Bedrock model id belongs to the family this
+// provider entry serves, and what to tell the user when it does not.
+//
+// Bedrock model families use different request and response shapes, so each gets its own
+// provider entry. Rejecting the wrong family here beats letting it sail through and fail
+// mid-stream, after the call has already been billed.
+func BedrockModelFamily(providerID, model string) (ok bool, hint string) {
+	// Inference-profile ids look like "us.anthropic.claude-…" or "global.xai.grok-…";
+	// the family is whatever follows the region prefix, or is the whole id when bare.
+	family := model
+	if idx := strings.IndexAny(model, "./"); idx >= 0 {
+		family = model[idx+1:]
+	}
+	switch providerID {
+	case "bedrock":
+		return strings.HasPrefix(family, "anthropic."),
+			`an Anthropic model, e.g. "us.anthropic.claude-sonnet-5"`
+	case "bedrock-xai":
+		return strings.HasPrefix(family, "xai."), `an xAI model, e.g. "us.xai.grok-4.6"`
+	default:
+		return true, ""
+	}
 }
 
 // IsGeminiNative returns true if provider uses Gemini-native format.
@@ -614,6 +666,41 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
+	// MiniMax Code (mcode) — the coding-subscription credits lane, served as a
+	// provider. Anthropic Messages on MiniMax's agent gateway, signed in with
+	// MiniMax Code's own OAuth device flow (PKCE S256, client mcode-public) but
+	// with tokens of our own: ~/.minimax is never touched, so a sign-in here
+	// neither signs the CLI out nor collides with another account.
+	//
+	// Global is the same protocol on different hosts, and sign-ins are per
+	// site — an account on agent.minimax.cn says nothing about
+	// agent.minimax.io. The two are never aliased onto each other
+	// (AGENTS.md §3.A). Port of upstream decolua/9router registry
+	// minimax-code.js / minimax-code-global.js.
+	"minimax-code": {
+		BaseURL:    "https://agent.minimax.cn/mavis/api/v1/llm/v1/messages",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+		Format:     "claude",
+		StaticHeaders: map[string]string{
+			"User-Agent":      "MiniMaxAgent",
+			"X-Mavis-Agent-Id": "main",
+			// MiniMax requires the anthropic-version header on its Messages
+			// endpoint; the bearer carries the real credential.
+			"anthropic-version": "2023-06-01",
+		},
+	},
+	"minimax-code-global": {
+		BaseURL:    "https://agent.minimax.io/mavis/api/v1/llm/v1/messages",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+		Format:     "claude",
+		StaticHeaders: map[string]string{
+			"User-Agent":      "MiniMaxAgent",
+			"X-Mavis-Agent-Id": "main",
+			"anthropic-version": "2023-06-01",
+		},
+	},
 	"kimi-coding": {
 		BaseURL:    "https://api.kimi.com/coding/v1/chat/completions",
 		AuthHeader: "Authorization",
@@ -655,12 +742,32 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
+	"bedrock": {
+		// The executor substitutes the region per request and signs each request with
+		// SigV4, so AuthHeader/AuthScheme are absent by design: there is no static
+		// bearer token to configure.
+		BaseURL: "https://bedrock-runtime.{region}.amazonaws.com",
+		// Anthropic models on Bedrock take the Anthropic Messages body verbatim, so the
+		// existing claude translators are reused rather than a Bedrock-specific pair.
+		Format:              "claude",
+		UpstreamIsAnthropic: true,
+	},
+	"bedrock-xai": {
+		// Same credential story, but no Format: Grok on Bedrock speaks OpenAI Chat
+		// Completions, so the standard openai wire applies and the response needs no
+		// translation.
+		BaseURL: "https://bedrock-runtime.{region}.amazonaws.com",
+	},
 	"elevenlabs": {
 		BaseURL:    "https://api.elevenlabs.io",
 		AuthHeader: "xi-api-key",
 		AuthScheme: "raw",
 		TTSURL:     "https://api.elevenlabs.io/v1/text-to-speech",
-		VoicesURL:  "https://api.elevenlabs.io/v1/voices",
+		// Scribe STT is a multipart endpoint with its own auth header and its own
+		// render formats, so it cannot ride the OpenAI-compatible transcriptions
+		// lane the rest of the media handlers use.
+		STTURL:    "https://api.elevenlabs.io/v1/speech-to-text",
+		VoicesURL: "https://api.elevenlabs.io/v1/voices",
 	},
 	"deepgram": {
 		BaseURL:    "https://api.deepgram.com",
@@ -784,10 +891,10 @@ var KnownProviders = map[string]ProviderConfig{
 	// and fetch), which is why BaseURL is a non-endpoint root here: appending
 	// /v1/search to it would hit a host that does not serve search.
 	"tinyfish": {
-		BaseURL:    "https://api.tinyfish.ai",
-		AuthHeader: "x-api-key",
-		AuthScheme: "raw",
-		FetchURL:   "https://api.fetch.tinyfish.ai",
+		BaseURL:     "https://api.tinyfish.ai",
+		AuthHeader:  "x-api-key",
+		AuthScheme:  "raw",
+		FetchURL:    "https://api.fetch.tinyfish.ai",
 		FetchMethod: "POST",
 	},
 	"runwayml": {

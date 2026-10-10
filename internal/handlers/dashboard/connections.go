@@ -140,7 +140,8 @@ const (
 var usageSupportedProviders = []string{
 	"antigravity", "claude", "codebuddy-cn", "codebuddy-intl", "codex",
 	"commandcode", "deepseek", "gemini-cli", "github", "glm", "glm-cn",
-	"grok-cli", "groq", "kimi", "kiro", "minimax", "minimax-cn", "ollama",
+	"grok-cli", "groq", "kimi", "kiro", "minimax", "minimax-cn", "minimax-code",
+	"minimax-code-global", "ollama",
 	"opencode-go", "opencode-zen", "qoder", "qoder-cn", "trae",
 	"vercel-ai-gateway", "xiaomi-mimo", "zed",
 }
@@ -341,7 +342,7 @@ func sanitizeProviderConnection(c *models.ProviderConnection) map[string]any {
 			"connectionProxyEnabled", "connectionProxyUrl", "connectionNoProxy",
 			"githubLogin", "githubName", "githubEmail", "githubUserId",
 			"username", "firstName", "lastName", "authMethod", "authKind",
-			"profileArn",
+			"profileArn", "accessKeyId", "profile",
 		} {
 			if v, ok := psd[f]; ok && v != nil {
 				out[f] = v

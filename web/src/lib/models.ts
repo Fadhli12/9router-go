@@ -29,6 +29,8 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "assemblyai": "aai",
   "aws-polly": "aws-polly",
   "azure": "azure",
+  "bedrock": "br",
+  "bedrock-xai": "brx",
   "baidu": "qianfan",
   "bazaarlink": "bzl",
   "black-forest-labs": "bfl",
@@ -82,6 +84,8 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "mimo-free": "mmf",
   "minimax": "minimax",
   "minimax-cn": "minimax-cn",
+  "minimax-code": "mmc",
+  "minimax-code-global": "mmg",
   "mistral": "mistral",
   "mmf": "mmf",
   "muse": "muse",
@@ -172,6 +176,62 @@ const FREEBUFF_MODELS: ProviderModel[] = [
 
 export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   "fb": FREEBUFF_MODELS,
+  "br": [
+    {
+      "id": "us.anthropic.claude-opus-5",
+      "name": "Claude Opus 5"
+    },
+    {
+      "id": "us.anthropic.claude-sonnet-5",
+      "name": "Claude Sonnet 5"
+    },
+    {
+      "id": "us.anthropic.claude-fable-5",
+      "name": "Claude Fable 5"
+    },
+    {
+      "id": "us.anthropic.claude-opus-4-8",
+      "name": "Claude Opus 4.8"
+    },
+    {
+      "id": "us.anthropic.claude-opus-4-7",
+      "name": "Claude Opus 4.7"
+    },
+    {
+      "id": "us.anthropic.claude-sonnet-4-6",
+      "name": "Claude Sonnet 4.6"
+    },
+    {
+      "id": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+      "name": "Claude Opus 4.5"
+    },
+    {
+      "id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "name": "Claude Sonnet 4.5"
+    },
+    {
+      "id": "us.anthropic.claude-opus-4-1-20250805-v1:0",
+      "name": "Claude Opus 4.1"
+    },
+    {
+      "id": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+      "name": "Claude Sonnet 4"
+    },
+    {
+      "id": "us.anthropic.claude-3-haiku-20240307-v1:0",
+      "name": "Claude 3 Haiku"
+    }
+  ],
+  "brx": [
+    {
+      "id": "us.xai.grok-4.6",
+      "name": "Grok 4.6"
+    },
+    {
+      "id": "global.xai.grok-4.6",
+      "name": "Grok 4.6 (global)"
+    }
+  ],
   "freebuff": FREEBUFF_MODELS,
   "alicode-intl": [
     {
@@ -2935,6 +2995,58 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "id": "speech-01-turbo",
       "name": "Speech 01 Turbo",
       "kind": "tts"
+    }
+  ],
+  "minimax-code": [
+    {
+      "id": "MiniMax-M3.1-Flash-Preview",
+      "name": "MiniMax M3.1 Flash Preview",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
+    },
+    {
+      "id": "MiniMax-M3",
+      "name": "MiniMax M3",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
+    },
+    {
+      "id": "MiniMax-M2.7",
+      "name": "MiniMax M2.7",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
+    },
+    {
+      "id": "MiniMax-M2.7-highspeed",
+      "name": "MiniMax M2.7 Highspeed",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
+    }
+  ],
+  "minimax-code-global": [
+    {
+      "id": "MiniMax-M3.1-Flash-Preview",
+      "name": "MiniMax M3.1 Flash Preview",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
+    },
+    {
+      "id": "MiniMax-M3",
+      "name": "MiniMax M3",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
+    },
+    {
+      "id": "MiniMax-M2.7",
+      "name": "MiniMax M2.7",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
+    },
+    {
+      "id": "MiniMax-M2.7-highspeed",
+      "name": "MiniMax M2.7 Highspeed",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
     }
   ],
   "mistral": [
@@ -5979,6 +6091,32 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "id": "eleven_turbo_v2_5",
       "name": "Eleven Turbo v2.5",
       "kind": "tts"
+    },
+    {
+      "id": "scribe_v1",
+      "name": "Scribe v1",
+      "params": [
+        "language",
+        "response_format",
+        "timestamps_granularity",
+        "tag_audio_events",
+        "diarize",
+        "num_speakers"
+      ],
+      "kind": "stt"
+    },
+    {
+      "id": "scribe_v2",
+      "name": "Scribe v2",
+      "params": [
+        "language",
+        "response_format",
+        "timestamps_granularity",
+        "tag_audio_events",
+        "diarize",
+        "num_speakers"
+      ],
+      "kind": "stt"
     }
   ],
   "elevenlabs-tts-models": [

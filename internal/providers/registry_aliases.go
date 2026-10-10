@@ -14,6 +14,8 @@ var RegistryAliases = map[string]string{
 	"aws-polly":         "polly",
 	"baidu":             "qianfan",
 	"bazaarlink":        "bzl",
+	"bedrock":           "br",
+	"bedrock-xai":       "brx",
 	"black-forest-labs": "bfl",
 	"blackbox":          "bb",
 	"bluesminds":        "bm",
@@ -47,6 +49,11 @@ var RegistryAliases = map[string]string{
 	"kilocode":          "kc",
 	"kiro":              "kr",
 	"mimo-free":         "mmf",
+	// MiniMax Code sites. "mm" belongs to the API-key `minimax` provider, so
+	// the credits lane is published under "mmc"; the global site keeps
+	// upstream's own "mmg".
+	"minimax-code":        "mmc",
+	"minimax-code-global": "mmg",
 	"muse":              "muse",
 	"nanobanana":        "nb",
 	"opencode":          "oc",

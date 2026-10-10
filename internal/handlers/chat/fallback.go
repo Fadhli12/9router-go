@@ -16,13 +16,13 @@ import (
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/middleware"
+	"9router/proxy/internal/observ"
 	"9router/proxy/internal/providers"
 	internalproxy "9router/proxy/internal/proxy"
 	"9router/proxy/internal/proxy/executor"
 	"9router/proxy/internal/tokensaver"
 	"9router/proxy/internal/tracing"
 	"9router/proxy/internal/translator"
-	"9router/proxy/internal/observ"
 	"9router/proxy/internal/usagetracker"
 )
 
@@ -208,6 +208,12 @@ func (h *ChatHandler) handleAccountFallback(
 // isAnthropicUpstream reports whether the request is headed to Anthropic's
 // native Messages API (as opposed to an anthropic-compatible custom node).
 func isAnthropicUpstream(provider string, cfg *providers.ProviderConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	if cfg.UpstreamIsAnthropic {
+		return true
+	}
 	if provider != "claude" && provider != "anthropic" {
 		return false
 	}
@@ -222,6 +228,19 @@ func isAnthropicUpstream(provider string, cfg *providers.ProviderConfig) bool {
 	}
 	return targetURL == "https://api.anthropic.com/v1/messages" ||
 		strings.HasPrefix(targetURL, "https://api.anthropic.com/v1/messages?")
+}
+
+// servesClaudeMessages reports whether the provider's own endpoint speaks
+// Anthropic Messages, so the body reaches it in Claude format and the reply
+// comes back Claude-shaped.
+//
+// That is a different question from isAnthropicUpstream: Anthropic's own API
+// additionally needs the beta query, the OAuth cloaking and the beta-flag
+// merge below, none of which a third-party Messages endpoint wants. A provider
+// declares the wire format on its registry entry (Format: "claude"), which is
+// the same field the /v1/models metadata publishes.
+func servesClaudeMessages(provider string, cfg *providers.ProviderConfig) bool {
+	return cfg != nil && cfg.Format == providers.FormatClaude
 }
 
 func appendBetaQuery(u string) string {
@@ -257,6 +276,7 @@ type forwardRequestParams struct {
 	Endpoint          string
 	PrefixHash        string
 }
+
 func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	startTime := time.Now()
 	ctx, w := f.Ctx, f.W
@@ -344,17 +364,28 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	// requests for non-Anthropic providers (DeepSeek, OpenAI-compatible) to
 	// OpenAI format before the fallback, and passing endpoint "/v1/v1/messages"
 	// alone would wrongly inject a top-level "system" the upstream ignores.
-	claudeNative := isAnthropic && (endpoint == "/v1/v1/messages" || endpoint == "/v1/messages")
+	//
 	// A /v1/messages client is only converted away from Claude format when the
-	// upstream cannot answer in it. opencode-zen routes the Claude and Qwen
-	// models to its own /zen/v1/messages endpoint, so those requests keep the
-	// client's own wire format end to end (upstream resolveTransport picks the
-	// sourceFormat-matched transport and skips translation).
-	if endpoint == "/v1/v1/messages" || endpoint == "/v1/messages" {
-		if executor.ServesMessagesEndpoint(provider, model) {
-			claudeNative = true
-		}
-	}
+	// upstream cannot answer in it. That is true of two kinds of provider: one
+	// routing some of its models to a Messages endpoint (opencode-zen's Claude
+	// and Qwen lanes), and one whose own endpoint speaks Messages outright
+	// (minimax-code on MiniMax's mavis gateway). Both keep the client's own
+	// wire format end to end — upstream resolveTransport picks the
+	// sourceFormat-matched transport and skips translation.
+	messagesClient := endpoint == "/v1/v1/messages" || endpoint == "/v1/messages"
+	// A Messages-speaking provider answers a Messages client in its own wire
+	// format, whichever of the two ways it earns that: a model routed to a
+	// Messages endpoint (opencode-zen's Claude and Qwen lanes), or an endpoint
+	// that speaks Messages outright (minimax-code on the mavis gateway).
+	claudeNative := messagesClient && (isAnthropic ||
+		executor.ServesMessagesEndpoint(provider, model) ||
+		servesClaudeMessages(provider, providerCfg))
+
+	// upstreamClaude is what the executor needs to translate the Claude reply
+	// back for a Chat Completions client. Anthropic's own API and a third-party
+	// Messages endpoint both answer in Claude, but only Anthropic's wants the
+	// beta query, the OAuth cloaking and the beta-flag merge below.
+	upstreamClaude := isAnthropic || servesClaudeMessages(provider, providerCfg)
 	compressStart := time.Now()
 	pipedBody, origTokens, savedTokens, savedPct := h.applyTokenSavers(body, claudeNative)
 	compressDurMs := int(time.Since(compressStart).Milliseconds())
@@ -362,7 +393,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		compressDurMs = 1
 	}
 	var claudeToolMap map[string]string
-	if isAnthropic {
+	if upstreamClaude {
 		if !claudeNative {
 			// Raw OpenAI-format body would be invalid at the Messages API:
 			// convert to a spec-compliant Claude payload (top-level system,
@@ -496,16 +527,16 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		connName, connEmail := identityNames(h.connIdentityKVOr(f, connectionID))
 		h.LogFailure(
 			&UsageLogInfo{
-				Provider:            provider,
-				Model:               model,
-				ConnectionID:        connectionID,
-				ConnName:            connName,
-				ConnEmail:           connEmail,
-				Endpoint:            endpoint,
-				Egress:              resolveEgress(connData, providerCfg).LogValue(),
-				OriginalInputTokens: origTokens,
-				SavedTokens:         savedTokens,
-				SavedPercent:        savedPct,
+				Provider:              provider,
+				Model:                 model,
+				ConnectionID:          connectionID,
+				ConnName:              connName,
+				ConnEmail:             connEmail,
+				Endpoint:              endpoint,
+				Egress:                resolveEgress(connData, providerCfg).LogValue(),
+				OriginalInputTokens:   origTokens,
+				SavedTokens:           savedTokens,
+				SavedPercent:          savedPct,
 				CompressionDurationMs: compressDurMs,
 			},
 			nil,
@@ -588,7 +619,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			ConnectionID:   connectionID,
 			SessionID:      sessionID,
 			ToolNameMap:    claudeToolMap,
-			UpstreamClaude: isAnthropic && !claudeNative,
+			UpstreamClaude: upstreamClaude && !claudeNative,
 			ResponseBuf:    &metrics.ResponseBuf,
 			StartTime:      start,
 			TTFT:           &metrics.TTFT,
@@ -634,7 +665,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 					ConnectionID:   connectionID,
 					SessionID:      sessionID,
 					ToolNameMap:    claudeToolMap,
-					UpstreamClaude: isAnthropic && !claudeNative,
+					UpstreamClaude: upstreamClaude && !claudeNative,
 					ResponseBuf:    &metrics.ResponseBuf,
 					StartTime:      start,
 					TTFT:           &metrics.TTFT,
@@ -703,26 +734,26 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		if !handlerutil.IsProbeContext(ctx) {
 			// Clear any existing model lock on success (matching Next.js clearAccountError).
 			lockKey := canonicalLockModel(provider, model)
-		if unlockErr := h.Repo.UnlockConnectionModel(connectionID, lockKey); unlockErr != nil {
-			log.Warn("fallback", "unlock failed", "provider", provider, "model", lockKey, "error", unlockErr)
-		}
-		if lockKey != model {
-			_ = h.Repo.UnlockConnectionModel(connectionID, model)
-		}
-		// A served request also clears the account-scoped cooldown, so an
-		// account that recovered is not kept out of rotation until the
-		// cooldown expires on its own.
-		if clearErr := h.Repo.ClearConnectionRateLimit(connectionID); clearErr != nil {
-			log.Warn("fallback", "rate limit clear failed", "conn", connectionID, "error", clearErr)
-		}
-		// A served request proves the account is usable again, so drop any
-		// cached quota block rather than leaving it to expire on its own.
-		if provider == "codex" {
-			ClearCodexQuotaBlock(connectionID)
-		}
-		// A served request proves the model is alive, so a badge recorded by
-		// an earlier 410 must not outlive it (#179).
-		h.clearModelDeprecation(provider, model)
+			if unlockErr := h.Repo.UnlockConnectionModel(connectionID, lockKey); unlockErr != nil {
+				log.Warn("fallback", "unlock failed", "provider", provider, "model", lockKey, "error", unlockErr)
+			}
+			if lockKey != model {
+				_ = h.Repo.UnlockConnectionModel(connectionID, model)
+			}
+			// A served request also clears the account-scoped cooldown, so an
+			// account that recovered is not kept out of rotation until the
+			// cooldown expires on its own.
+			if clearErr := h.Repo.ClearConnectionRateLimit(connectionID); clearErr != nil {
+				log.Warn("fallback", "rate limit clear failed", "conn", connectionID, "error", clearErr)
+			}
+			// A served request proves the account is usable again, so drop any
+			// cached quota block rather than leaving it to expire on its own.
+			if provider == "codex" {
+				ClearCodexQuotaBlock(connectionID)
+			}
+			// A served request proves the model is alive, so a badge recorded by
+			// an earlier 410 must not outlive it (#179).
+			h.clearModelDeprecation(provider, model)
 		}
 		if usage == nil {
 			usage = &translator.OpenAIUsage{}
@@ -744,17 +775,17 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		}
 
 		logInfo := &UsageLogInfo{
-			Provider:               provider,
-			Model:                  model,
-			RequestedModel:         reqModel,
-			ComboName:              f.ComboName,
-			Protocol:               protocol,
-			CacheSource:            resolveCacheSource(usage),
-			StartedAt:              startedAt,
-			ConnectionID:           connectionID,
-			APIKey:                 apiKey,
-			Endpoint:               endpoint,
-			Egress:                 resolveEgress(connData, providerCfg).LogValue(),
+			Provider:              provider,
+			Model:                 model,
+			RequestedModel:        reqModel,
+			ComboName:             f.ComboName,
+			Protocol:              protocol,
+			CacheSource:           resolveCacheSource(usage),
+			StartedAt:             startedAt,
+			ConnectionID:          connectionID,
+			APIKey:                apiKey,
+			Endpoint:              endpoint,
+			Egress:                resolveEgress(connData, providerCfg).LogValue(),
 			OriginalInputTokens:   origTokens,
 			SavedTokens:           savedTokens,
 			SavedPercent:          savedPct,
@@ -801,18 +832,18 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 
 	h.LogFailure(
 		&UsageLogInfo{
-			Provider:               provider,
-			Model:                  model,
-			RequestedModel:         reqModel,
-			ComboName:              f.ComboName,
-			Protocol:               protocol,
-			StartedAt:              startedAt,
-			ConnectionID:           connectionID,
-			ConnName:               connName,
-			ConnEmail:              connEmail,
-			APIKey:                 apiKey,
-			Endpoint:               endpoint,
-			Egress:                 resolveEgress(connData, providerCfg).LogValue(),
+			Provider:              provider,
+			Model:                 model,
+			RequestedModel:        reqModel,
+			ComboName:             f.ComboName,
+			Protocol:              protocol,
+			StartedAt:             startedAt,
+			ConnectionID:          connectionID,
+			ConnName:              connName,
+			ConnEmail:             connEmail,
+			APIKey:                apiKey,
+			Endpoint:              endpoint,
+			Egress:                resolveEgress(connData, providerCfg).LogValue(),
 			OriginalInputTokens:   origTokens,
 			SavedTokens:           savedTokens,
 			SavedPercent:          savedPct,

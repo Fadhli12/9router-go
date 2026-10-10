@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"9router/proxy/internal/constants"
 	"9router/proxy/internal/db"
@@ -80,7 +81,7 @@ func (h *ChatHandler) LogFailure(
 	if metrics != nil {
 		responseContent = metrics.ResponseBuf.String()
 		if len(responseContent) > constants.MaxResponseContentLen {
-			responseContent = responseContent[:constants.MaxResponseContentLen] + "...[truncated]"
+			responseContent = truncateDetailText(responseContent, constants.MaxResponseContentLen, "...[truncated]")
 		}
 	}
 	startedAt := info.StartedAt
@@ -139,11 +140,39 @@ func metricsTTFT(metrics *streamMetrics) int64 {
 }
 
 func sanitizeDetailError(message string) string {
-	if len(message) > maxPersistedErrorLen {
-		return message[:maxPersistedErrorLen] + "...[truncated]"
-	}
-	return message
+	return truncateDetailText(message, maxPersistedErrorLen, "...[truncated]")
 }
+
+// truncateDetailText bounds text stored in a request-detail row.
+//
+// The cut is by byte, so it can land inside a multi-byte rune and leave a
+// fragment that is no longer valid UTF-8. encoding/json/v2 — the marshaler
+// used for these rows — rejects such a string outright instead of replacing
+// the bad bytes as encoding/json v1 did, so one CJK or emoji character
+// straddling the limit used to fail the whole marshal and silently drop the
+// row, the daily aggregate and the recent-requests entry with it.
+//
+// Invalid bytes are scrubbed on the untruncated path too: a value that
+// arrived already malformed is just as fatal to the marshal as one this
+// function damaged. The ContainsFunc guard keeps that path free — measured
+// at 0 allocs/op — by returning the original string when nothing needs
+// fixing. The truncated path allocates once for the concatenated result,
+// which is what the bare s[:max] + suffix did as well.
+func truncateDetailText(s string, max int, suffix string) string {
+	if len(s) > max {
+		if !strings.ContainsFunc(s[:max], isInvalidRune) {
+			return s[:max] + suffix
+		}
+		return strings.ToValidUTF8(s[:max], "") + suffix
+	}
+	if !strings.ContainsFunc(s, isInvalidRune) {
+		return s
+	}
+	return strings.ToValidUTF8(s, "")
+}
+
+// isInvalidRune reports whether r is a byte sequence Go could not decode.
+func isInvalidRune(r rune) bool { return r == utf8.RuneError }
 
 // LogUsage is the exported method to persist a usage record and update connection metadata.
 func (h *ChatHandler) LogUsage(ctx context.Context, info *UsageLogInfo, usage *translator.OpenAIUsage, latencyMs int64, requestBody []byte, metrics *streamMetrics) {
@@ -162,7 +191,7 @@ func (h *ChatHandler) logUsage(ctx context.Context, info *UsageLogInfo, usage *t
 		ttftMs = metrics.TTFT
 		respContent = metrics.ResponseBuf.String()
 		if len(respContent) > constants.MaxResponseContentLen {
-			respContent = respContent[:constants.MaxResponseContentLen] + "...[truncated]"
+			respContent = truncateDetailText(respContent, constants.MaxResponseContentLen, "...[truncated]")
 		}
 	}
 
@@ -336,9 +365,7 @@ func extractRequestMessages(body []byte) []map[string]string {
 	msgs := make([]map[string]string, 0, len(req.Messages))
 	for _, m := range req.Messages {
 		content := extractContent(m.Content)
-		if len(content) > constants.MaxMessageContentLen {
-			content = content[:constants.MaxMessageContentLen] + "..."
-		}
+		content = truncateDetailText(content, constants.MaxMessageContentLen, "...")
 		msgs = append(msgs, map[string]string{"role": m.Role, "content": content})
 	}
 	if len(msgs) > constants.MaxLoggedMessages {
