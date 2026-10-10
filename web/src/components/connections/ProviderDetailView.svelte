@@ -3774,7 +3774,7 @@
                 type="button"
                 onclick={() => testModel(model.id)}
                 disabled={isTestingThis}
-                class="rounded p-0.5 text-text-muted transition-opacity hover:bg-sidebar hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 cursor-pointer"
+                class="rounded p-0.5 text-text-muted transition-opacity hover:bg-sidebar hover:text-primary cursor-pointer"
                 title={modelTestErrors[model.id] || (testStatus === 'ok' ? 'Test Passed' : 'Test')}
               >
                 {#if isTestingThis}
@@ -3825,7 +3825,7 @@
             <button
               type="button"
               onclick={() => handleDisableModel(model.id)}
-              class="ml-auto rounded p-0.5 text-text-muted opacity-100 transition-opacity hover:bg-red-500/10 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100 cursor-pointer"
+              class="ml-auto rounded p-0.5 text-text-muted transition-opacity hover:bg-red-500/10 hover:text-red-500 cursor-pointer"
               title="Disable this model"
             >
               <span class="material-symbols-outlined text-sm">close</span>
@@ -3837,7 +3837,7 @@
               <button
                 type="button"
                 onclick={() => handleDeleteModel(model.id)}
-                class="rounded p-0.5 text-red-500 opacity-100 transition-opacity hover:bg-red-500/10 hover:text-red-600 sm:opacity-0 sm:group-hover:opacity-100 cursor-pointer"
+                class="rounded p-0.5 text-red-500 transition-opacity hover:bg-red-500/10 hover:text-red-600 cursor-pointer"
                 title={model.isCustom ? 'Delete unusable model' : 'Unusable — disable this registry model'}
               >
                 <span class="material-symbols-outlined text-sm">delete</span>
