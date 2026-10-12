@@ -1,6 +1,988 @@
 # Changelog
 
-## [Unreleased]
+## [v1.9.11] - 2026-10-12
+
+### 🖼️ `muse.png` 404 — Meta Muse tile rendered empty
+
+`muse` is in the provider catalog (`web/src/lib/providers.ts`), and `getIconPath`
+resolves a catalog id to `/providers/<id>.png`, so the tile asked for
+`web/public/providers/muse.png` — an asset this repo never shipped when the
+provider landed with the v0.5.95 sync. Every Muse tile (provider card,
+connection row, quota tracker filter, top bar) rendered an empty box.
+
+An audit of the catalog turned up two more dashboard-visible cases with the
+same cause: `tinyfish` and `v1m` (`systemone`). All three now carry the artwork
+upstream `decolua/9router` ships in `public/providers/` — 128×128 for muse and
+v1m, 96×96 for tinyfish. The remaining catalog entries without artwork are not
+provider cards: they are header/field names (`user-agent`, `x-requested-with`,
+`anthropic-version`), region ids (`cn`, `sgp`, `ams`), or entries that already
+have local artwork (`freebuff`, `opencode-zen`, `ollama-search`).
+
+Verified with `bun run build` (the assets land in `web/dist/providers/`), a
+`go build` of the single binary, and `GET /providers/{muse,tinyfish,v1m}.png`
+against a live instance — all three answer `200 image/png`.
+
+### Fixes
+
+- **Cache Analytics dan Compression Analytics mengabaikan pilihan rentang
+  waktu.** Dua section itu sudah punya pemilih periode di header, tapi tidak
+  satupun angkanya yang mengikutinya.
+
+  **Cache Analytics** tidak punya window sama sekali di totals-nya:
+  `GetPromptCacheMetrics` menjalankan `SELECT … FROM usageHistory` tanpa
+  `WHERE` untuk kartu KPI, `byProvider` dan `byModel`, jadi "Last 24 hours"
+  menampilkan cache rate, cached tokens dan cost saved dari **seluruh** ledger.
+  Satu-satunya yang dibatasi adalah `GetPromptCacheTrend`, lewat parameter
+  `trendHours` sendiri — jadi kartu di atas grafik dan grafiknya menggambarkan
+  periode berbeda pada satu layar.
+
+  **Compression Analytics** lebih halus: endpoint-nya menerima `since`, dan
+  scalars/`byMode`/trend/top-savers memang memakainya, tapi tiga query punya
+  cutoff-nya sendiri — branch `usageHistory`, breakdown per provider/model, dan
+  agregat dolar per pasangan `(provider, model)`. Saat `since` menentukan
+  fallback (`GetCompressionAnalyticsSummary` memakai `cutoff == ""` untuk
+  `all`), seluruh statement itu kehilangan batasnya dan membaca tabel penuh,
+  sementara scalars di sebelahnya tetap terbatasi. Pilihan "All time" pada
+  dropdown karena itu mengembalikan grafik 24 jam di atas angka all-time.
+
+  Sekarang **satu window** mengikat kartu, breakdown dan grafik di kedua
+  section, dan keduanya memakai kosakata periode yang sama dengan Overview
+  (`today`, `24h`, `7d`, `30d`, `60d`, `all`, plus `<n>d`/`<n>h`) lewat
+  `internal/analyticsrange`, bukan dua dropdown dengan dua daftar berbeda.
+  `trendHours` dan `since` tetap diterima sebagai fallback supaya SPA lama dan
+  tautan tersimpan tidak ikut membaca window yang salah.
+
+  `last24h` diganti jadi `trend`, karena seri itu sekarang mengikuti window yang
+  dipilih dan nama lamanya akan berbohong setiap kali window-nya bukan 24 jam.
+  Untuk window tanpa batas server tidak mengirim grafik sama sekali — satu
+  bucket per jam sejak ledger dimulai tidak bisa dirender, dan grafik periode
+  lain di samping kartu yang lebih jujur adalah dua kesalahan, bukan satu.
+
+  **Breakdown juga dibatasi** ke 50 baris terbesar per provider/model, diurut
+  berdasarkan token tersimpan. Tanpa itu satu ledger yang sudah melihat ribuan
+  string model menghasilkan respons yang tidak bisa dirender tabel mana pun.
+  Response melaporkan `truncatedProviders`/`truncatedModels` dan dashboard
+  menampilkan "Top 50 of 80 models", jadi tabel yang terpotong tidak pernah
+  terbaca sebagai tabel utuh.
+
+  **Indeks untuk `compressionAnalytics` diganti.** Di ledger 300.000 baris,
+  limiter window ternyata **bukan** penyebab lamanya — `all` justru terukur
+  lebih cepat dari `24h`, yang tidak mungkin kalau window yang jadi biaya.
+  Penyebabnya indeks yang tidak menutup query berat: SQLite memakai
+  `idx_ca_ts` untuk mencari rentang `timestamp`, lalu karena `timestamp` bukan
+  rowid, ia kembali ke tabel untuk setiap kolom yang dibaca — dua lookup per
+  baris. Empat indeks baru, semuanya bentuknya dipaksa hasil `EXPLAIN QUERY
+  PLAN` dan bukan tebakan:
+
+  - `idx_ca_stat_p/m (provider|model, timestamp, tokensSaved, originalTokens,
+    durationMs)` — **group key di depan, bukan timestamp**. Index yang diawali
+    timestamp hanya bisa *seek* pada range, dan sort untuk `ORDER BY` tetap
+    butuh temp B-tree. Dengan group key di depan, window tetap terfilter,
+    group sudah terklaster, dan kolom yang dibaca ikut ter-cover sehingga pass
+    ini index-only: breakdown model **1659 ms → 50 ms**, provider **351 → 37 ms**.
+  - `idx_ca_saved (tokensSaved, timestamp)` — top-10 savers mengurutkan seluruh
+    window untuk mengembalikan sepuluh baris: **971 ms → <1 ms**, dengan 10 baris
+    yang identik dengan hasil sort.
+  - `idx_ca_receipt (timestamp, actualPromptTokens, actualTotalTokens)` —
+    agregat receipts memfilter dua kolom tapi tidak membacanya, jadi indeks
+    timestamp mengirimnya ke tabel sekali per baris: **940 ms → 17 ms**.
+
+  `idx_ca_ts_prov` dan `idx_ca_ts_model` — composite yang diawali timestamp —
+  **dihapus di bootstrap**. Tidak muncul di satu pun plan, tapi tetap di-update
+  di setiap insert. `idx_ca_provider` dan `idx_ca_model` juga dilepas karena
+  digantikan `idx_ca_stat_p/m`.
+
+  **Penghitungan truncation tidak lagi jalan di setiap request.** `droppedGroups`
+  hanya menghitung saat breakdown benar-benar kena batas; sebelumnya setiap
+  request membayar satu pass grup tambahan untuk angka yang hanya dibaca kalau
+  ada yang terpotong.
+
+  **Yang sengaja tidak diperbaiki.** Fold `usageHistory` untuk Cache Analytics
+  tetap ~1.4 s. DiUkur: `SELECT id` 71 ms tapi `SELECT tokens` 1170 ms pada baris
+  yang sama — biayanya di kolom TEXT `tokens`, bukan di `json_extract`. Indeks
+  `(timestamp, tokens)` diuji dan SQLite **tidak memilihnya** (plan tetap
+  `idx_uh_ts`), jadi tidak ada yang hilang dengan tidak mengambilnya; DB juga
+  tumbuh 236 → 293 MB. Memperbaikinya berarti denormalisasi kolom `tokens` ke
+  tabel lain atau cache delta seperti yang sudah dipakai
+  `/api/usage/stats` — keduanya pekerjaan sendiri, bukan perbaikan sepihak
+  dalam PR range.
+
+  **Angka sebelum/sesudah** (300.000 baris, indeks identik dengan produksi):
+  total ketujuh statement analytics **6453 ms → 1685 ms**. End-to-end lewat
+  HTTP di binary branch ini, port 20301: Compression `24h` **9.7 s → 4.3 s**,
+  `7d` **19.4 s → 8.5 s**, `30d` 19.4 s → 8.6 s, `all` 3.9 s → 2.3 s. Cache
+  `24h` 4.3 s, `7d` 8.5 s, `all` 1.7 s dengan trend kosong. `trendReqs` sama
+  dengan `totalRequests` di setiap window.
+
+  **Verification.** `internal/analyticsrange` (baru, dengan tabel window),
+  `TestGetPromptCacheMetrics_HonoursWindow`,
+  `TestGetPromptCacheTrend_UsesTheGivenWindow`,
+  `TestGetPromptCacheMetrics_ReportsTruncation`,
+  `TestCompressionAnalytics_SummaryHonoursWindow`,
+  `TestCompressionAnalytics_BackfillHonoursWindow` dan
+  `TestHandleGetCache_PeriodBoundsTotalsAndTrend`. Dua yang pertama
+  dikonfirmasi gagal dengan perbaikan dibatalkan — satu melaporkan 4 request
+  untuk window 24h yang hanya memuat 2, satu melaporkan 3 bucket trend untuk
+  window all-time yang harusnya tidak punya.
+
+  Angka di atas diambil dari ledger 300.000 baris dengan indeks yang disalin
+  verbatim dari `schema.go`. Harness-nya ada di `.bench/` dan sengaja tidak
+  masuk commit: yang di-commit adalah angkanya dan nama test-nya, bukan alat
+  ukurnya. `go vet ./...` bersih, `go test ./internal/...` hijau, `bun test`
+  392/392, `bun run build`, `make vet-svelte` (0 unresolved, 83 = baseline).
+
+### 🖼️ Aset provider upstream diambil, kartu "header semu" dihapus — 404 `/providers/*.png` hilang total
+
+- **Aset dari upstream lengkap.** `decolua/9router` sudah shipping 9 berkas yang repo ini
+  tidak punya: `bedrock.png`, `bedrock-xai.png`, `codewhale.svg`, `crush.png`,
+  `forge.png`, `pi.svg`, `smelt.svg`, plus `hermes.png` dan `omp.png` yang di-refresh ke
+  versi upstream. Kesembilananya identik dengan `public/providers/` upstream
+  (`raw.githubusercontent.com/decolua/9router/master`), kecuali tiga SVG yang hanya
+  berbeda line-ending CRLF↔LF. Seluruh aset upstream yang sudah ada di sini juga
+  dibandingkan ulang satu per satu — tidak ada yang berubah diam-diam.
+- **Akar 404 sisanya bukan aset yang hilang, tapi katalog yang bohong.** Delapan entri
+  di `web/src/lib/providers.ts` — `x-codebuddy-request`, `x-github-api-version`,
+  `x-requested-with`, `x-vscode-user-agent-library-version`, `anthropic-version`,
+  `openai-intent`, `originator`, `user-agent` — bukan provider. Mereka hanya
+  cerminan `StaticHeaders` backend. Sejak `afcab2ed`
+  (17 Sep 2026) masuk sebagai kartu. Akibatnya setiap surface yang memanggil
+  `getIconPath` meminta `/providers/user-agent.png` yang memang tidak pernah ada: satu
+  404 per entri per render, plus **delapan kartu provider palsu** yang connect-nya
+  mustahil (`resolution.go:311` — tidak ada model yang me-resolve ke sana).
+- **Catatan lama "jangan dihapus tanpa mengganti UI custom-header" ternyata usang.**
+  Baseline `ProviderHeaderOverridesModal` dibaca dari
+  `GET /api/providers/{id}/overrides` → `builtinProviderHeaders` → `cfg.StaticHeaders`
+  (`internal/handlers/dashboard/provider_overrides.go`), bukan dari katalog. Delapan
+  entri itu tidak pernah menyentuh UI mana pun: satu `grep` di `web/src` hanya
+  menemukan nama mereka sendiri.
+- **`zai-search` diperbaiki, bukan dihapus.** Ini satu-satunya entri Go tanpa
+  pasangan upstream yang **nyata** (`KnownProviders["zai-search"]` →
+  `https://api.z.ai/api/mcp/web_search`, dan `CredentialFallbacks` memetakan
+  kuncinya ke `glm`). Entri di katalog hanya placeholder tanpa nama maupun display,
+  jadi kartunya kosong dan logonya 404. Sekarang jadi entri web-search yang utuh —
+  "Z.ai Web Search", warna & ikon GLM, notice yang menyebut API key GLM yang dipakai
+  ulang — dan `getIconPath` memetakannya ke `glm.png` lewat `ICON_ALIASES` (tabel
+  yang sama dengan `ICON_ALIASES` upstream). Upstream meng-*alias* `minimax-code`,
+  `opencode-zen`, `ollama-search`, `perplexity-agent`, `vercel-ai-gateway` juga, tapi
+  repo ini sudah punya logo berbeda untuk kelimanya — meng-*alias*-nya di sini hanya
+  membuang logo asli.
+- **`503 Service Unavailable` pada `providers:` dijelaskan.** Itu bukan route server.
+  `web/public/sw.js` menjawab **503 "Network error or server daemon offline"** dari
+  `fetch(...).catch(...)` setiap request yang gagal — termasuk navigasi `/providers`
+  dan `/dashboard/providers` saat daemon mati atau sedang restart. Chrome menamai
+  lokasi (`providers:`), bukan URL, saat resource di luar `<img>`/`<script>` gagal.
+  Tidak ada handler 503 di `internal/handlers/**`; `GET /providers` dan `/providers/`
+  menjawab `200 text/html` dari SPA shell, dan cache SW-nya kosong
+  (`caches.open('9router-go-static-v1').keys()` → 0 entri).
+- **Verifikasi.** (1) Regresi baru di `web/src/lib/providers.test.ts` membaca direktori
+  aset dan gagal pada entri tanpa logo — terbukti gagal sebelum fix (`ERR_ASSERTION`
+  saat `phantom-test-id` disisipkan) dan lolos sesudahnya; plus tabel `getIconPath` di
+  `types.test.ts`. (2) Semua **141** URL artwork yang bisa dihasilkan SPA dijawab `200`
+  oleh binary hasil build baru. (3) Chromium headless: `/dashboard/providers` dengan
+  "Show all" diklik → **114 request, 0 non-2xx, 0 pesan konsol 404/503**; eager-load
+  memverifikasi **95 `<img>`, `naturalWidth > 0` untuk semuanya**. (4) Binary
+  **sebelum** fix pada port yang sama: 7 PNG rusak (`user-agent`, `originator`,
+  `openai-intent`, `x-codebuddy-request`, `x-github-api-version`, `x-requested-with`,
+  `x-vscode-user-agent-library-version`) — 7 dari 8 yang dilaporkan user
+  (`anthropic-version` tidak terlihat karena layar pertama belum memuat seluruh grid
+  API-Key). (5) `bun test src scripts` 351 pass / 0 fail, `bun run lint` bersih,
+  `make vet-svelte` 0 unresolved & 83 error = baseline,
+  `go test ./internal/providers/... ./internal/handlers/dashboard/...` hijau. Halaman
+  detail `/dashboard/providers/zai-search` dirender dengan logo GLM.
+
+### 🐛 fix(usage): byte rusak yang sudah ada ikut dibersihkan saat menyimpan request detail
+
+- **Latar belakang**: `truncateDetailText` (diperkenalkan pada #267) mengembalikan string
+  apa adanya bila panjangnya di bawah batas, sehingga byte yang sudah rusak sebelum masuk
+  helper ikut lolos ke `json.Marshal` dan menggagalkan marshal dengan cara yang sama.
+- **Keterjangkauan**: jalur ini terbukti tidak terjangkau pada kode saat ini.
+  `ScanStream` hanya menyerahkan `onChunk` event SSE utuh yang dirakit dari baris penuh,
+  jadi `ResponseBuf` tidak pernah berisi rune terbelah. Di sisi request,
+  `extractRequestMessages` melewati `json.Unmarshal` yang lebih ketat dari marshaler dan
+  mengembalikan `nil` saat body memuat byte mentah yang tidak valid. Jalur ini tetap
+  ditutup agar perubahan berikutnya yang memperluas isi row tidak memunculkan bug yang sama.
+- **Fiks**: `strings.ContainsFunc` mendeteksi byte rusak lebih dulu dan mengembalikan string
+  asli ketika tidak ada yang perlu diperbaiki, sehingga jalur umum tetap bebas alokasi
+  (terukur 0 allocs/op). Hanya jalur terpotong atau memang tidak valid yang memanggil
+  `strings.ToValidUTF8`.
+- **Verifikasi**: `TestTruncateDetailText` baru menutup batas rune 2/3/4-byte, byte rusak di
+  bawah batas, byte rusak di dalam jendela potong, byte rusak di atas potong, serta teks
+  multibyte valid yang harus tetap utuh. Setiap kasus juga memeriksa `utf8.ValidString` dan
+  bahwa hasilnya dapat di-marshal. `go test ./...` (3897 pass, 48 paket),
+  `go test -race ./internal/handlers/chat/`, `go test -tags=integration ./internal/integration/`,
+  `go vet`, dan CI PR (test, race detector, integration tests, docker build) hijau.
+
+### 🐛 fix(usage): pemotongan request-detail tidak lagi memecah rune UTF-8
+
+- **Latar belakang**: baris detail request dipotong per-byte (`content[:MaxMessageContentLen]`,
+  `[:MaxResponseContentLen]`, `[:maxPersistedErrorLen]`) lalu di-marshal dengan `encoding/json/v2`.
+  Pemotongan per-byte bisa jatuh di tengah rune 2/3/4-byte (CJK, aksen latin-1, emoji) sehingga
+  menyisakan fragmen bukan UTF-8. Berbeda dengan `encoding/json` v1 yang menggantinya dengan U+FFFD,
+  v2 **menolak** string tersebut, jadi satu request dengan teks CJK/emoji yang melewati batas menghasilkan
+  `usage marshal request detail failed error=jsontext: invalid UTF-8 within "/request/messages/N/content"`.
+- **Dampak**: `logUsage` return duluan setelah marshal gagal — sebelum `upsertDailyUsage` dan
+  `PushRecent`. Request tetap berbillet normal (`usageHistory` ditulis lebih dulu dan baris
+  `usage logged` tetap tercetak, status 200), tetapi tidak masuk agregat harian, tidak masuk
+  recent-requests tracker, dan tidak ada row di tab Details — cukup satu karakter yang memotong batas.
+- **Fiks**: helper `truncateDetailText` dipakai di keempat titik potong; `strings.ToValidUTF8`
+  membuang byte menggantung yang justru dibaca v2 sebagai data rusak, dan no-op untuk input valid.
+- **Verifikasi**: `go test ./internal/handlers/chat/...` (778 pass), `go test ./...` (3886 pass),
+  `go vet`. Subtest baru `rune straddling the byte limit stays marshalable` menguji 3-byte CJK,
+  2-byte latin-1 supplement, dan 4-byte emoji, lalu benar-benar memarshal payload-nya.
+  Dibuktikan menangkap bug: dijalankan terhadap `usage.go` pra-fix, subtest CJK gagal dengan
+  `jsontext: invalid UTF-8 within "/messages/0/co...` — pesan yang sama dengan log produksi.
+
+### Features
+
+- **Hermes is configured per profile** (upstream decolua/9router `a9c9f683`,
+  #4660). Hermes treats `~/.hermes/profiles/<name>` as an independent agent home
+  with its own `config.yaml` and `.env`, but the dashboard only ever wrote the
+  default one — configuring a work profile meant editing YAML by hand, and a
+  profile switch silently applied one profile's model to another. `GET
+  /api/cli-tools/hermes-profiles` lists the default home plus every recognised
+  profile, and `GET`/`POST`/`DELETE /api/cli-tools/hermes-settings` take a
+  `profile` (JSON body or `?profile=`) and answer 400 for a name that is not
+  inert and 404 for a named profile whose directory is gone, so the card can
+  fall back to default instead of showing a dead selection. A directory under
+  `profiles/` is only listed once it carries an identity file, matching Hermes
+  itself — a bare directory left by a cron run is not a profile.
+- **`applyToAll` propagates the endpoint without flattening the profiles.** A
+  profile already routed through 9router keeps its own model and only has the
+  endpoint and API key refreshed; a profile on another provider is reported
+  `skipped` with the blocking provider named rather than rewritten; a profile
+  with no model yet is wired to the model chosen in the request. The response
+  carries one `{profile, status, model, reason}` line per profile plus
+  `updated`/`skipped` counts, so the dashboard reports exactly what moved. The
+  card refuses to run it against an endpoint that is not a known 9router one:
+  the field mirrors the active profile, and it can hold a foreign provider URL
+  whose key would then be written into every other profile.
+- **The YAML editor is surgical, never a round-trip.** The blocks are matched
+  and replaced in place rather than unmarshalled into a map and re-marshalled,
+  which would drop every comment and key order Hermes put in the file and
+  happily delete keys that are not ours. DELETE therefore removes only blocks
+  with `provider: "custom"` and reports the ones it kept; a foreign provider's
+  `model:`, `delegation:` or auxiliary role survives a reset. `.env` is only
+  ever touched through an `OPENAI_API_KEY` upsert, because a profile `.env`
+  also carries bot tokens and messaging-channel credentials. The `model: ""`
+  sentinel a fresh install ships is replaced on upsert — left in place it would
+  give the file two `model:` keys, and the last-wins loader would silently
+  ignore the block just written.
+- **Hermes home is resolved through `HERMES_HOME`.** Path resolution honours
+  the variable before the user's home directory, which is what lets the tests
+  point at `t.TempDir()` and leave the real `~/.hermes` untouched; a profile
+  name is additionally required to land inside `<root>/profiles`, so a crafted
+  `?profile=` cannot reach another directory on the host.
+- **The dashboard card grew a profile picker.** Status dots per profile, the
+  command that runs it (`hermes` / `hermes -p <name>`) with a copy button,
+  Apply/Reset scoped to the selected profile, a per-profile Manual Config
+  preview, and the role list from upstream's current constants — `web_extract`
+  is gone because it no longer calls an LLM, replaced by `compression`,
+  `title_generation`, `approval` and the rest.
+
+  `api.request` now throws an `ApiError` carrying the HTTP status instead of a
+  bare `Error`: the card branches on 404 to recover a vanished profile, and
+  matching on the message text would have broken the first time that sentence
+  was reworded.
+
+  Verified with `go test ./internal/handlers/media/` (212 pass), `bun test`
+  (26 pass) and `make vet-svelte` (0 unresolved identifiers, 83 errors =
+  baseline). Every test drives the handlers with `HERMES_HOME` pointed at
+  `t.TempDir()`.
+
+### feat(dashboard): proxy pools get an actions menu and a status dropdown
+
+The proxy-pool header carried four controls (`Test All`, `Deploy Relay`,
+`Batch Import`, `Add Proxy Pool`) and the card below it opened with a strip of
+four filter pills, each showing its count in brackets. Beside the sort picker
+and the two bulk-cleanup buttons, that row was the widest fixed thing left on
+the page, and it wrapped to three lines on a phone.
+
+- `Test All`, `Add Proxy Pool` and `Batch Import` moved behind one **Menu**
+  trigger (`web/src/lib/ui/Menu.svelte`), the same control the top bar, quota
+  tracker, API keys and provider rows already use. `Deploy Relay` keeps its own
+  trigger: it is a separate task with its own submenu, not one more verb.
+- The four filter pills became a counted dropdown (`Filter proxy pools by
+  status`), carrying the same All / Active / Passed / Failed buckets and the
+  same counts, so nothing is lost from the pills.
+- New shared primitive `web/src/lib/ui/CountedSelect.svelte`. It is the
+  dropdown analytics' `ViewSelect` already is — measured trigger, viewport-
+  clamped panel, portalled, Escape/Tab/outside-click dismissal — differing only
+  in that each row carries a count instead of a glyph. Analytics keeps its own
+  component: an option there is a *view*, which is a different thing to say
+  out loud than "the filter under the header", and it is not worth a third copy
+  of this logic.
+
+**Bug found and fixed on the way:** every one of those menus was
+self-limiting its own width. `placePanel` was handed the panel's measured
+`offsetWidth` and wrote it straight back out as an inline `width`, so a panel
+was pinned to whatever width it had when measured and could never grow again —
+any label wider than that floor ellipsised permanently. That is what rendered
+`Add Proxy P…` in the first screenshot here, and it silently affected the top
+bar, quota tracker, cache analytics and usage-section menus as well. Placement
+and sizing are now separate: `placePanel` decides *where* the panel goes and
+emits only `left`/`top`/`bottom`, while the panel sizes itself from its own CSS
+(`w-max`, plus the caller's floor and the new `maxPanelWidth()` clamp). The
+viewport clamp the helper used to apply in JS is not lost — it survives as that
+`max-width`, which is the same bound.
+
+Verified by driving the real dashboard in Chromium: the menu and dropdown open,
+every label renders in full at 1440px and 448px, both panels stay inside the
+viewport, and picking `Failed` updates the trigger and the list. Suites green —
+311 web unit tests, 37 e2e, 3842 Go tests, svelte-check ratchet at baseline,
+`vite build`.
+
+### Fixes
+
+- **CLI Tools shipped a working API key inside the dashboard bundle.** The guide
+  cards interpolate the instance's first API key into a pasteable snippet, and
+  `effectiveApiKey` fell back to a real machine-minted `sk-…` literal when the
+  key list was empty. `web/dist` is embedded in the binary and served to anyone
+  who can reach the gateway, so that fallback was a public credential, and
+  opening any card on an instance with no key handed it to the visitor. The
+  fallback is gone: the snippet now carries `<your-9router-api-key>` and both
+  the Pi and Oh My Pi cards say to create a key first — a placeholder cannot
+  authenticate upstream, and an empty `apiKey` is worse still, because pi reads
+  that as an unauthenticated provider and fails at request time rather than at
+  paste time. The footer reads `Active Token: none created` instead of slicing
+  an empty string into `••••`.
+
+  Guarded twice. `web/src/lib/no-shipped-secrets.test.ts` scans every bundled
+  source file for an `sk-…` literal, exempting only the `sk-9router-*`
+  placeholders the env cards have always shown. `web/e2e/cliToolsPi.test.ts`
+  asserts the same invariant against the bytes the gateway actually serves, and
+  now seeds a key through `POST /api/keys` first — without that, every
+  paste-shaped assertion in the file passed against the placeholder rather than
+  against a real credential, which is why the shipped key went unnoticed. A
+  third case deletes the seeded key and asserts the empty-state card shows the
+  placeholder, never `"apiKey":""`. Both suites were confirmed failing with a
+  literal restored — the bundle scan reported the token out of
+  `/assets/index-*.js`, and the source scan reported it with its file and line —
+  and passing once removed. `bun test` (361 pass), `make vet-svelte` (0
+  unresolved, 83 = baseline), `go test ./internal/handlers/...` (1557 pass) and
+  the pi/omp e2e (7 pass) all green.
+
+- **Reported as a security fix rather than a UI tweak.** A credential compiled
+  into the shipped SPA is readable by anyone who can reach a gateway, and this
+  entry is served by the public `GET /api/changelog`. It therefore names no
+  key, host, or deployment — the value it removes is not reproduced here.
+
+### Halaman proyek + redirect Telegram yang tahan link revoke
+
+- **Halaman `https://luqman-v1.github.io/9router-go` sekarang terbit dari `README.md`**, bukan salinan kedua. `tools/sitegen` merender README dengan goldmark (GFM, heading anchor, HTML mentah untuk `<div align="center">` dan `<details>`) lalu membungkusnya dengan masthead dan footer. Alasannya: landing page yang ditulis terpisah sudah pasti melenceng dari README dalam satu rilis, dan setiap perbaikan harus ditulis dua kali.
+- **Link relatif di dalam README ditulis ulang saat build.** Gambar (`docs/screenshots/*.png`) disalin ke output, sedangkan tautan ke berkas repositori (`DATABASE.md`, `docs/*.md`) diarahkan ke URL blob github.com. Tanpa ini `docs/screenshots/providers.png` akan 404 di Pages, karena di sana path diselesaikan terhadap root situs, bukan terhadap repositori.
+- **`site/tg.html` menjadi satu-satunya tempat link invite Telegram berada.** Badge README dan kartu "Telegram Group" di modal Support kini menunjuk ke `.../tg`, bukan ke `t.me/...` secara langsung. Kalau invite di-revoke atau diganti, cukup edit satu baris di `site/tg.html`; pengguna lama yang sudah memasang dashboard tetap ikut ke grup yang baru tanpa perlu rilis binary baru.
+- **Redirect punya tiga lapis**: `<meta http-equiv="refresh">` untuk klien yang tidak menjalankan skrip, `location.replace` supaya URL ini tidak tertinggal di riwayat, dan tautan yang terlihat sebagai cadangan ketika keduanya diblokir. Halaman ditulis ke `/tg.html`, `/tg`, dan `/tg/`.
+- **Workflow `pages.yml`** menjalankan `go test ./tools/sitegen/...` sebelum deploy, lalu memaksa presence `index.html`, `style.css`, `tg.html`, `tg/index.html`, dan keberadaan invite di `site/tg.html`. Kegagalan di salah satu titik menggagalkan deploy, bukan menerbitkan halaman berisi 404.
+- **Modal "Support 9router-go" dapat kartu Telegram** (ikon `send`) dan tata letaknya diubah dari grid 2 kolom menjadi daftar bertumpuk, karena grid itu menyisakan kartu ketiga sendirian di baris sendiri. Warnanya disesuaikan ke `sky-600` di terang dan `sky-400` di gelap karena `sky-500` hanya mencapai 2.52:1 terhadap `bg-surface-2`.
+- **Escape sekarang benar-benar menutup modal Support.** Handler-nya sebelumnya menempel pada backdrop, yang tidak pernah menerima fokus, jadi tidak pernah terpanggil; dipindahkan ke `<svelte:window>`.
+- **Diverifikasi**: `go test ./...` (3813 lulus), `go vet ./...`, `bun run build`, `bun run ratchet:svelte` (0 unresolved, 83 error = baseline). Halaman dan modal diuji di Chromium pada light dan dark: semua anchor README resolve ke heading nyata, Tab pertama mendarat di skip link yang terlihat, tidak ada overflow horizontal di 360px maupun 768px, dan tidak ada console error.
+
+### Fixes
+
+- **Antigravity 404 on every Gemini 3.8 request.** `v1.9.11-exp.9` introduced `AntigravityUpstreamModel`, which ported the registry's `upstreamModelId` column verbatim — including its parenthesised effort (`gemini-3.8-flash-low(low)`). That notation is 9router's own thinking marker, not a Google model id: Cloud Code answers `404 NOT_FOUND` for every suffixed form, so all six accounts failed over and the request ended in 404. `AntigravityUpstreamModel` now resolves to the bare id and the effort is stripped from both the client-supplied suffix and the table row, matching what upstream's `chatCore` does with `stripThinkingSuffix(upstreamModel)` on both its branches. The table stores the bare ids it sends.
+
+  Verified live against `daily-cloudcode-pa.googleapis.com` with a real account: `gemini-3.8-flash-low(low)` and `gemini-3.8-flash-high(high)` both 404, while `gemini-3.8-flash-low`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-high` and `gemini-3.7-flash-tiered` all 200 and return content; `fetchAvailableModels` lists those bare ids and no suffixed one. The live suite passes with no 404 in any log, and the same request that returns 404 on `v1.9.11-exp.9` returns 200 with content on this branch. `AntigravityUpstreamModel_NeverEmitsEffortSuffix` pins the invariant so a future catalog sync cannot reintroduce the 404 through the suffix.
+
+### Features
+
+- **Kimi**: a `/v1/responses` client now reaches Kimi Code's native `/coding/v1/responses` lane instead of being downgraded to the single Chat Completions URL. Kimi serves the OpenAI Responses API on the same key as chat, so the transport is picked per request — the lane the client already speaks when the model declares it, the model's target lane otherwise — mirroring upstream's `transports[]` table (`3125ac2b`). The lane URL is derived from the registry entry or a connection override, so a custom base URL keeps working.
+
+- **Codex images**: `/v1/images/generations` for a Codex image model is answered from the Responses API. The catalogued `gpt-image-*` and `*-image` ids were unroutable: the request was forwarded to an `/v1/images/generations` endpoint the ChatGPT backend does not serve, and the turn was recorded with zero tokens. The lane now posts an `image_generation` tool call, streams the result frame by frame, and records the exact `input_tokens`/`output_tokens`/`cached_tokens`/`reasoning_tokens` the upstream reported — on both the collecting and the streaming path, which is what `e10da160` fixed upstream. A turn that yields no image is an error and records nothing, rather than a zero row indistinguishable from a free one.
+
+- **ElevenLabs Scribe STT**: `scribe_v1` and `scribe_v2` are usable through `/v1/audio/transcriptions`. ElevenLabs speaks its own multipart protocol (`model_id`, `xi-api-key`, `language_code`, diarization, `additional_formats` renderings) and rejected the generic OpenAI-compatible body, so the provider now has a dedicated lane with the Scribe parameter rules: a blank language is omitted so the vendor auto-detects, `timestamps_granularity` only for `word|character|none`, and `diarize` wins over `num_speakers` because upstream treats them as mutually exclusive. Requested srt/vtt/segment renders are served verbatim and never synthesized (`2f827bcf`, #4537). The example card gained the four matching controls.
+
+### Fixes
+
+- **Gemini**: a tool result carrying a JSON Schema or OpenAPI document is no longer rejected. Gemini reads a `$ref` key inside `functionResponse.response` as a pointer into `functionResponse.parts` and answers 400 `INVALID_ARGUMENT` when the name does not resolve, so an ordinary webfetch or MCP result failed the whole turn. The key is now renamed on the way out, recursively and only where it occurs; every other field is untouched (`625df74b`).
+
+- **Strict Responses reasoning**: an explicit `reasoning_effort: "none"` is expressed by removing the `reasoning` field rather than by sending an effort named `none`, which asks a model to think at the lowest level instead of not to think — and is billable. The top-level `reasoning_effort` is still folded into the nested `reasoning: {effort, summary}` shape the Muse and OpenCode-Zen lanes require (`b00ba1aa`).
+
+- **Combo picker**: a compatible provider node that has user-added custom models is now selectable even without a stored connection. Local and self-hosted endpoints do not always need an API key, so gating on connections hid models the user had already added. A node with nothing to show is still hidden, and the exception applies only to the LLM half of the picker (`6a1573eb`, #4659).
+
+- **Self-hosted TTS example**: the model and voice are typed by hand instead of picked from a catalogue, because a self-hosted server decides what it serves. The voice is optional and appended only when non-empty (`ee323400`).
+
+### Fixes
+
+- **Gemini**: duplicate `tool_call_id`s are now rewritten to unique ids before the request goes out. Gemini validates `functionCall` id uniqueness across the *whole* history and rejects the entire request with 400 `INVALID_ARGUMENT` when one repeats, while an OpenAI `tool_call_id` is only unique within its own assistant turn — so a long agent session can legitimately reuse one. Uniqueness is per *occurrence*, not per id: two calls sharing an id end up with two different emitted ids, and each result answers the call it belongs to instead of cross-wiring the loop. Ids that were already unique pass through untouched. Upstream `#4532`.
+
+  The rewrite keys on the id with this gateway's `__ts__` thought-signature suffix stripped, so the private transport encoding still never reaches the wire.
+
+- **Ollama**: `prompt_eval_cached_count` is recorded as cached tokens. Ollama reports prompt tokens cache-*inclusive* — the same convention as OpenAI and Gemini — so the value is recorded, never subtracted. Without it every Ollama turn showed a zero cache hit rate and the cache analytics under-reported savings. Read both from the live response (whose counters sit at the top level, not under `usage`) and from persisted usage blobs, which is where the historical rows are re-read from. Upstream `46627249`.
+
+### Known gaps
+
+These upstream fixes in the same range are **not** in this PR, each because it needs a subsystem this port does not have rather than because it was small:
+
+- **ElevenLabs Scribe STT** (`2f827bcf`, ~100 lines upstream) is a full provider transport — multipart POST, `xi-api-key` auth, `additional_formats` extraction for srt/vtt/seg_json, and diarize/num_speakers arbitration. It is not the data-only model row it first appears to be.
+- **Codex image usage** (`e10da160`, +40 lines) is a usage-accounting fix *inside* an image-generation adapter registry. This port has no Codex image lane at all: its Codex image models are catalogued but unroutable. The fix cannot land before the subsystem does.
+- **Cursor** (`18ad1a89`, `cbd594ac`) needs a CONNECT-RPC-over-HTTP/2 protobuf executor, which this port does not have — only a config entry exists. It is *portable* with no new dependency: the stdlib HTTP/2 client is already negotiated repo-wide, and `windsurf.go` already has a varint + frame codec byte-identical in framing to upstream's. It is roughly 1000 lines of new executor, so it belongs in its own PR.
+- **Kimi Responses transport** (`3125ac2b`) needs a second URL per provider, which `ProviderConfig` has no field for, plus an executor that owns lane selection.
+
+### feat(providers): MiniMax Code (mcode) credits provider
+
+Ports upstream `decolua/9router` commit `85bc33ce` (MiniMax Code as a credits
+provider) into 9router-go. MiniMax Code is a **new lane**, not an extension of
+the existing API-key `minimax` provider: it authenticates through MiniMax's own
+OAuth device flow and serves Anthropic Messages on the mavis gateway.
+
+**What was added**
+
+- `minimax-code` (China) and `minimax-code-global` (international) as separate
+  providers. Sign-ins are per site, so they are never aliased onto each other
+  (AGENTS.md §3.A); `mm` stays with the API-key `minimax` provider, the credits
+  lane is published under `mmc`, and the global site keeps upstream's `mmg`.
+- **OAuth device flow** (`internal/handlers/oauth/minimax_code.go`): PKCE S256
+  against `{account}.minimax.{cn,io}`, including MiniMax's user-code variant
+  (no `device_code` in the reply → the token endpoint is polled with the
+  `user_code`, and `interval`/`expired_in` arrive in mixed units).
+- **Token refresh** (`internal/proxy/oauth/minimax_code.go`): mcode refresh
+  tokens are **single-use** — sending one twice answers `invalid_grant` and
+  signs the account out. Two paths reach refresh (pre-dispatch expiry check and
+  the executor's on-401 retry) and may hold different snapshots of one
+  connection, so refreshes are collapsed in a singleflight keyed on the spent
+  token value. Rotation is persisted; a reply without `expires_in` falls back to
+  an hour rather than being stored as already-expired.
+- **Executor** (`internal/proxy/executor/minimax_code.go`): forwards the Claude
+  Messages wire with the OAuth bearer, the placeholder `x-api-key` that rides
+  every mavis request, and per-session/timezone headers.
+- **Quota normalization**: MiniMax Code reports credit exhaustion as **402/403
+  with a body naming the balance** (English *and* CJK). Left at 402/403 the
+  account loop would read it as an auth failure and re-spend a single-use
+  refresh token per request instead of failing over; those are rewritten to
+  **429 `rate_limit_error`**, which triggers combo fallback. A 403 that does not
+  name the balance passes through untouched so the on-401 refresh path still
+  sees a real auth refusal.
+- **Usage tracking** (`internal/handlers/dashboard/usage_minimax_code.go`):
+  credits balance, plan tier and M Plan rate windows read through mcode's signed
+  account API (`yy` md5 + `x-signature`). A refused sign-in is reported in the
+  wording the quota route's auth-expired check recognises, so it force-refreshes
+  and retries once.
+- **Claude-wire routing**: a provider whose registry entry declares
+  `Format: "claude"` is now recognised as serving Anthropic Messages, so a
+  `/v1/messages` client reaches it untranslated and a Chat Completions client
+  gets the reply translated back. This is separate from the Anthropic-specific
+  beta query, OAuth cloaking and beta-flag merge, which a third-party Messages
+  endpoint does not want.
+- **Dashboard**: catalog entries with artwork (no 404), device-flow
+  registration, quota rendering, live catalogue import via a new
+  `minimax-code` suggested-models filter, and connection probing against the
+  gateway's model catalogue.
+
+**Verification**
+
+- `go test ./...` green; `-race` green on the touched packages.
+- New offline tests, none of which reach a real MiniMax host (the site table is
+  pinned to an `httptest` fixture):
+  - refresh: rotation, expiry default, grant-dead classification on
+    `invalid_grant`, no classification on 429/5xx, and concurrent refreshes of
+    one token producing exactly **one** upstream send;
+  - quota normalizer: the full 402/403/429/200 status-and-body matrix,
+    including CJK bodies, the `base_resp` envelope, and pass-through of a 403
+    that does not name the balance;
+  - device flow: the S256 challenge really is the digest of the session
+    verifier, the user-code variant posts `user_code`, and every
+    `status:` envelope maps to the right outcome;
+  - usage: signature recomputation, site separation, plan-window parsing,
+    and the refused-sign-in wording;
+  - registry: base URL, alias, auth shape, catalog, thinking levels and
+    capabilities for both sites.
+- **Integration** (`make test-integration`): the real router, real DB and a
+  fake upstream — a `/v1/messages` client reaches the mavis endpoint
+  untranslated with the bearer and the `x-api-key` placeholder, the Claude
+  reply comes back Claude-shaped, a 402/403 credits refusal reaches the client
+  as **429 `rate_limit_error`**, a 403 that does not name the balance keeps its
+  own status, and both site ids route.
+- `cd web && bun run build` green; `make vet-svelte` clean at baseline (83
+  pre-existing type errors, 0 unresolved identifiers).
+
+**Bugs the integration suite caught while porting** — all fixed here, all
+observable to a client:
+
+- `claudeNative` in `tryForwardWithConnection` only recognised Anthropic and a
+  per-model Messages endpoint, so a provider whose *endpoint* speaks Messages
+  was handed a body the handler had already converted. The two decisions now
+  agree.
+- The executor called the `handleClaudeMessages*` helpers unconditionally. Those
+  helpers translate a Claude reply for a *non*-Claude client, so a Claude client
+  on a Claude upstream had its answer rewritten into Chat Completions. The
+  native case now relays the body untouched.
+- `DoRequest` turns any non-200 into a typed error, so the credits refusal
+  arrived as an error rather than a response to inspect; normalization runs on
+  the error path.
+
+**Intentional divergences from upstream**, recorded here per AGENTS.md §1:
+
+- `mm` remains the alias of the API-key `minimax` provider and the China mcode
+  site is published as `mmc`. Upstream reuses `mm` for the credits lane; doing
+  the same here would move an existing provider's published prefix.
+- The capability limits are the static catalog magpie's plugin ships; upstream
+  marks its own figures as unverified by live probe.
+
+### Features
+
+- **Netlify serverless relay proxy pool (issue #250, upstream `4fa46034`).** A fourth edge runtime joins vercel, cloudflare and deno: the dashboard's "Deploy Relay" menu gains a **Netlify Relay** dialog that creates a Netlify site and publishes the relay as a serverless function, then registers it as a `netlify` proxy pool. Deploys run no build step, so the flow is Netlify's digest API rather than a build-and-watch: announce the SHA-1 of `index.html` and the SHA-256 of the function bundle, upload only the digests Netlify reports in `required` / `required_functions`, then poll until `state === "ready"`. A redeploy of an unchanged bundle therefore costs zero uploads.
+
+  The relay function is ported from `src/lib/network/netlifyRelay.js` with its two live-verified failure modes intact: it must be CommonJS `exports.handler` (an ESM `export default` fails with `Runtime.UserCodeSyntaxError`, 502) and must return a **string** body (a stream object fails unmarshalling into the Lambda response struct, 502), so it buffers the upstream response — text as UTF-8 for JSON/SSE, base64 with `isBase64Encoded` for binary. The ZIP writer is hand-rolled stored-entry (CRC32 + local/central headers), parsed back by `archive/zip` in the test rather than asserted on its own output, because a malformed header is an HTTP 400 from the function upload that reads exactly like a bad token.
+
+  `POST /api/proxy-pools/netlify-deploy` is mounted inside the **dashboard** group, next to the three sibling deploy routes — never under `RequireApiKey`, which once 401'd every Deploy button because the SPA authenticates with a session cookie and sends no engine key. A taken site name answers 409 with a hint to pick a different one rather than passing Netlify's bare 422 through; any other rejection keeps Netlify's own status and message, because a generic 500 would hide an expired token. `ProxyPool.IsEdgeRelay` gains `netlify` in the single place all four platforms are classified, so a `netlify` pool is never dialled with `http.ProxyURL` (which yields "malformed HTTP status code") and is instead resolved through the shared `x-relay-target` / `x-relay-path` header spec the other relays speak.
+
+  The pool list also gains the badges it was missing: `deno relay` and `netlify relay` were never rendered even though deno pools already existed.
+
+  Verified offline: the create → test → deploy round trip runs against an `httptest` fake Netlify API with no network access, asserting the exact five-request sequence, that the announced digests match the bytes actually uploaded, that a redeploy with an empty `required` list issues no uploads, and that a `state: "error"` deploy surfaces Netlify's `error_message` instead of a poll timeout. `TestHandleNetlifyDeployCreatesPool` pins the persisted row is an active `netlify` pool whose URL is the relay endpoint. `TestRelayDeployRoutesAcceptDashboardSession` gained a netlify case, proving a session cookie reaches the handler and an anonymous caller still gets 401.
+
+### feat(bedrock): AWS Bedrock runtime with SSO, SigV4 and EventStream streaming (part 2 of 2)
+
+Wires Amazon Bedrock into routing, the catalog and the dashboard on top of the AWS
+primitives added in part 1. Two provider entries share one executor, because Bedrock
+model families speak different wire formats and each therefore gets its own entry rather
+than failing mid-stream after the call is billed.
+
+- `internal/proxy/bedrock.go`, `internal/proxy/executor/bedrock.go` — converse and invoke,
+  SigV4-signed per request from resolved credentials, AWS EventStream unwrapped back
+  into SSE. On the Anthropic entry the unwrapped stream is handed to the existing Claude
+  handlers rather than a second translation path, so usage accounting, the
+  `/v1/responses` bridge, terminal synthesis and the `[DONE]` sentinel all work as they
+  do on any other Claude-wire provider. Bedrock reports throttling and validation
+  failures as in-band frames rather than HTTP statuses, and a stream that closes before
+  its terminal event is now failed rather than presented as a finished answer.
+- Registry — `bedrock` (`br`, Claude wire) and `bedrock-xai` (`brx`, Chat Completions)
+  with aliases, model catalogs, per-provider pricing, and `UpstreamIsAnthropic`, a new
+  `ProviderConfig` flag: the existing Claude-wire detection keys off `api.anthropic.com`,
+  so a gateway host needs its own signal for the response to be translated.
+- Dashboard — an AWS credential form on `AddConnectionModal`, gated on the new
+  `credentialForm` catalog flag rather than a provider id, so a later AWS entry is not
+  left with no way to enter a profile. Profile mode makes the API key optional.
+  `accessKeyId` and `profile` join the echoed provider-specific data; the session token
+  does not, since it is a credential.
+
+Verified with `go test ./...`, `make test-integration`, `make vet-svelte`, and a live
+smoke against a fake Bedrock runtime: the gateway signs the request (session token both
+sent and signed), drops `model` from the body, pins `anthropic_version`, hits the
+streaming invoke path, and returns the upstream's frames as Chat Completions SSE with
+usage accounted. No AWS account is required for any of it.
+
+### feat(aws): SigV4 signer and AWS credential resolution (Bedrock core, part 1 of 2)
+
+Ports the upstream AWS primitives that Amazon Bedrock needs, without wiring Bedrock
+into routing yet. Nothing user-visible changes in this commit: the package has no
+callers yet, and the EventStream hardening only tightens a decoder that previously
+skipped its integrity checks.
+
+- `internal/proxy/aws/sigv4.go` — Signature Version 4 signing. Hand-rolled rather
+  than pulled from the AWS SDK because every signed request here is a single
+  query-less POST; the canonicalisation cases that make SigV4 error-prone never
+  arise. A URL carrying a query string is refused outright rather than signed
+  wrongly. Path canonicalisation double-encodes by default (S3's single-encode rule
+  is opt-in), which is what a `…-v1:0` Bedrock model id requires — the single most
+  common cause of a Bedrock SignatureDoesNotMatch. The session token is signed as
+  well as sent, since omitting it from SignedHeaders is the classic failure for STS
+  and SSO identities.
+- `internal/proxy/aws/credentials.go` — credential resolution in two modes. Static
+  mode reads the keys off the connection; profile mode goes through the AWS SDK's
+  shared-config loader, which is what makes `aws sso login --profile X` work.
+  Profile results are cached until a refresh lead before expiry, a burst of
+  concurrent requests on one profile collapses into a single resolution, and
+  failures are never cached so the next attempt retries. The region is validated
+  before it reaches a hostname: an unvalidated one would resolve the host to
+  `bedrock-runtime.evil.com` and ship the signed request, its body and the session
+  token to an attacker-chosen origin.
+- `internal/providers/eventstream.go` — hardened. The prelude and message CRCs are now
+  verified rather than skipped, the frame cap matches AWS's 24 MiB instead of 10 MiB,
+  all ten header value types decode, and every header read is bounds-checked — the
+  previous decoder used a bare `break` on a malformed header, which made a corrupt
+  frame look like a shorter one. Adds `EncodeEventFrame` so tests and fixtures stay
+  in step with the decoder.
+
+Verified with `go test ./internal/proxy/... ./internal/providers/...`. The signer
+suite pins AWS's own published SigV4 vector plus a Bedrock-shaped request, so a
+canonicalisation regression fails the test rather than reaching production. No AWS
+account, no `~/.aws` and no network are required for the suite to pass.
+
+### Security
+
+- **Per-API-key access control now covers every inference endpoint, not just chat.** The chat lane had the allowlist gate; ten media endpoints sat behind `RequireApiKey` with no policy check at all, so a key restricted to one model was authenticated and then served unconditionally by embeddings, image generation, TTS, STT, video generations/edits/extensions, search and scrape. All ten now return **403** for a model outside the allowlist, through the same decision function the chat lane uses, so a model an operator allowed is the same model a client can reach on every route.
+
+  TTS is gated in `forwardTTSRequest` rather than the shared funnel: its `edge-tts` and `google-tts` branches synthesise locally and never reach `forwardMediaRequest`, so gating only the funnel would have left those two paths open.
+
+- **The capacity-adapter pool can no longer route around the allowlist.** The pool is invisible to the gate that admitted the request, so a key restricted to one model could still have its traffic silently rerouted to a pool model it was never granted. A pool model the key may not dispatch is no longer injected.
+
+### Fixes
+
+- The per-key model allowlist now survives a database backup and restore. It lives in its own table, which the export never selected and the import never wrote back, so restoring a backup silently widened every restricted key back to allow-all — the one outcome the restriction exists to prevent. The import also clears the table, so access rows no longer outlive their key as orphans.
+- The allowlist is bounded at 200 entries and 256 characters per entry, matching upstream `validateKeyAccessInput`. Every entry is matched against every candidate id on every request, so an unbounded list was a load a single dashboard call could set up. The rejection message names the limit and truncates the offending pattern.
+
+### Known divergences
+
+Go stores an allowlist as one row per `(key, pattern)` in a dedicated table; upstream stores two columns on `apiKeys`. Go's empty allowlist therefore means allow-all, and "restricted but allow nothing" is not expressible. This predates this change and is a deliberate design decision, not a regression.
+
+### Providers
+
+- **Antigravity**: added Claude Sonnet 5.5 and Opus 5.5 (eight ids, 1M context) with capabilities, pricing and quota-allowlist entries — upstream `decolua/9router#a07ed95b`.
+- **Antigravity**: resolved the wire model id through a new `AntigravityUpstreamModel`, the Go form of the registry's `upstreamModelId` column. The registry's parenthesised effort (`gemini-3.8-flash-high(high)`) is 9router's own thinking notation and never reaches Google, so the function resolves to the bare id and the table stores exactly what Cloud Code is asked for. A client-supplied `(level)` narrows the id to its own base rather than being appended to the id's preset. The table deliberately stays out of `AntigravityModelSynonyms`, which is shared with the lock and quota keys and must stay family-shaped.
+- **Antigravity**: refreshed the catalog — added `gemini-3.1-pro-high`, retired the deprecated gemini-3.5 family and `gemini-3-flash`, moved the default to `gemini-3.8-flash-medium` — upstream `#24034f69`.
+- **GLM**: GLM-5.2 and GLM-5.3 now publish the 1M context window they actually have instead of falling through to the `*glm-5*` default — upstream `#4544`.
+- **Z.ai**: added `ForwardZai`, which rewrites the client's thinking request into Z.ai's dialect. `reasoning_effort` is mapped onto the three values the API accepts (`low|high|max`), thinking is switched off with `enable_thinking` rather than `thinking.type: disabled`, and a request for no reasoning on a model that cannot disable it is clamped to the lowest effort instead. Upstream `#4656` fixed this on a live 400 (`code 1210`); GLM-5.3 has no thinking-emission path in this port, so the flag alone would only have moved the dashboard picker.
+- **Cloudflare AI**: added `@cf/cloudflare/clef-flash` as a `systemone` model and registered `systemone` as a service kind — upstream `d2f90177`.
+
+### Fixes
+
+- A 503 capacity error on one Antigravity tier no longer locks the whole 3.8 family. The 3.8 tiers are separate backends upstream, so a lock now stays scoped to the tier that failed; 3.7 and 3.6 still share one backend and still lock as a family.
+- The thinking-levels parity fixture is re-captured against upstream `v0.5.99` (1617 pairs). The two exemptions that were masking real drift are gone; the five remaining are Go-intentional and now say why.
+
+### Known gaps
+
+Upstream's `thinkingOffType` (`between_tools`) and `forcedToolChoice` (`false`) for Claude 5.5 are **not** represented. This port has no thinking-emission module and never pins `tool_choice`, so adding the fields would record data nothing reads. Both prevent a 400 (a thinking block closed at a turn boundary, and a pinned tool choice) and land with the `thinkingUnified` work.
+
+### fix(dashboard): render the API-key list as cards on a phone
+
+The follow-up to #224: after the per-row controls collapsed into one menu, the
+API-key table was still unusable at phone width. A row is five columns wide by
+construction, so at 390px the `overflow-x-auto` wrapper held 500px of content
+inside a 292px box — the policy and actions columns sat outside the viewport and
+the secret cell broke one character per line. Nothing scrolled, so nothing
+looked broken; the content was simply unreachable.
+
+Below `md` the list now renders one card per key, carrying every column the
+table hid. The row menu stretches to the card's full width and keeps its
+"Menu" label at phone widths, where there is room for it and a bare glyph
+would be an ambiguous tap target with five verbs behind it.
+
+The two layouts share their cells, the status pill and the row menu as
+snippets, so a card cannot drift from the table row above `md`.
+
+fix(qoder): rewrite the chat body into Qoder's own payload before signing — Closes #121
+
+Every Qoder chat request failed with HTTP 400 on every registered model,
+on a freshly authorized account:
+
+```json
+{"error":{"message":"{\"code\":\"400\",\"message\":\"[FAIL]node:agent_router
+msg:None flow nodes found for router agent_router\"}"}}
+```
+
+`ForwardQoder` COSY-signed and forwarded the client's OpenAI body verbatim.
+Qoder's `agent_chat_generation` does not accept an OpenAI-shaped request: it
+routes to a node called `agent_router`, that node finds no flow for the
+request, and answers 400. The COSY signature, the endpoint and the model id
+were all correct, which is why the failure read as an account problem rather
+than a gateway one. Upstream's Node build answers the same request 200,
+because it rewrites the body first.
+
+**What changed (request side)**
+
+- `qoder_request.go` (new) — maps the OpenAI chat body onto Qoder's payload:
+  `chat_task`, `session_type`, `agent_id`, `task_id`, `chat_context`,
+  `parameters`, `business`, and the derived `session_id` / `chat_record_id` /
+  `request_set_id` / `request_id`. System turns are hoisted out of `messages`,
+  multipart content is flattened except image blocks, and documents become
+  short stubs instead of inlined bytes.
+- `qoder_encoding.go` (new) — Qoder's WAF-bypass body encoding (base64 →
+  third-rotation → character substitution). The encoded bytes are what the
+  COSY signature covers; signing the plaintext is a signature error.
+- `qoder_catalog.go` (new) — `model_config` comes from the live COSY-signed
+  model list, cached per credential for an hour and coalesced through
+  `singleflight`. A model the catalogue does not publish now fails with a
+  message naming it instead of reaching Qoder as an unroutable payload.
+- `qoder_credentials.go` (new) — a Personal Access Token is exchanged for a
+  short-lived job token before chat, since a PAT cannot sign COSY requests.
+- `qoder_context_tier.go` (new) — the 200K/400K/1M context-window escalation
+  the IDE performs, so a long session is not rejected by the default tier.
+- `qoder_endpoints.go` (new) — the regional endpoint table, now shared with
+  the dashboard. `qoder` and `qoder-cn` keep separate hosts and are never
+  routed to one another.
+- The chat request now carries `&Encode=1`, plus `Accept: text/event-stream`,
+  `Cache-Control: no-cache`, `X-Model-Key`, `X-Model-Source` and
+  `Accept-Encoding: identity` — gzip makes Qoder's CDN re-validate the
+  signature, so identity is required.
+- A connection missing `userId` or a token now answers a clean 401 naming the
+  fix, rather than an opaque failure from inside the signer.
+
+**What changed (response side)**
+
+With the request accepted, every reply still failed as HTTP 502
+`upstream answered 200 without a completion`. Qoder's event stream is not
+plain SSE: every frame is an envelope whose `body` holds the real chunk as an
+escaped JSON *string*.
+
+```json
+data: {"headers":{...},"body":"{\"choices\":[{\"delta\":{...}}]}",
+        "statusCodeValue":200,"statusCode":"OK"}
+```
+
+Feeding those frames to the shared SSE folder finds no `choices`, so a
+perfectly good upstream looked empty. `qoder_sse.go` (new) peels the envelope
+and re-emits plain OpenAI chunks, and coalesces the empty finish chunk with
+the later `choices: []` usage frame into one terminal chunk carrying both —
+downstream reads usage off the finish chunk and drops `choices: []`. A billing
+or quota refusal becomes a `quota_error` rather than assistant text, and any
+other upstream failure is marked so the non-streaming path raises its status
+instead of answering 200 with the error text (issue #41).
+
+**Scope beyond the literal report**
+
+Upstream's attachments rewrite (uploading inlined images to
+`/api/v2/image/upload`) is not ported; OpenAI `image_url` and Claude `image`
+blocks are converted to Qoder's image block form and sent as references. The
+dashboard's model-list fetch now shares the executor's endpoint table and
+credential exchange rather than keeping a second copy that could drift.
+
+**Verification**
+
+`go test -race ./internal/proxy/executor/ ./internal/handlers/dashboard/` —
+726 passed. `qoder_body_test.go` captures the outbound request at a fake
+upstream, decodes the Qoder encoding, and pins the payload keys, the derived
+identities (stable across turns, fresh per request), `Encode=1`, the header
+set, and that `Cosy-Bodyhash` covers the encoded bytes actually sent.
+`qoder_sse_test.go` pins the response side: envelope unwrapping, the escaped
+wire form verbatim, finish+usage coalescing, billing blocks not becoming
+assistant text, and the dropped `event:finish` timings frame.
+
+Before this change the same probe showed the client's OpenAI body on the wire
+with no `Encode=1`, no `X-Model-Key`, and `Accept-Encoding: gzip`.
+
+Verified against a live Qoder account: `qd/qfmodel` answers 200 with
+`content: "pong"` in both streaming and non-streaming mode, with usage
+attributed on the terminal chunk.
+
+### fix(dashboard): drop the dead language switcher — Closes #240
+
+The top-bar menu carried a **Language** item whose `onSelect` was an empty
+function, so clicking it closed the menu and nothing else happened. The
+dashboard ships English only — there is no i18n layer, and every label in the
+SPA is hardcoded — so the item advertised a capability the build does not have.
+
+Removed:
+
+- the `Language` menu item from the top-bar overflow menu (`TopBar.svelte`);
+- the "Language & Display" card from the profile settings page, along with its
+  `selectedLanguage` state, its read-back from `GET /api/settings`, and the
+  `language` key it wrote on save (`ProfileSettingsView.svelte`);
+- the now-unreferenced `language` field from the `Settings` TypeScript type
+  (`api/client.ts`).
+
+Nothing on the Go side changes: the settings row is a passthrough JSON map and
+no handler ever read the `language` key, so a stored value from an older build
+is inert and simply stops being rewritten.
+
+Verified with `bun run build`, `bun test` (358 pass), and `bun run
+ratchet:svelte` (0 unresolved identifiers, 83 errors — unchanged from the
+pinned baseline). The end-to-end top-bar assertion now pins the item's absence
+rather than its presence.
+
+### ✨ feat(cli-tools): kartu Pi dan Oh My Pi di halaman CLI Tools — Closes #165
+
+- **Latar belakang**: halaman CLI Tools hanya memuat 22 tool. `pi` (pi.dev) dan `omp`
+  (Oh My Pi) tidak ada di katalog maupun di peta status, padahal keduanya sudah bisa
+  memakai 9router-go sebagai gateway — keduanya hanya butuh satu blok provider yang
+  menunjuk `baseUrl` ke `{origin}/v1`. Pengguna harus mencari sendiri snippet-nya di
+  komentar issue.
+- **Backend**: `internal/handlers/media/clitools.go` menambahkan dua `toolDef` — `pi`
+  (bin `pi`) dan `omp` (bin `omp`, plus `--version` seperti `devin`, jadi kartu
+  menampilkan nomor versi). `TestCLIDetectors_HasAllToolIDs` ikut diperbarui;
+  tes itu mengunci set id, jadi penambahan kartu tanpa detektor gagal di suite Go
+  alih-alih diam-diam di browser.
+- **Frontend**: dua kartu baru di `CliToolsView.svelte` dengan `configType: 'guide'`,
+  karena kedua agen dikonfigurasi lewat file, bukan env var. Snippet-nya diinterpolasi
+  dari origin hidup dan API key aktif: JSON `models.json` untuk Pi, YAML `models.yml`
+  untuk Oh My Pi (path default `~/.omp/agent/models.yml`, dengan catatan direktori
+  profil `~/.omp/profiles/<name>/agent/`). Keduanya menyebut fallback
+  `openai-responses` karena gateway menyajikan dua lane.
+- **Ikon**: `web/public/providers/pi.png` dan `omp.png` (128px, diturunkan dari
+  `pi.dev/logo.svg` dan `omp.sh/favicon.svg`) ditambahkan dan dirujuk lewat `image:`
+  di kedua kartu, jadi keduanya tampil penuh seperti tool lain — bukan badge
+  monogram hasil fallback.
+- **Verifikasi**: `web/e2e/cliToolsPi.test.ts` baru menjalankan gateway sungguhan dan
+  memeriksa (a) id `pi`/`omp` benar-benar ada di payload `all-statuses` dengan
+  `installed` bertipe boolean — bukan `null`, yang akan membuat badge jatuh ke
+  "Guide", (b) teks modal memuat path konfigurasi yang benar, `{origin}/v1`, kedua
+  nilai `api`, dan tidak pernah memuat fallback SSR `localhost:20130` atau
+  `<your-api-key>`, (c) kedua ikon benar-benar termuat (`naturalWidth > 0`) — file
+  yang hilang hanya akan memicu badge monogram lewat `onerror`, jadi itu yang
+  diuji, bukan keberadaan tag `<img>`. Diuji gagal sebelum fix (2 dari 5 gagal saat
+  `clitools.go` dikembalikan ke keadaan semula; 1 gagal saat `pi.png` dihapus) dan
+  lolos sesudahnya. `go test ./internal/handlers/...` (1528 pass), `bun test`,
+  `bun run build` dan `make vet-svelte` (0 unresolved, 83 error = baseline) hijau.
+  Halaman juga dicek langsung di Chromium terhadap binary yang baru dibangun.
+
+### 🐛 fix(dashboard): menu pojok kanan atas terbuka tapi tidak kelihatan atau bisa diklik — Closes #235
+
+- **Latar belakang**: di v1.9.11-exp.7, menu akun di pojok kanan atas (`<header>`: donasi, tema,
+  bahasa, changelog, logout) **tidak memberi respons apa pun** di seluruh halaman. Menunya
+  benar-benar terbuka — `aria-expanded` berubah, panel-nya ada di DOM dengan lebar 205px dan
+  tinggi 232px — tapi tidak pernah terlihat dan tidak pernah menerima klik.
+- **Akar masalahnya bukan penempatan, melainkan containing block**. `lib/ui/Menu.svelte`
+  membuat panel `position: fixed` lalu memposisikannya dari `trigger.getBoundingClientRect()`
+  lewat `menuPosition.placePanel` — dan itu benar, karena `placePanel` memang menghitung
+  `left`/`top` **terhadap viewport**. Tapi `position: fixed` hanya ikut viewport selama tidak
+  ada ancestor yang membentuk containing block, dan `backdrop-filter` (**juga** `transform`,
+  `filter`, `perspective`, `contain`) membuatnya. `<header>` TopBar membawa `backdrop-blur-xl`,
+  jadi panel di dalamnya diukur dari **padding box header**, bukan dari window: pada viewport
+  1440px panel itu muncul di `left=1491, top=55` — sepenuhnya di luar layar. `left=1491` itu
+  persis `rect.right - width` (1408 − 205) yang **tidak pernah di-clamp**, karena clamp di
+  `placePanel` mengasumsikan koordinat sudah relatif terhadap viewport.
+- **Perbaikan**: action `use:portal` (`web/src/lib/ui/portal.ts`) memindahkan panel ke
+  `<body>` selama terbuka, lalu melepaskannya saat `{#if open}` menutup. Menempelkan panel di
+  `<body>` menghapus ketergantungan pada ancestor sepenuhnya — bukan mengurangi offset
+  header, yang harus dihitung ulang untuk setiap trigger baru. Diterapkan pada ketiga panel
+  `fixed` yang memakai `placePanel`: `Menu.svelte`, `SectionMenu.svelte`, dan
+  `PeriodSelect.svelte`.
+- **Kenapa tidak cukup sekarang saja di header**: ketiga komponen itu berdiri sendiri dengan
+  helper yang sama, jadi hanya memperbaiki satu berarti bug yang sama tetap bisa muncul di
+  halaman lain. SectionMenu dan PeriodSelect memang belum terpengaruh hari ini, tapi keduanya
+  sudah memakai `placePanel`, jadi tidak ada yang perlu ditunggu sampai triase ulang.
+- **Verifikasi**: `web/e2e/headerMenuPanel.test.ts` baru menelusuri ancestor chain tiap panel dan
+  gagal kalau ada `transform`/`filter`/`backdrop-filter`/`perspective`/`contain` di antara panel
+  dan `<body>`, selain itu mengecek panel benar-benar di dalam viewport dan **bisa diklik**
+  (`elementFromPoint` di titik tengah panel harus mendarat di dalam panel itu sendiri).
+  Diverifikasi gagal sebelum fix (`Received: 1696, Expected: <= 1440`) dan lolos sesudahnya.
+  Suite e2e penuh, `bun test src scripts` (321 pass), `bun run lint`, `make vet-svelte`, dan
+  `go test ./...` semuanya hijau.
+
+### 🐛 Kolom isian custom provider tidak lagi kembali ke nilai awal (#234)
+
+- **Gejalanya**: di dialog **Edit OpenAI/Anthropic Compatible**, semua yang diketik
+  hilang sendiri setelah beberapa detik — persis saat polling dashboard berjalan.
+  Dilaporkan user: "ubah data di kolom apapun, tunggu beberapa saat, nilainya
+  kembali ke value awal".
+- **Penyebabnya bukan polling itu sendiri, tapi cara dialog membaca datanya.**
+  `App.svelte` memanggil `/api/provider-nodes` tiap 10 detik lalu **mengganti seluruh
+  array** (`providerNodes = nodesRes`). Di `ProviderDetailView`, `selectedNode`
+  dihitung dengan `$derived(providerNodes.find(...))`, jadi setiap tick memberi
+  objek baru dengan isi yang identik. `EditCompatibleNodeModal` men-seed form dari
+  `$effect` yang bergantung pada `node`, sehingga efek itu ikut jalan ulang dan
+  menulis ulang `formName`/`formPrefix`/`formUrlSuffix`/`formApiType`/`formBaseUrl`
+  dengan nilai tersimpan — menghapus semua ketikan yang belum disimpan.
+- **Perbaikannya mengunci seed pada identitas yang stabil, bukan pada objek.**
+  Id node adalah identitas yang benar-benar stabil; isi objeknya yang berubah
+  setiap 10 detik. Efek sekarang hanya men-seed saat dialog dibuka atau saat
+  node yang diedit **berganti id** — termasuk kasus node yang baru muncul
+  setelah dialog terbuka. Variabel penanda (`seededNodeId`, `wasOpen`) sengaja
+  `let` biasa, bukan `$state`: menulisnya tidak boleh dibaca efek itu sendiri,
+  kalau tidak akan memicu dirinya sendiri.
+- **`EditConnectionModal` sudah aman dan tidak ikut diubah.** Ia men-seed di luar
+  `$effect`, jadi array `connections` yang berganti tiap 10 detik tidak pernah
+  menimpa form-nya. Hanya dialog yang bergantung pada `providerNodes` yang
+  bermasalah.
+- **Tes regresi**: `web/e2e/customProviderForm.test.ts` membuat node asli lewat
+  UI, membuka dialog Edit, mengetik perubahan, lalu **menunggu melewati satu tick
+  polling** sebelum membaca nilainya kembali. Pada binary tanpa perbaikan, tes
+  gagal persis pada gejala yang dilaporkan (`"Poll Survivor Edited"` kembali
+  menjadi `"Poll Survivor"`), dan lulus setelah perbaikan. Kasus kedua
+  memastikan dialog yang ditutup lalu dibuka lagi tetap men-seed dari baris
+  tersimpan — perbaikan separuh akan menjadi bug form basi, jadi keduanya diuji.
+
+### 🔍 feat(dashboard): atributkan model pada lastError koneksi dan redam visual saat testStatus aktif (#226)
+
+- **Latar belakang**: ketika model tertentu gagal diuji atau gagal dipanggil (misal `401 Model ... is not supported`),
+  `RecordConnectionError` menulis string error tanpa atribut model. Di dashboard, baris koneksi menampilkan
+  badge `Active` di samping teks error merah mencolok tanpa kejelasan model mana yang gagal atau apakah
+  error tersebut hanya berlaku per-model.
+- **Fiks**: `RecordConnectionScopedError` di layer database kini menyimpan `model` dan `source` pada objek
+  `lastError`. `GET /api/connections` memancarkan `lastErrorModel` dan `lastErrorSource`. Pada baris koneksi
+  dashboard, error model-scoped diberi tag `[model]` dan diwarnai mengikuti verdict badge baris tersebut —
+  merah bila badge `error`, muted bila `active` — sehingga error per-model tidak lagi terbaca sebagai
+  kerusakan kredensial menyeluruh, tanpa meredam alarm saat probe benar-benar gagal.
+- **Verifikasi**: `go test ./internal/db/... ./internal/handlers/{dashboard,chat}/...`, `bun test src scripts`
+  (321 pass), `bun run ratchet:svelte` (0 unresolved, 83 = baseline), dan pemeriksaan DOM di dashboard:
+  baris dengan probe gagal tetap merah di kedua lokasi tampilan, sedangkan baris `active` meredam.
+
+### 📢 Notifikasi release ke grup Telegram
+
+- **Kabar rilis**: setiap tag baru (`v*`) memunculkan ringkasan di grup Telegram — versi, channel
+  (stabil atau eksperimental), 10 entri changelog teratas, link ke Release page, dan perintah
+  `docker pull`.
+- **Isi pesan diringkas, bukan changelog penuh.** Telegram membatasi 4096 karakter, sementara
+  `CHANGELOG.md` repo ini 4.971 baris dan satu entry pernah melewati 4.000 karakter sendiri.
+  Yang dikirim hanya heading (`###`), karena bullet-nya ada di Release page — dan 700 baris di
+  HP tidak terbaca.
+- **`notify` jadi job keempat di `release.yml`, `needs: [binaries, docker]`.** Itu inti
+  desainnya: job berjalan setelah Release page dan image Docker benar-benar ada, jadi link di
+  pesan tidak pernah 404. Workflow terpisah yang trigger `push: tags` berjalan paralel dengan
+  build dan rutin mengirim tautan mati.
+- **Catatan dioper lewat artifact, bukan `/tmp`.** Tiap job GitHub punya runner sendiri, jadi
+  `/tmp/notes.md` dari job `binaries` tidak ada di `notify`. Artifact ini mencegah 40 baris
+  logika fallback diduplikasi — kalau tidak, ringkasan di Telegram bisa berbeda dari yang
+  dibaca pengguna di halaman Release.
+- **`continue-on-error: true`**, karena Telegram yang down atau token dicabut tidak boleh
+  menandai release sukses jadi merah; artifact sudah terbit sebelum job ini jalan.
+- **`scripts/notify-telegram.sh` bisa dijalankan lokal** dengan `--dry-run` untuk mengecek
+  format tanpa tag baru, dan dengan `--notes` untuk menguji jalur kirim sungguhan.
+- **Lima bug format, tiga di antaranya hanya muncul saat kirim sungguhan**:
+  1. Pemotongan pesan awal memakai `head -n 40` — itu menghitung *baris*, bukan karakter.
+     Dengan fixture 59 entry beremoji, pesan keluar **11.131 karakter** dan pasti ditolak
+     Telegram. Sekarang dipotong per karakter lalu dirapikan ke batas baris.
+  2. `grep '^#{2,4} '` ikut menarik `[Unreleased]` dan judul `[v1.9.11]` seolah entri,
+     jadi baris paling atas pesan tidak membawa informasi apa pun. Sekarang `#{3,4}` saja.
+  3. Pesan dikirim sebagai argumen `curl`, dan **di Git Bash (Windows) variabel bash yang
+     memuat non-ASCII tidak selamat lewat argv** — ditranscode ke code page ANSI, lalu Telegram
+     menjawab `400 strings must be encoded in UTF-8` tanpa menerima apa pun. Terukur: variabel
+     ASCII murni terkirim, variabel yang sama berisi em-dash tidak pernah — dari file, dari
+     `printf`, maupun literal. Emoji sendiri selamat, jadi gaganya baru muncul begitu ada entry
+     bertanda hubung, dan entry di repo ini semuanya begitu. Runner `ubuntu-latest` tidak
+     terpengaruh, jadi ini tidak pernah muncul di CI — tapi justru merusak jalur tes lokal,
+     satu-satunya alasan skrip ini ada. Payload sekarang di-URL-encode ke file, dikirim
+     dengan `--data-binary @file`.
+  4. Field form dipisah baris baru, bukan `&`. curl menerimanya, Telegram menjawab
+     `400 message text is empty`.
+  5. `curl --fail-with-body` mengubah penolakan jadi exit 22 dan membuang deskripsi error
+     Telegram, sehingga log job menampilkan error transport, bukan "chat not found". Skrip
+     sekarang membaca body dan menentukan exit sendiri.
+- **Topik forum ditangani lewat `TELEGRAM_TOPIC_ID` opsional.** Grup ini `is_forum: true`;
+  tanpa thread id, Telegram membuat topik "Messages" baru yang mungkin tidak pernah dibuka
+  anggota. Field-nya dihilangkan sepenuhnya kalau variabel belum di-set, jadi tidak
+  mengaturnya adalah konfigurasi yang valid, bukan rusak.
+- **Verifikasi**: `bash -n` bersih; dry-run terhadap `CHANGELOG.md` asli (1.069 karakter);
+  oversize 19 KB dipotong ke 3.727 dengan link utuh; file kosong, argumen hilang, flag asing,
+  dan secret kosong semuanya keluar dengan pesan dan exit code yang benar; `release.yml`
+  di-parse dengan `needs: [binaries, docker]`. **Jalur kirim sungguhan diuji langsung ke grup**:
+  pesan ber-emoji + em-dash, pesan penuh dari `CHANGELOG.md`, dan pesan oversize — ketiganya
+  `ok:true`; token salah memberi `404 Not Found` beserta deskripsinya dan exit 1.
+- **Setup ada di [`docs/TELEGRAM_RELEASE_NOTIFICATIONS.md`](docs/TELEGRAM_RELEASE_NOTIFICATIONS.md)**:
+  buat bot via BotFather, **tambahkan bot ke grup dulu** (tanpa itu API balas `403`, bukan
+  `404`), ambil `chat.id` dari `getUpdates`, lalu simpan `TELEGRAM_BOT_TOKEN` dan
+  `TELEGRAM_CHAT_ID` sebagai repository secrets.
+
+### 🔀 Changelog dipindah ke fragment per-PR — konflik `CHANGELOG.md` jadi mustahil
+
+- **Latar belakang**: `CHANGELOG.md` 4.971 baris dan **setiap PR menulis entry baru persis di
+  baris 5-6** (`## [Unreleased]` + entry pertama). Heading itu jadi hunk terpanas di repo,
+  jadi tiap dua PR yang landai bareng pasti bentrok, dan `## [Unreleased]` menumpuk 675 baris
+  sejak `v1.9.10-exp.3`. Aturan §7 "resolve additive" di `AGENTS.md` dibuat justru karena
+  konflik itu selalu muncul di tempat yang sama — band'sat manual, bukan-solusi.
+- **Kenapa tidak `merge=union` di `.gitattributes`**: itu pilihan yang murah dan kelihatannya
+  tepat, tapi tidak berlaku di repo ini. Merge lewat tombol Merge di GitHub
+  (commit `4dbd63d9 … (#219)` adalah squash merge server-side), dan GitHub **mengabaikan
+  `.gitattributes` merge driver sepenuhnya** — limitation yang sudah lama, bukan config.
+  Union merge lokal sudah diuji (merge, `--squash`, `cherry-pick` semuanya bersih), tapi lokal
+  bukan yang dipakai repo ini. Bot union-merge lewat Actions ditolak karena butuh token write
+  dan PR tetap `CONFLICTING` di UI sampai action jalan.
+- **Fiks**: satu file `.changes/<pr-number>-<slug>.md` per PR. Dua PR yang bareng tidak pernah
+  berbagi satu baris, jadi tidak ada yang bisa bentrok — bukan karena ada aturan resolusi, tapi
+  karena tidak ada yang sama untuk dibentrokan. `CHANGELOG.md` sekarang ditulis **hanya** oleh
+  `make changelog-merge TAG=…` saat release.
+- **Dashboard tetap live, dan justru lebih segar dari sebelumnya**. `GET /api/changelog`
+  merakit `CHANGELOG.md` + seluruh fragment (package baru `internal/changelogfrag`), jadi
+  pekerjaan yang sudah merge tapi belum ada tag langsung terlihat — tanpa menunggu release.
+  Ini menjawab kekhawatiran "kalau tiap PR nulis file baru, nanti dashboard-nya gimana?":
+  file baru tidak muncul sebagai perubahan, hanya sebagai isi.
+- **Rantai fallback release notes** (`release.yml`) sekarang: section `## [<tag>]` → `[Unreleased]`
+  → fragment `.changes/` → commit log. Tanpa tahap fragment, halaman release akan jatuh ke
+  commit subjects, karena tidak ada lagi yang mengisi `CHANGELOG.md` sebelum tag.
+- **Tiga bug yang ketahuan saat verifikasi, bukan saat baca kode**:
+  1. Fragmen di-join dengan `\n`, jadi `### heading` berikutnya menempel ke list item — marked
+     mem-parsingnya sebagai continuation line dan entry hilang ke dalam bullet sebelumnya.
+     Sekarang dipisah blank line, dengan `TestAssembleSeparatesFragmentsWithBlankLine`.
+  2. Merge kedua (setelah `[Unreleased]` hilang) menaruh release **di atas** `# Changelog`, judul
+     file hilang permanen. Ditangkap smoke test tiga release berturut-turut, bukan unit test.
+  3. `.changes/README.md` ikut ter-render jadi entry — instruksi kontributor muncul di atas
+     release notes di modal.
+- **Verifikasi**: `go build ./...`, `go vet ./...`, unit test `internal/changelogfrag`
+  (21 case: urutan numerik PR, blank-line separation, README exclusion, tag berisi bracket),
+  `go test -race ./internal/integration/` dengan `TestChangelogShowsPendingFragments` lewat
+  router produksi, plus smoke `changelog-merge` tiga release berturut-turut terhadap salinan repo
+  dan rantai fallback `release.yml` diuji di bash dengan fixture 88/900/1012.
+- **Dokumentasi**: `AGENTS.md` §7.6 (cara menulis fragment) dan §7.7 (konflik `CHANGELOG.md`
+  kini tanda ada edit yang bocor, bukan pekerjaan manual), PR template, `.changes/README.md`.
 
 ### ✨ feat(dashboard): sertakan flag free pada GET /api/models/caps (#232)
 

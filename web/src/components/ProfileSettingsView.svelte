@@ -24,7 +24,7 @@
   import Modal from '../lib/ui/Modal.svelte'
   import Button from '../lib/ui/Button.svelte'
   import Input from '../lib/ui/Input.svelte'
-  import { api, getAuthHeaders, responseErrorMessage, type Settings } from '../api/client'
+  import { api, getAuthHeaders, responseErrorMessage, type DatabaseStats, type Settings } from '../api/client'
 
   interface Props {
     settings?: Settings
@@ -40,6 +40,12 @@
   let requireLogin = $state(false)
   let sessionTimeout = $state('24h')
   let enableObservability = $state(false)
+  let observabilityMode = $state<'full' | 'errors_only' | 'off'>('full')
+  let retentionDays = $state<number>(7)
+  let maxRequestRecords = $state<number>(5000)
+  let dbStats = $state<DatabaseStats | null>(null)
+  let isPruning = $state(false)
+  let isVacuuming = $state(false)
 
   // Routing Strategy State
   let fallbackStrategy = $state('failover')
@@ -84,6 +90,11 @@
     if (settings) {
       requireLogin = !!settings.requireLogin
       enableObservability = !!settings.enableObservability
+      if (settings.observabilityMode === 'full' || settings.observabilityMode === 'errors_only' || settings.observabilityMode === 'off') {
+        observabilityMode = settings.observabilityMode
+      }
+      if (typeof settings.retentionDays === 'number') retentionDays = settings.retentionDays
+      if (typeof settings.maxRequestRecords === 'number') maxRequestRecords = settings.maxRequestRecords
       if (typeof settings.sessionTimeout === 'string') sessionTimeout = settings.sessionTimeout
       if (typeof settings.fallbackStrategy === 'string') fallbackStrategy = settings.fallbackStrategy
       if (typeof settings.stickyRoundRobinLimit === 'number') stickyRoundRobinLimit = settings.stickyRoundRobinLimit
@@ -144,6 +155,9 @@
         requireLogin,
         sessionTimeout,
         enableObservability,
+        observabilityMode,
+        retentionDays,
+        maxRequestRecords,
         fallbackStrategy,
         stickyRoundRobinLimit,
         comboStrategy,
@@ -303,6 +317,49 @@
       dbAuthOpen = false
       dbPassword = ''
     }
+  }
+
+  async function loadDbStats() {
+    try {
+      dbStats = await api.getDatabaseStats()
+    } catch {
+      // best-effort
+    }
+  }
+
+  async function handlePrune() {
+    if (!confirm('Prune expired request details according to retention settings?')) return
+    try {
+      isPruning = true
+      const res = await api.pruneDatabase()
+      alert(`Pruned ${res.pruned} record(s).`)
+      await loadDbStats()
+    } catch (err) {
+      alert(`Failed to prune: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      isPruning = false
+    }
+  }
+
+  async function handleVacuum() {
+    if (!confirm('Compact SQLite database (VACUUM)? This will return unallocated pages back to disk.')) return
+    try {
+      isVacuuming = true
+      await api.vacuumDatabase()
+      alert('Database vacuumed successfully!')
+      await loadDbStats()
+    } catch (err) {
+      alert(`Failed to vacuum: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      isVacuuming = false
+    }
+  }
+
+  function formatBytes(bytes?: number): string {
+    if (!bytes || bytes <= 0) return '0 B'
+    const units = ['B', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(1024))
+    return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`
   }
 </script>
 
@@ -675,12 +732,12 @@
       </div>
     </Card>
 
-    <!-- SECTION 5: Observability & Tracing -->
+    <!-- SECTION 5: Observability & Storage Retention -->
     <Card padding="md" class="space-y-4">
       <div class="flex items-center justify-between pb-2 border-b border-border">
         <div class="flex items-center gap-2">
           <Zap class="w-4 h-4 text-brand-500" />
-          <h2 class="text-sm font-bold text-text-main">Observability</h2>
+          <h2 class="text-sm font-bold text-text-main">Observability & Storage Retention</h2>
         </div>
         <Toggle
           checked={enableObservability}
@@ -690,14 +747,92 @@
         />
       </div>
 
-      <div class="space-y-2 text-xs">
+      <div class="space-y-4 text-xs">
         <p class="text-text-muted leading-relaxed">
-          Collect real-time telemetry, TTFT (Time to First Token), round-trip latency, and token throughput for all routed LLM requests.
+          Manage real-time request logging, retention limits, and storage compaction for diagnostic tables.
         </p>
-        <div class="p-3 rounded-xl bg-bg border border-border text-[11px] text-text-subtle space-y-1">
-          <div>Telemetry destination: In-memory ring buffer & SQLite <code class="font-mono text-brand-500">requestDetails</code></div>
-          <div>Real-time stream: <code class="font-mono text-info">/api/usage/stream</code> (SSE)</div>
+
+        <!-- Observability Mode & Retention Controls -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div class="space-y-1">
+            <label class="text-[11px] font-medium text-text-muted">Observability Mode</label>
+            <select
+              bind:value={observabilityMode}
+              class="w-full rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text-main focus:border-brand-500 focus:outline-none"
+            >
+              <option value="full">Full (Record all requests)</option>
+              <option value="errors_only">Errors Only (Diagnostics only)</option>
+              <option value="off">Off (Zero-Trace / Headless)</option>
+            </select>
+          </div>
+
+          <div class="space-y-1">
+            <label class="text-[11px] font-medium text-text-muted">Retention Window</label>
+            <select
+              bind:value={retentionDays}
+              class="w-full rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text-main focus:border-brand-500 focus:outline-none"
+            >
+              <option value={1}>1 Day (STB / Low-Memory)</option>
+              <option value={3}>3 Days</option>
+              <option value={7}>7 Days (Recommended)</option>
+              <option value={14}>14 Days</option>
+              <option value={30}>30 Days</option>
+              <option value={0}>Unlimited</option>
+            </select>
+          </div>
+
+          <div class="space-y-1">
+            <label class="text-[11px] font-medium text-text-muted">Max Request Records</label>
+            <input
+              type="number"
+              bind:value={maxRequestRecords}
+              min="500"
+              step="500"
+              class="w-full rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text-main focus:border-brand-500 focus:outline-none"
+            />
+          </div>
         </div>
+
+        <!-- Database Storage Stats & Actions -->
+        {#if dbStats}
+          <div class="p-3 rounded-xl bg-bg border border-border space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+              <div>
+                <span class="text-text-muted">Database File Size: </span>
+                <span class="font-mono font-semibold text-text-main">{formatBytes(dbStats.databaseSizeBytes)}</span>
+              </div>
+              <div>
+                <span class="text-text-muted">Request Details: </span>
+                <span class="font-mono font-semibold text-text-main">{dbStats.requestDetailsCount.toLocaleString()} rows</span>
+              </div>
+              {#if dbStats.reclaimableBytes > 0}
+                <div>
+                  <span class="text-text-muted">Reclaimable: </span>
+                  <span class="font-mono font-semibold text-amber-500">{formatBytes(dbStats.reclaimableBytes)}</span>
+                </div>
+              {/if}
+            </div>
+
+            <div class="flex flex-wrap gap-2 pt-1 border-t border-border-subtle/60">
+              <button
+                type="button"
+                onclick={handlePrune}
+                disabled={isPruning}
+                class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border text-xs text-text-main font-medium transition cursor-pointer disabled:opacity-50"
+              >
+                <span>{isPruning ? 'Pruning...' : 'Prune Expired Records'}</span>
+              </button>
+              <button
+                type="button"
+                onclick={handleVacuum}
+                disabled={isVacuuming}
+                class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500/10 hover:bg-brand-500/20 border border-brand-500/30 text-xs text-brand-500 font-semibold transition cursor-pointer disabled:opacity-50"
+              >
+                <span>{isVacuuming ? 'Compacting...' : 'Compact Database (VACUUM)'}</span>
+              </button>
+            </div>
+          </div>
+        {/if}
       </div>
     </Card>
 

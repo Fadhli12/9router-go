@@ -18,6 +18,7 @@ import (
 	"9router/proxy/internal/models"
 	"9router/proxy/internal/providers"
 	internalproxy "9router/proxy/internal/proxy"
+	"9router/proxy/internal/proxy/oauth"
 	"9router/proxy/internal/translator"
 )
 
@@ -733,7 +734,20 @@ func extractAPIKey(connData *ConnectionData) string {
 // 403 "The bearer token included in the request is invalid." even though the
 // access token is perfectly valid.
 func resolveProviderAuthToken(provider string, connData *ConnectionData, current string) string {
-	if connData == nil || provider != "kiro" {
+	if connData == nil {
+		return current
+	}
+	// Antigravity / gemini-cli authenticate with the OAuth access token only;
+	// apiKey there is a copy written at login that a refresh may not have
+	// rotated. Preferring it sent a stale token on every request, so each turn
+	// answered 401 and forced a refresh (oauth.SyncMirroredAPIKey heals the row).
+	if oauth.IsAccessTokenOnlyProvider(provider) {
+		if connData.AccessToken != "" {
+			return connData.AccessToken
+		}
+		return current
+	}
+	if provider != "kiro" {
 		return current
 	}
 	authMethod, _ := connData.ProviderSpecificData["authMethod"].(string)

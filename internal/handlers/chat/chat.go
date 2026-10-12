@@ -581,13 +581,16 @@ func (h *ChatHandler) HandleModelsInfo(w http.ResponseWriter, r *http.Request) {
 
 	ctxLen, maxOut := h.declaredTokenLimitsFor(modelInfo.Provider, modelID)
 	if ctxLen == 0 || maxOut == 0 {
-		tableCtxLen, tableMaxOut := providers.GetModelTokenLimits(modelID)
+		// Same chain `capabilities` is built from in /v1/models, so the two
+		// endpoints agree (per-model caps → catalog → substring table).
+		caps := providers.GetCapabilitiesDetailForModel(modelInfo.Provider, modelID)
 		if ctxLen == 0 {
-			ctxLen = tableCtxLen
+			ctxLen = caps.ContextWindow
 		}
 		if maxOut == 0 {
-			maxOut = tableMaxOut
+			maxOut = caps.MaxOutput
 		}
+		ctxLen, maxOut = fillTokenLimitGaps(ctxLen, maxOut, modelID)
 	}
 
 	info := map[string]any{

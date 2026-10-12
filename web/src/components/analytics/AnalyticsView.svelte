@@ -280,9 +280,13 @@
     const nodeName = nodeNameById.get(canonical)
     if (nodeName) return formatEmailLabel(nodeName, $emailPrivacy)
     // Only fall back to the connection label if it isn't a numeric ID (a
-    // connection label like "12"), so custom nodes never render as "12".
+    // connection label like "12") and isn't an OAuth account email: an email
+    // is the connection's identity, not the provider's name, so it must never
+    // stand in as the topology node label even with privacy masking off.
     if (fallbackName && fallbackName !== providerId) {
-      if (!/^\d+$/.test(fallbackName.trim())) return formatEmailLabel(fallbackName, $emailPrivacy)
+      const trimmed = fallbackName.trim()
+      if (!/^\d+$/.test(trimmed) && !trimmed.includes('@')) return formatEmailLabel(fallbackName, $emailPrivacy)
+      return providerId
     }
     return providerId
   }

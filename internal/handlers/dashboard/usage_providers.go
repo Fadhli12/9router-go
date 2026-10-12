@@ -90,6 +90,8 @@ func fetchProviderUsage(ctx context.Context, provider string, data map[string]an
 		return fetchGrokCliUsage(ctx, accessToken, psd), true
 	case "codex":
 		return fetchCodexUsage(ctx, firstNonEmptyStr(accessToken, apiKey)), true
+	case "claude":
+		return fetchClaudeUsage(ctx, firstNonEmptyStr(accessToken, apiKey)), true
 	case "opencode-zen":
 		return fetchOpenCodeZenUsage(ctx, apiKey, connectionBaseURL(data)), true
 	case "minimax-code", "minimax-code-global":
@@ -1633,17 +1635,18 @@ func fetchAntigravityDashboardUsage(ctx context.Context, accessToken, projectID 
 					continue
 				}
 				frac := usageNum(qi["remainingFraction"], 0)
-				total := 1000.0
-				remaining := math.Round(total * frac)
-				used := math.Max(0, total-remaining)
+				total := 100.0
+				remPct := math.Round(frac * 100)
+				used := math.Max(0, math.Round((1.0-frac)*100))
 				dn, _ := info["displayName"].(string)
 				if dn == "" {
 					dn = modelKey
 				}
 				quotas[modelKey] = map[string]any{
-					"used": used, "total": total,
+					"used":                used,
+					"total":               total,
 					"resetAt":             usageResetTime(qi["resetTime"]),
-					"remainingPercentage": frac * 100,
+					"remainingPercentage": remPct,
 					"unlimited":           false,
 					"displayName":         dn,
 				}
@@ -1719,6 +1722,7 @@ func fetchAntigravityDashboardWeekly(ctx context.Context, accessToken, projectID
 	type familyTarget struct {
 		key         string
 		displayName string
+		window      string
 	}
 	type familyConfig struct {
 		pattern string
@@ -1728,13 +1732,13 @@ func fetchAntigravityDashboardWeekly(ctx context.Context, accessToken, projectID
 	configs := []familyConfig{
 		{
 			pattern: "gemini",
-			weekly:  familyTarget{"gemini_weekly", "Gemini (Weekly)"},
-			session: familyTarget{"gemini_session", "Gemini (5h)"},
+			weekly:  familyTarget{"gemini_weekly", "Gemini (Weekly)", "weekly"},
+			session: familyTarget{"gemini_session", "Gemini (5h)", "5h"},
 		},
 		{
 			pattern: "claude",
-			weekly:  familyTarget{"claude_gpt_weekly", "Claude & GPT (Weekly)"},
-			session: familyTarget{"claude_gpt_session", "Claude & GPT (5h)"},
+			weekly:  familyTarget{"claude_gpt_weekly", "Claude & GPT (Weekly)", "weekly"},
+			session: familyTarget{"claude_gpt_session", "Claude & GPT (5h)", "5h"},
 		},
 	}
 	result := map[string]any{}
@@ -1781,16 +1785,17 @@ func fetchAntigravityDashboardWeekly(ctx context.Context, accessToken, projectID
 					if _, exists := result[target.key]; exists {
 						break
 					}
-					total := 1000.0
-					remaining := math.Round(total * frac)
-					used := math.Max(0, total-remaining)
+					total := 100.0
+					remPct := math.Round(frac * 100)
+					used := math.Max(0, math.Round((1.0-frac)*100))
 					result[target.key] = map[string]any{
 						"used":                used,
 						"total":               total,
 						"resetAt":             usageResetTime(b["resetTime"]),
-						"remainingPercentage": frac * 100,
+						"remainingPercentage": remPct,
 						"unlimited":           false,
 						"displayName":         target.displayName,
+						"window":              target.window,
 					}
 					break
 				}

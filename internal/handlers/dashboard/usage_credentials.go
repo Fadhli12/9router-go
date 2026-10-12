@@ -257,10 +257,7 @@ func (h *DashboardHandler) persistUsageTokens(conn *models.ProviderConnection, r
 	// apiKey. An api_key connection whose key differs from the OAuth token keeps
 	// its own key — that one is not ours to overwrite.
 	stored, _ := raw["accessToken"].(string)
-	mirrored, _ := raw["apiKey"].(string)
-	if mirrored != "" && mirrored == stored {
-		raw["apiKey"] = result.AccessToken
-	}
+	oauth.SyncMirroredAPIKey(raw, conn.Provider, stored, result.AccessToken)
 	if result.AccessToken != "" {
 		raw["accessToken"] = result.AccessToken
 	}

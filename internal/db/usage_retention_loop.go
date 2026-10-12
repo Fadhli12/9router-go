@@ -68,11 +68,22 @@ func StartRetentionLoop(ctx context.Context, repo *Repo, retention time.Duration
 	}()
 }
 
-func runRetentionPass(ctx context.Context, repo *Repo, retention time.Duration) {
+func runRetentionPass(ctx context.Context, repo *Repo, defaultRetention time.Duration) {
 	passCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
-	result, err := repo.PruneRequestDetails(passCtx, retention)
+	retention := defaultRetention
+	maxRows := 0
+	if s, err := repo.GetSettings(); err == nil && s != nil {
+		if s.RetentionDays > 0 {
+			retention = time.Duration(s.RetentionDays) * 24 * time.Hour
+		}
+		if s.MaxRequestRecords > 0 {
+			maxRows = s.MaxRequestRecords
+		}
+	}
+
+	result, err := repo.PruneRequestDetails(passCtx, retention, maxRows)
 	if err != nil {
 		if ctx.Err() != nil {
 			// Shutting down mid-pass is not a failure.

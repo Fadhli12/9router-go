@@ -658,18 +658,9 @@ func (h *ChatHandler) appendConnectionModels(
 		declaredCtxLen, declaredMaxOut := typedCustomLimits[modelID][0], typedCustomLimits[modelID][1]
 
 		ctxLen, maxOut := declaredCtxLen, declaredMaxOut
-		if ctxLen == 0 || maxOut == 0 {
-			tableCtxLen, tableMaxOut := providers.GetModelTokenLimits(modelID)
-			if tableCtxLen == 0 && tableMaxOut == 0 {
-				tableCtxLen, tableMaxOut = providers.GetModelTokenLimits(fullID)
-			}
-			if ctxLen == 0 {
-				ctxLen = tableCtxLen
-			}
-			if maxOut == 0 {
-				maxOut = tableMaxOut
-			}
-		}
+		// Anything the operator did not declare comes from the same chain that
+		// fills `capabilities` (per-model caps → catalog → substring table), so
+		// context_length / max_completion_tokens can never disagree with it.
 		caps := providers.GetCapabilitiesDetailForModel(providerID, modelID)
 		if caps.ContextWindow > 0 && ctxLen == 0 {
 			ctxLen = caps.ContextWindow
@@ -677,6 +668,7 @@ func (h *ChatHandler) appendConnectionModels(
 		if maxOut == 0 {
 			maxOut = caps.MaxOutput
 		}
+		ctxLen, maxOut = fillTokenLimitGaps(ctxLen, maxOut, modelID, fullID)
 		// A live resolver may publish its own capability block (kiro does:
 		// {thinking, agentic}). Upstream then uses that block verbatim and
 		// fills the window from the static fallback, so a kiro model reports
@@ -775,7 +767,7 @@ func appendStaticModel(data []ModelInfoObject, seen map[string]bool, alias, mode
 	}
 	seen[fullID] = true
 
-	ctxLen, maxOut := providers.GetModelTokenLimits(modelID)
+	var ctxLen, maxOut int
 	caps := providers.GetCapabilitiesDetailForModel(alias, modelID)
 	if caps.ContextWindow > 0 && ctxLen == 0 {
 		ctxLen = caps.ContextWindow
@@ -783,6 +775,7 @@ func appendStaticModel(data []ModelInfoObject, seen map[string]bool, alias, mode
 	if maxOut == 0 {
 		maxOut = caps.MaxOutput
 	}
+	ctxLen, maxOut = fillTokenLimitGaps(ctxLen, maxOut, modelID)
 	inMod, outMod := buildModalities(&caps)
 	return append(data, ModelInfoObject{
 		ID:                  fullID,
@@ -831,18 +824,6 @@ func (h *ChatHandler) appendLooseCustomModels(
 			}
 			seen[fullID] = true
 			ctxLen, maxOut := declaredTokenLimits(cm)
-			if ctxLen == 0 || maxOut == 0 {
-				tableCtxLen, tableMaxOut := providers.GetModelTokenLimits(fullID)
-				if tableCtxLen == 0 && tableMaxOut == 0 {
-					tableCtxLen, tableMaxOut = providers.GetModelTokenLimits(cm.ID)
-				}
-				if ctxLen == 0 {
-					ctxLen = tableCtxLen
-				}
-				if maxOut == 0 {
-					maxOut = tableMaxOut
-				}
-			}
 			caps := providers.GetCapabilitiesDetailForModel(prefix, cm.ID)
 			if caps.ContextWindow > 0 && ctxLen == 0 {
 				ctxLen = caps.ContextWindow
@@ -850,6 +831,7 @@ func (h *ChatHandler) appendLooseCustomModels(
 			if maxOut == 0 {
 				maxOut = caps.MaxOutput
 			}
+			ctxLen, maxOut = fillTokenLimitGaps(ctxLen, maxOut, fullID, cm.ID)
 			inMod, outMod := buildModalities(&caps)
 			data = append(data, ModelInfoObject{
 				ID:                  fullID,
@@ -938,6 +920,26 @@ func (h *ChatHandler) declaredTokenLimitsFor(provider, modelID string) (contextW
 		}
 	}
 	return 0, 0
+}
+
+// fillTokenLimitGaps completes a (context, output) pair from the substring
+// token table. It only runs after the capability chain, so it fills a gap the
+// chain left (e.g. an operator declared only the window) and never overrides a
+// value the capabilities already report.
+func fillTokenLimitGaps(ctxLen, maxOut int, ids ...string) (int, int) {
+	for _, id := range ids {
+		if ctxLen != 0 && maxOut != 0 {
+			break
+		}
+		tableCtx, tableMax := providers.GetModelTokenLimits(id)
+		if ctxLen == 0 {
+			ctxLen = tableCtx
+		}
+		if maxOut == 0 {
+			maxOut = tableMax
+		}
+	}
+	return ctxLen, maxOut
 }
 
 // optionalTokenLimit boxes a token limit for ModelInfoObject: a non-positive

@@ -288,6 +288,9 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	// Settings backup/restore + outbound proxy diagnostics (profile page)
 	r.Get("/api/settings/database", dashH.HandleExportDatabase)
 	r.Post("/api/settings/database", dashH.HandleImportDatabase)
+	r.Get("/api/settings/database/stats", dashH.HandleGetDatabaseStats)
+	r.Post("/api/settings/database/prune", dashH.HandlePruneDatabase)
+	r.Post("/api/settings/database/vacuum", dashH.HandleVacuumDatabase)
 	r.Post("/api/settings/proxy-test", dashH.HandleProxyTest)
 
 	// Token saver testing benches & filter catalog

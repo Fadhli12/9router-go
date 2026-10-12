@@ -40,7 +40,7 @@ const (
 //
 // It is a variable rather than a constant so the size pass can be tested
 // without seeding half a million rows.
-var retentionMaxRows = 500_000
+var retentionMaxRows = 5000
 
 // PruneResult reports what one retention pass removed.
 type PruneResult struct {
@@ -58,7 +58,10 @@ func (p PruneResult) Total() int { return p.ByAge + p.BySize }
 // page further back than the retained window, and an operator lowering the
 // ceiling to a day would lose diagnostics without being able to see which
 // setting did it.
-func (r *Repo) PruneRequestDetails(ctx context.Context, retention time.Duration) (PruneResult, error) {
+// PruneRequestDetails removes requestDetails rows older than retention, then
+// enforces the row ceiling. If maxRows is provided and > 0, it overrides the
+// configured or default row ceiling.
+func (r *Repo) PruneRequestDetails(ctx context.Context, retention time.Duration, maxRows ...int) (PruneResult, error) {
 	var result PruneResult
 	if retention <= 0 {
 		return result, fmt.Errorf("prune requestDetails: retention must be positive, got %v", retention)
@@ -67,10 +70,22 @@ func (r *Repo) PruneRequestDetails(ctx context.Context, retention time.Duration)
 		return result, fmt.Errorf("prune requestDetails: nil context")
 	}
 
+	limit := 0
+	if len(maxRows) > 0 {
+		limit = maxRows[0]
+	}
+	if limit <= 0 {
+		if s, err := r.GetSettings(); err == nil && s != nil && s.MaxRequestRecords > 0 {
+			limit = s.MaxRequestRecords
+		} else {
+			limit = retentionMaxRows
+		}
+	}
+
 	if err := r.pruneRequestDetailsByAge(ctx, retention, &result); err != nil {
 		return result, err
 	}
-	if err := r.pruneRequestDetailsBySize(ctx, &result); err != nil {
+	if err := r.pruneRequestDetailsBySize(ctx, limit, &result); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -115,18 +130,21 @@ func (r *Repo) pruneRequestDetailsByAge(ctx context.Context, retention time.Dura
 	return nil
 }
 
-func (r *Repo) pruneRequestDetailsBySize(ctx context.Context, result *PruneResult) error {
+func (r *Repo) pruneRequestDetailsBySize(ctx context.Context, maxRows int, result *PruneResult) error {
+	if maxRows <= 0 {
+		maxRows = retentionMaxRows
+	}
 	var total int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM requestDetails`).Scan(&total); err != nil {
 		return fmt.Errorf("count requestDetails: %w", err)
 	}
-	if total <= retentionMaxRows {
+	if total <= maxRows {
 		return nil
 	}
 
 	// Cut from the oldest end, which the timestamp DESC ordering of the tab
 	// means are the rows it would never show anyway.
-	overflow := total - retentionMaxRows
+	overflow := total - maxRows
 	removed := 0
 	for removed < overflow {
 		if err := ctx.Err(); err != nil {
@@ -151,5 +169,59 @@ func (r *Repo) pruneRequestDetailsBySize(ctx context.Context, result *PruneResul
 	}
 
 	result.BySize = removed
+	return nil
+}
+
+// DatabaseStats holds metrics for database disk usage and key table volumes.
+type DatabaseStats struct {
+	DatabaseSizeBytes   int64 `json:"databaseSizeBytes"`
+	ReclaimableBytes    int64 `json:"reclaimableBytes"`
+	RequestDetailsCount int   `json:"requestDetailsCount"`
+	UsageHistoryCount   int   `json:"usageHistoryCount"`
+}
+
+// GetDatabaseStats queries SQLite page counts and table row counts to measure
+// disk consumption and reclaimable space.
+func (r *Repo) GetDatabaseStats(ctx context.Context) (DatabaseStats, error) {
+	var stats DatabaseStats
+	if r == nil || r.db == nil {
+		return stats, fmt.Errorf("repo or db is nil")
+	}
+
+	var pageCount, pageSize, freelistCount int64
+	if err := r.db.QueryRowContext(ctx, "PRAGMA page_count;").Scan(&pageCount); err != nil {
+		return stats, fmt.Errorf("read page_count: %w", err)
+	}
+	if err := r.db.QueryRowContext(ctx, "PRAGMA page_size;").Scan(&pageSize); err != nil {
+		return stats, fmt.Errorf("read page_size: %w", err)
+	}
+	if err := r.db.QueryRowContext(ctx, "PRAGMA freelist_count;").Scan(&freelistCount); err != nil {
+		return stats, fmt.Errorf("read freelist_count: %w", err)
+	}
+
+	stats.DatabaseSizeBytes = pageCount * pageSize
+	stats.ReclaimableBytes = freelistCount * pageSize
+
+	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM requestDetails;").Scan(&stats.RequestDetailsCount); err != nil {
+		return stats, fmt.Errorf("count requestDetails: %w", err)
+	}
+	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM usageHistory;").Scan(&stats.UsageHistoryCount); err != nil {
+		return stats, fmt.Errorf("count usageHistory: %w", err)
+	}
+
+	return stats, nil
+}
+
+// VacuumDatabase executes SQLite VACUUM with a bounded timeout to reclaim free
+// pages and return allocated storage to the operating system.
+func (r *Repo) VacuumDatabase(ctx context.Context) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("repo or db is nil")
+	}
+	vCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	if _, err := r.db.ExecContext(vCtx, "VACUUM;"); err != nil {
+		return fmt.Errorf("vacuum database: %w", err)
+	}
 	return nil
 }

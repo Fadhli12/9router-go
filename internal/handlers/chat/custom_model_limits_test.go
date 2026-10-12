@@ -169,3 +169,38 @@ func TestCustomModelPartialLimitFillsOnlyTheGap(t *testing.T) {
 		t.Errorf("max_completion_tokens = %d, want the table fallback %d", got, wantMax)
 	}
 }
+
+// The top-level context_length / max_completion_tokens used to come from the
+// generic "claude-*" substring row (200000/8192) while `capabilities` carried
+// the per-model values, so one entry contradicted itself. They must agree.
+func TestBuiltinModelTopLevelLimitsMatchCapabilities(t *testing.T) {
+	database, cleanup := setupChatTestDB(t)
+	defer cleanup()
+	providers.ClearCustomModelCaps()
+	t.Cleanup(providers.ClearCustomModelCaps)
+
+	if _, err := database.Exec(`INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES
+		('conn-claude', 'claude', 'oauth', 'Claude', 1, 1, '{"accessToken":"sk-ant-oat-test"}', '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z')`); err != nil {
+		t.Fatalf("seed connection: %v", err)
+	}
+
+	handler := NewChatHandler(db.NewRepo(database))
+	w := httptest.NewRecorder()
+	handler.HandleModels(w, httptest.NewRequest("GET", "/v1/models", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	entry := findModelInfo(t, w.Body.Bytes(), "cc/claude-opus-5-5")
+	caps, _ := entry["capabilities"].(map[string]any)
+	capCtx, _ := caps["contextWindow"].(float64)
+	capMax, _ := caps["maxOutput"].(float64)
+	if capCtx != 1000000 || capMax != 128000 {
+		t.Fatalf("capabilities = %v/%v, want 1000000/128000", capCtx, capMax)
+	}
+	if got, _ := entry["context_length"].(float64); got != capCtx {
+		t.Errorf("context_length = %v, want %v (capabilities.contextWindow)", got, capCtx)
+	}
+	if got, _ := entry["max_completion_tokens"].(float64); got != capMax {
+		t.Errorf("max_completion_tokens = %v, want %v (capabilities.maxOutput)", got, capMax)
+	}
+}

@@ -948,6 +948,8 @@ func (h *DashboardHandler) persistProbeResult(conn *models.ProviderConnection, r
 
 	if out.refreshed && out.tokens != nil {
 		if out.tokens.AccessToken != "" {
+			prevAccess, _ := raw["accessToken"].(string)
+			oauth.SyncMirroredAPIKey(raw, conn.Provider, prevAccess, out.tokens.AccessToken)
 			raw["accessToken"] = out.tokens.AccessToken
 		}
 		if out.tokens.RefreshToken != "" {

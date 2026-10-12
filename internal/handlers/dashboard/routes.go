@@ -122,6 +122,9 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Put("/settings", h.HandleUpdateSettings)
 		r.Get("/settings/database", h.HandleExportDatabase)
 		r.Post("/settings/database", h.HandleImportDatabase)
+		r.Get("/settings/database/stats", h.HandleGetDatabaseStats)
+		r.Post("/settings/database/prune", h.HandlePruneDatabase)
+		r.Post("/settings/database/vacuum", h.HandleVacuumDatabase)
 		r.Post("/settings/proxy-test", h.HandleProxyTest)
 
 		// Token Saver Testing Benches

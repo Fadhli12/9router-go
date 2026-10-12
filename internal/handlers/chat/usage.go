@@ -14,15 +14,32 @@ import (
 	"9router/proxy/internal/constants"
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlers/shared"
-
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/middleware"
+	"9router/proxy/internal/observ"
 	"9router/proxy/internal/pricing"
 	"9router/proxy/internal/translator"
 	"9router/proxy/internal/usagetracker"
-	"9router/proxy/internal/observ"
 )
+
+// shouldLogRequestDetail checks if request detail logging is enabled by settings.
+func shouldLogRequestDetail(repo *db.Repo, isError bool) bool {
+	if repo == nil {
+		return true
+	}
+	settings, err := repo.GetSettings()
+	if err != nil || settings == nil {
+		return true
+	}
+	if settings.ObservabilityMode == "off" {
+		return false
+	}
+	if settings.ObservabilityMode == "errors_only" && !isError {
+		return false
+	}
+	return true
+}
 
 var dailyUsageMu sync.Mutex
 
@@ -117,15 +134,17 @@ func (h *ChatHandler) LogFailure(
 	if marshalErr != nil {
 		return
 	}
-	if insertErr := h.Repo.InsertRequestDetail(
-		reqID,
-		info.Provider,
-		info.Model,
-		info.ConnectionID,
-		"error",
-		string(reqData),
-	); insertErr != nil {
-		log.Error("usage", "insert failed request detail failed", "error", insertErr)
+	if shouldLogRequestDetail(h.Repo, true) {
+		if insertErr := h.Repo.InsertRequestDetail(
+			reqID,
+			info.Provider,
+			info.Model,
+			info.ConnectionID,
+			"error",
+			string(reqData),
+		); insertErr != nil {
+			log.Error("usage", "insert failed request detail failed", "error", insertErr)
+		}
 	}
 
 	observ.RecordRequest(info.Provider, info.Model, info.Endpoint, statusCode)
@@ -339,8 +358,10 @@ func (h *ChatHandler) logUsage(ctx context.Context, info *UsageLogInfo, usage *t
 		log.Error("usage", "marshal request detail failed", "error", err)
 		return
 	}
-	if err := h.Repo.InsertRequestDetail(reqID, info.Provider, info.Model, info.ConnectionID, "success", string(reqData)); err != nil {
-		log.Error("usage", "insert request detail failed", "error", err)
+	if shouldLogRequestDetail(h.Repo, false) {
+		if err := h.Repo.InsertRequestDetail(reqID, info.Provider, info.Model, info.ConnectionID, "success", string(reqData)); err != nil {
+			log.Error("usage", "insert request detail failed", "error", err)
+		}
 	}
 
 	h.upsertDailyUsage(info.Provider, info.Model, info.Endpoint, info.ConnectionID, info.APIKey, usage.PromptTokens, usage.CompletionTokens, cachedTokens, cost)

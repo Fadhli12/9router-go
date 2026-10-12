@@ -1,3 +1,9 @@
+export interface DatabaseStats {
+  databaseSizeBytes: number
+  reclaimableBytes: number
+  requestDetailsCount: number
+  usageHistoryCount: number
+}
 // Typed API client for 9router-go Native Dashboard
 
 export interface ProviderConnection {
@@ -1309,6 +1315,16 @@ return conns.map(normalizeConnection)
       method: 'PATCH',
       body: JSON.stringify(settings),
     }),
+  getDatabaseStats: () => request<DatabaseStats>('/api/settings/database/stats'),
+  pruneDatabase: () =>
+    request<{ success: boolean; pruned: number }>('/api/settings/database/prune', {
+      method: 'POST',
+    }),
+  vacuumDatabase: () =>
+    request<{ success: boolean; databaseSizeBytes: number; reclaimableBytes: number }>(
+      '/api/settings/database/vacuum',
+      { method: 'POST' }
+    ),
   testRtk: (data: { text: string; config?: Record<string, unknown> }) =>
     request<{
       originalTokens: number

@@ -466,6 +466,7 @@ export function parseQuotaData(provider: string, data: unknown): NormalizedQuota
                   total: Number(quota.total) || 0,
                   resetAt: (quota.resetAt as string) || null,
                   remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+                  window: (quota.window as string) || (modelKey.includes('weekly') ? 'weekly' : '5h'),
                 })
               })
           } else if (geminiModels.length > 0) {
@@ -499,6 +500,7 @@ export function parseQuotaData(provider: string, data: unknown): NormalizedQuota
                   total: Number(quota.total) || 0,
                   resetAt: (quota.resetAt as string) || null,
                   remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+                  window: (quota.window as string) || (modelKey.includes('weekly') ? 'weekly' : '5h'),
                 })
               })
           }
@@ -515,6 +517,7 @@ export function parseQuotaData(provider: string, data: unknown): NormalizedQuota
                   total: Number(quota.total) || 0,
                   resetAt: (quota.resetAt as string) || null,
                   remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+                  window: (quota.window as string) || (modelKey.includes('weekly') ? 'weekly' : '5h'),
                 })
               })
           } else if (claudeModels.length > 0) {
@@ -548,6 +551,7 @@ export function parseQuotaData(provider: string, data: unknown): NormalizedQuota
                   total: Number(quota.total) || 0,
                   resetAt: (quota.resetAt as string) || null,
                   remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+                  window: (quota.window as string) || (modelKey.includes('weekly') ? 'weekly' : '5h'),
                 })
               })
           }

@@ -83,6 +83,10 @@ type SettingsData struct {
 	ProviderStrategies         map[string]ProviderStrategy     `json:"providerStrategies,omitempty"`
 	CapacityAdapter            map[string]CapacityAdapterEntry `json:"capacityAdapter,omitempty"`
 	ProviderOverrides          map[string]ProviderOverrides    `json:"providerOverrides,omitempty"`
+	EnableObservability        bool                            `json:"enableObservability"`
+	ObservabilityMode          string                          `json:"observabilityMode,omitempty"`
+	RetentionDays              int                             `json:"retentionDays,omitempty"`
+	MaxRequestRecords          int                             `json:"maxRequestRecords,omitempty"`
 }
 
 // DefaultSettings returns fallback settings.
@@ -237,6 +241,20 @@ func (r *Repo) GetSettings() (*SettingsData, error) {
 	}
 	if v, ok := raw["autoUpdate"].(bool); ok {
 		s.AutoUpdate = v
+	}
+
+	// Observability & Storage retention settings
+	if v, ok := raw["enableObservability"].(bool); ok {
+		s.EnableObservability = v
+	}
+	if v := handlerutil.GetString(raw, "observabilityMode"); v != "" {
+		s.ObservabilityMode = v
+	}
+	if v := settingsInt(raw["retentionDays"]); v >= 0 && raw["retentionDays"] != nil {
+		s.RetentionDays = v
+	}
+	if v := settingsInt(raw["maxRequestRecords"]); v > 0 {
+		s.MaxRequestRecords = v
 	}
 
 	// Global provider fallback strategy

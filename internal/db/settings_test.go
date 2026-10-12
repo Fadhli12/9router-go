@@ -262,3 +262,43 @@ func TestSettings_ADHD(t *testing.T) {
 		t.Errorf("expected ADHDLevel='lite', got %q", settings.ADHDLevel)
 	}
 }
+
+func TestGetSettings_ObservabilityAndRetention(t *testing.T) {
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+	repo := NewRepo(database)
+
+	if _, err := database.Exec(`CREATE TABLE IF NOT EXISTS settings (
+		id INTEGER PRIMARY KEY,
+		data TEXT NOT NULL
+	);`); err != nil {
+		t.Fatalf("failed to create settings table: %v", err)
+	}
+
+	settingsJSON := `{
+		"enableObservability": true,
+		"observabilityMode": "errors_only",
+		"retentionDays": 14,
+		"maxRequestRecords": 2500
+	}`
+	if _, err := database.Exec(`INSERT INTO settings (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`, settingsJSON); err != nil {
+		t.Fatalf("failed to insert settings: %v", err)
+	}
+
+	s, err := repo.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings failed: %v", err)
+	}
+	if !s.EnableObservability {
+		t.Errorf("EnableObservability = false, want true")
+	}
+	if s.ObservabilityMode != "errors_only" {
+		t.Errorf("ObservabilityMode = %q, want 'errors_only'", s.ObservabilityMode)
+	}
+	if s.RetentionDays != 14 {
+		t.Errorf("RetentionDays = %d, want 14", s.RetentionDays)
+	}
+	if s.MaxRequestRecords != 2500 {
+		t.Errorf("MaxRequestRecords = %d, want 2500", s.MaxRequestRecords)
+	}
+}
