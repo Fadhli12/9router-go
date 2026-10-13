@@ -526,6 +526,14 @@ func (h *OAuthHandler) saveDeviceConnection(provider string, t deviceTokens) sav
 	}
 	if h.Repo != nil && h.Repo.RawDB() != nil {
 		now := currentTimestamp()
+		if provider == "muse" {
+			// The minted Model API key rotates on every login, so without
+			// this each re-login would pile up another active row for the
+			// same account. Keep only the newest connection active.
+			_, _ = h.Repo.RawDB().Exec(
+				"UPDATE providerConnections SET isActive = 0, updatedAt = ? WHERE provider = ? AND id != ? AND isActive = 1",
+				now, provider, id)
+		}
 		raw, _ := json.Marshal(dataMap)
 		var existing string
 		err := h.Repo.RawDB().QueryRow("SELECT data FROM providerConnections WHERE id = ?", id).Scan(&existing)

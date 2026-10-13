@@ -173,6 +173,15 @@ describe('providers & media separation', () => {
     }
   })
 
+  it('wires the sumopod provider end-to-end', () => {
+    const p = PROVIDER_CATALOG.find((e) => e.id === 'sumopod')
+    assert.ok(p, 'sumopod missing from the dashboard catalog')
+    assert.strictEqual(p.category, 'apikey')
+    assert.ok(isChatProvider(p))
+    assert.strictEqual(getModelsByProviderId('sumopod').length, 61)
+    assert.strictEqual(Boolean(p.modelsFetcher), true)
+  })
+
   it('resolves every provider alias to a catalog with an entry', () => {
     const missing = Object.keys(PROVIDER_ID_TO_ALIAS).filter(
       (id) => !PROVIDER_CATALOG.some((p) => p.id === id || p.alias === id)

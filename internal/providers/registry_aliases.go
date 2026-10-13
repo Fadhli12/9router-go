@@ -32,6 +32,7 @@ var RegistryAliases = map[string]string{
 	"cursor":            "cu",
 	"deepgram":          "dg",
 	"deepseek":          "ds",
+	"sumopod":           "sp",
 	"elevenlabs":        "el",
 	"fal-ai":            "fal",
 	"featherless":       "fl",

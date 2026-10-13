@@ -18,6 +18,7 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "bai": "bai",
   "atria": "atria",
   "dahl": "dahl",
+  "sumopod": "sp",
   "tokenharbor": "tokenharbor",
   "alicode": "alicode",
   "alicode-intl": "alicode-intl",
@@ -1223,6 +1224,252 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "id": "deepseek-v4-flash:free",
       "name": "DeepSeek V4 Flash (Free)"
     }
+  ],
+"sumopod": [
+    {
+      "id": "MiniMax-M2.7-highspeed",
+      "name": "MiniMax M2.7 Highspeed"
+    },
+    {
+      "id": "MiniMax-M3",
+      "name": "MiniMax M3"
+    },
+    {
+      "id": "MiniMax-M3.1-Flash-Preview",
+      "name": "MiniMax M3.1 Flash Preview"
+    },
+    {
+      "id": "claude-fable-5-1",
+      "name": "Claude Fable 5 1"
+    },
+    {
+      "id": "claude-haiku-4-5",
+      "name": "Claude Haiku 4 5"
+    },
+    {
+      "id": "claude-opus-4-8",
+      "name": "Claude Opus 4 8"
+    },
+    {
+      "id": "claude-opus-5",
+      "name": "Claude Opus 5"
+    },
+    {
+      "id": "claude-opus-5-5",
+      "name": "Claude Opus 5 5"
+    },
+    {
+      "id": "claude-sonnet-5",
+      "name": "Claude Sonnet 5"
+    },
+    {
+      "id": "deepseek-flash",
+      "name": "Deepseek Flash"
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "name": "Deepseek V4 Flash"
+    },
+    {
+      "id": "deepseek-v4-flash-0731:netra",
+      "name": "Deepseek V4 Flash 0731"
+    },
+    {
+      "id": "deepseek-v4-flash-vision-exp",
+      "name": "Deepseek V4 Flash Vision Exp"
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "name": "Deepseek V4 Pro"
+    },
+    {
+      "id": "deepseek-v4.1-flash:netra",
+      "name": "Deepseek V4.1 Flash"
+    },
+    {
+      "id": "gemini/gemini-3-flash-preview",
+      "name": "Gemini 3 Flash Preview"
+    },
+    {
+      "id": "gemini/gemini-3.1-flash-lite",
+      "name": "Gemini 3.1 Flash Lite"
+    },
+    {
+      "id": "gemini/gemini-3.1-pro-preview",
+      "name": "Gemini 3.1 Pro Preview"
+    },
+    {
+      "id": "gemini/gemini-3.5-flash",
+      "name": "Gemini 3.5 Flash"
+    },
+    {
+      "id": "gemini/gemini-3.5-flash-lite",
+      "name": "Gemini 3.5 Flash Lite"
+    },
+    {
+      "id": "gemini/gemini-3.7-flash",
+      "name": "Gemini 3.7 Flash"
+    },
+    {
+      "id": "gemini/gemini-3.8-flash",
+      "name": "Gemini 3.8 Flash"
+    },
+    {
+      "id": "glm-5",
+      "name": "GLM 5"
+    },
+    {
+      "id": "glm-5-turbo",
+      "name": "GLM 5 Turbo"
+    },
+    {
+      "id": "glm-5.1",
+      "name": "GLM 5.1"
+    },
+    {
+      "id": "glm-5.2",
+      "name": "GLM 5.2"
+    },
+    {
+      "id": "glm-5.3-flash",
+      "name": "GLM 5.3 Flash"
+    },
+    {
+      "id": "glm-5v-turbo",
+      "name": "GLM 5v Turbo"
+    },
+    {
+      "id": "gpt-4.1",
+      "name": "GPT 4.1"
+    },
+    {
+      "id": "gpt-4.1-mini",
+      "name": "GPT 4.1 Mini"
+    },
+    {
+      "id": "gpt-4.1-nano",
+      "name": "GPT 4.1 Nano"
+    },
+    {
+      "id": "gpt-4o",
+      "name": "GPT 4o"
+    },
+    {
+      "id": "gpt-4o-mini",
+      "name": "GPT 4o Mini"
+    },
+    {
+      "id": "gpt-5",
+      "name": "GPT 5"
+    },
+    {
+      "id": "gpt-5-mini",
+      "name": "GPT 5 Mini"
+    },
+    {
+      "id": "gpt-5-nano",
+      "name": "GPT 5 Nano"
+    },
+    {
+      "id": "gpt-5.4",
+      "name": "GPT 5.4"
+    },
+    {
+      "id": "gpt-5.4-mini",
+      "name": "GPT 5.4 Mini"
+    },
+    {
+      "id": "gpt-5.4-nano",
+      "name": "GPT 5.4 Nano"
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "name": "GPT 5.6 Luna"
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "name": "GPT 5.6 Sol"
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "name": "GPT 5.6 Terra"
+    },
+    {
+      "id": "gpt-6-luna",
+      "name": "GPT 6 Luna"
+    },
+    {
+      "id": "grok-4.7",
+      "name": "Grok 4.7"
+    },
+    {
+      "id": "hy3",
+      "name": "Hy3"
+    },
+    {
+      "id": "kimi-k3",
+      "name": "Kimi K3"
+    },
+    {
+      "id": "mimo-v2.5",
+      "name": "Mimo V2.5"
+    },
+    {
+      "id": "mimo-v2.5-pro",
+      "name": "Mimo V2.5 Pro"
+    },
+    {
+      "id": "mimo-v2.6-flash",
+      "name": "Mimo V2.6 Flash"
+    },
+    {
+      "id": "mimo-v2.6-pro",
+      "name": "Mimo V2.6 Pro"
+    },
+    {
+      "id": "mimo-v2.6-pro-ultraspeed",
+      "name": "Mimo V2.6 Pro Ultraspeed"
+    },
+    {
+      "id": "qwen3.6-flash",
+      "name": "Qwen3.6 Flash"
+    },
+    {
+      "id": "qwen3.7-flash-2026-07-15",
+      "name": "Qwen3.7 Flash 2026 07 15"
+    },
+    {
+      "id": "qwen3.7-max",
+      "name": "Qwen3.7 Max"
+    },
+    {
+      "id": "qwen3.7-plus",
+      "name": "Qwen3.7 Plus"
+    },
+    {
+      "id": "qwen3.8-flash",
+      "name": "Qwen3.8 Flash"
+    },
+    {
+      "id": "qwen3.8-max",
+      "name": "Qwen3.8 Max"
+    },
+    {
+      "id": "seed-2-0-code",
+      "name": "Seed 2 0 Code"
+    },
+    {
+      "id": "seed-2-0-lite",
+      "name": "Seed 2 0 Lite"
+    },
+    {
+      "id": "seed-2-0-mini",
+      "name": "Seed 2 0 Mini"
+    },
+    {
+      "id": "seed-2-0-pro",
+      "name": "Seed 2 0 Pro"
+    },
   ],
   "dahl": [
     {

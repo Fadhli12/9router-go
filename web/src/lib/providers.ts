@@ -139,6 +139,22 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     ]
   },
   {
+    "id": "sumopod",
+    "name": "SumoPod",
+    "category": "apikey",
+    "alias": "sumopod",
+    "color": "#2563EB",
+    "icon": "cloud",
+    "website": "https://sumopod.com",
+    "notice": {"text":"OpenAI-compatible aggregator. One API key reaches every model, billed per-token. Model ids are bare (e.g. claude-opus-5-5, gemini/gemini-3.8-flash, qwen3.8-max) and are fetched live from the provider.", "apiKeyUrl":"https://ai.sumopod.com"},
+    "modelsFetcher": {"url": "https://ai.sumopod.com/v1/models", "type": "openai"},
+    "authType": "apikey",
+    "noAuth": false,
+    "serviceKinds": [
+      "llm"
+    ]
+  },
+  {
     "id": "antigravity",
     "name": "Antigravity",
     "category": "oauth",

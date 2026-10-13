@@ -11,6 +11,7 @@ func RegisterAll() {
 	Register("atria", func() Executor { return ForwardOpenAI })
 	Register("agnes", func() Executor { return ForwardOpenAI })
 	Register("deepseek", func() Executor { return ForwardOpenAI })
+	Register("sumopod", func() Executor { return ForwardOpenAI })
 	Register("groq", func() Executor { return ForwardOpenAI })
 	Register("nvidia", func() Executor { return ForwardOpenAI })
 	Register("openrouter", func() Executor { return ForwardOpenAI })

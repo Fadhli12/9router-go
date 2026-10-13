@@ -562,3 +562,33 @@ func TestHandleTestConnectionReadsRequestBody(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestTestConnection_CodexProbeSendsAccountIDHeader(t *testing.T) {
+	repo, cleanup := setupProbeTestDB(t)
+	defer cleanup()
+
+	data := `{"accessToken":"tok","expiresAt":"2099-01-01T00:00:00Z","providerSpecificData":{"chatgptAccountId":"acct-123"}}`
+	if err := repo.CreateProviderConnectionFull("conn-codex", "codex", "oauth", "Codex", nil, data); err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+
+	var gotHeaders map[string]string
+	original := connectionProbeDo
+	connectionProbeDo = func(_ context.Context, _ *http.Client, _, _ string, headers map[string]string, _ []byte) (int, []byte, error) {
+		gotHeaders = headers
+		// 400 is the codex probe's accepted "token ok" status.
+		return http.StatusBadRequest, nil, nil
+	}
+	t.Cleanup(func() { connectionProbeDo = original })
+
+	_, body := postTestConnection(t, repo, "conn-codex")
+	if body["valid"] != true {
+		t.Fatalf("probe should be valid, got %v", body)
+	}
+	if gotHeaders["chatgpt-account-id"] != "acct-123" {
+		t.Errorf("chatgpt-account-id header = %q, want acct-123", gotHeaders["chatgpt-account-id"])
+	}
+	if gotHeaders["Authorization"] != "Bearer tok" {
+		t.Errorf("Authorization header = %q, want %q", gotHeaders["Authorization"], "Bearer tok")
+	}
+}

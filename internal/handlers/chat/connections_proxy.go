@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 
-	"9router/proxy/internal/constants"
 	"9router/proxy/internal/log"
 	internalproxy "9router/proxy/internal/proxy"
 )
@@ -188,13 +187,7 @@ func (h *ChatHandler) getClientForConnection(connData *ConnectionData) (*http.Cl
 			}
 		}
 
-		var baseTransport *http.Transport
-		if origT, ok := http.DefaultTransport.(*http.Transport); ok {
-			baseTransport = origT.Clone()
-		} else {
-			baseTransport = constants.DefaultHTTPTransportConfig.NewTransport()
-		}
-		constants.DefaultHTTPTransportConfig.Configure(baseTransport)
+		baseTransport := internalproxy.NewSafeTransport()
 		baseTransport.Proxy = http.ProxyURL(parsedURL)
 		client = &http.Client{
 			Transport: baseTransport,

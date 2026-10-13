@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"9router/proxy/internal/constants"
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlers/shared"
 	"9router/proxy/internal/log"
@@ -33,15 +32,8 @@ func NewChatHandler(repo *db.Repo, ts ...*shared.TokenSaverConfig) *ChatHandler 
 	// start responding — closing the "accept then go silent" gap without
 	// killing a stream that has already begun.
 	var transport http.RoundTripper
-	if origTransport, ok := http.DefaultTransport.(*http.Transport); ok {
-		t := origTransport.Clone()
-		constants.DefaultHTTPTransportConfig.Configure(t)
-		transport = proxy.NewFallbackTransport(t)
-	} else if fb, ok := http.DefaultTransport.(*proxy.FallbackTransport); ok {
-		transport = fb
-	} else {
-		transport = proxy.NewFallbackTransport(http.DefaultTransport)
-	}
+	safeTransport := proxy.NewSafeTransport()
+	transport = proxy.NewFallbackTransport(safeTransport)
 	var sc *semanticcache.Cache
 	if cfg != nil {
 		ttl := time.Duration(cfg.SemanticCacheTTL()) * time.Minute

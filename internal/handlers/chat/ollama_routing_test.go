@@ -1,13 +1,14 @@
 package chat
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"9router/proxy/internal/db"
-	"9router/proxy/internal/proxy/executor"
 	"9router/proxy/internal/providers"
+	"9router/proxy/internal/proxy/executor"
 )
 
 // #192: an ollama.com API key was forwarded to http://localhost:11434. The
@@ -216,5 +217,40 @@ func executeExecutor(t *testing.T, w http.ResponseWriter, r *http.Request, cfg *
 	}
 	if err := exec(w, execReq); err != nil {
 		t.Fatalf("executor: %v", err)
+	}
+}
+func TestOllamaLocalChatPermitsLoopback(t *testing.T) {
+	t.Setenv("ALLOW_PRIVATE_NETWORKING", "false")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"id":"chat-1","choices":[{"message":{"content":"ollama response"}}]}`))
+	}))
+	defer srv.Close()
+
+	database, cleanup := setupChatTestDB(t)
+	defer cleanup()
+	repo := db.NewRepo(database)
+
+	handler := NewChatHandler(repo)
+
+	// Seed connection with local server URL
+	_, err := database.Exec(`INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt)
+		VALUES ('conn-ollama-local', 'ollama-local', 'none', 'Local Ollama Test', 1, 1, ?, '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z')`,
+		`{"apiKey":"none","baseUrl":"`+srv.URL+`/v1/chat/completions"}`)
+	if err != nil {
+		t.Fatalf("seed connection: %v", err)
+	}
+
+	body := []byte(`{"model":"ollama-local/llama3","messages":[{"role":"user","content":"hi"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from ollama-local on loopback, got %d: %s", rec.Code, rec.Body.String())
 	}
 }

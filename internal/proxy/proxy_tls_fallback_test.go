@@ -16,6 +16,7 @@ import (
 // vouches for. The request must still get through, exactly once more.
 func TestDoRequestRetriesWithInsecureTLS(t *testing.T) {
 	t.Setenv("STRICT_SSL", "")
+	t.Setenv("ALLOW_PRIVATE_NETWORKING", "true")
 
 	var hits atomic.Int64
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

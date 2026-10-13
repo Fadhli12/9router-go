@@ -52,6 +52,7 @@ type Env struct {
 // the database; t.TempDir removes the SQLite file and its WAL siblings.
 func newEnv(t *testing.T) *Env {
 	t.Helper()
+	t.Setenv("ALLOW_PRIVATE_NETWORKING", "true")
 
 	// DATA_DIR keeps auth.CLIToken() and config.LoadConfig() from reading or
 	// writing the developer's real ~/.9router. JWT_SECRET pins the HS256

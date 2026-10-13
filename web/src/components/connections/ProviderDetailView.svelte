@@ -140,7 +140,7 @@
     providerId === 'qoder' || providerId === 'kilocode' || providerId === 'grok-cli' ||
     providerId === 'github' || providerId === 'kiro' || providerId === 'kimi' ||
     providerId === 'kimi-coding' || providerId === 'codebuddy-cn' || providerId === 'codebuddy-intl' ||
-    providerId === 'minimax-code' || providerId === 'minimax-code-global'
+    providerId === 'minimax-code' || providerId === 'minimax-code-global' || providerId === 'muse'
   )
   // Upstream parity: only the explicit noAuth flag hides the Connections card
   // ([id]/page.js isFreeNoAuth = !!FREE_PROVIDERS[id]?.noAuth). Category "free"
@@ -2462,6 +2462,7 @@
   // providers). Kept in sync so the button only renders where it can work.
   const ModelsListURLs = new Set([
     'tokenharbor',
+    'sumopod',
     'dahl',
     'atria',
     'agnes',

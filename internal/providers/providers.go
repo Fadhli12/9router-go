@@ -30,6 +30,10 @@ type ProviderConfig struct {
 	// detection keys off that host, so a gateway like Bedrock needs its own flag for the
 	// response to be translated rather than passed through.
 	UpstreamIsAnthropic bool
+
+	// LocalByDesign marks a provider whose upstream endpoint is intended to run on the
+	// local host or loopback network (e.g. ollama-local on localhost:11434).
+	LocalByDesign bool
 }
 
 // Bedrock protocol constants. Region is substituted per request by the executor, so the
@@ -136,6 +140,9 @@ var modelsListURL = map[string]string{
 	// so the live-catalog fetch carries it on top of the bearer token
 	// (upstream PROVIDER_MODELS_CONFIG.muse).
 	"muse": "https://api.meta.ai/v1/models",
+	// SumoPod exposes the standard OpenAI /v1/models catalogue (auth required,
+	// same contract as tokenharbor/dahl).
+	"sumopod": "https://ai.sumopod.com/v1/models",
 }
 
 // modelsListHeaders carries the extra headers one live-catalogue endpoint
@@ -304,6 +311,14 @@ var KnownProviders = map[string]ProviderConfig{
 	},
 	"deepseek": {
 		BaseURL:    "https://api.deepseek.com/chat/completions",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+	},
+	// SumoPod — Indonesian AI gateway (ai.sumopod.com), OpenAI-compatible
+	// chat completions with 60+ models across Claude, Gemini, GPT, DeepSeek,
+	// Qwen, GLM, Kimi, MiniMax, Seed, Grok, Hy and Mimo.
+	"sumopod": {
+		BaseURL:    "https://ai.sumopod.com/v1/chat/completions",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
@@ -657,9 +672,10 @@ var KnownProviders = map[string]ProviderConfig{
 		},
 	},
 	"ollama-local": {
-		BaseURL:    "http://localhost:11434/v1/chat/completions",
-		AuthHeader: "Authorization",
-		AuthScheme: "bearer",
+		BaseURL:       "http://localhost:11434/v1/chat/completions",
+		AuthHeader:    "Authorization",
+		AuthScheme:    "bearer",
+		LocalByDesign: true,
 	},
 	"minimax-cn": {
 		BaseURL:    "https://api.minimaxi.com/v1/chat/completions",
@@ -1141,4 +1157,13 @@ http.StatusPaymentRequired:    true, // 402 (Kiro quota "You have reached the li
 	http.StatusBadGateway:         true, // 502
 	http.StatusServiceUnavailable: true, // 503
 	http.StatusGatewayTimeout:     true, // 504
+}
+
+// IsLocalByDesign reports whether a provider's official upstream is intended
+// to run locally on loopback (e.g. ollama-local on localhost:11434).
+func IsLocalByDesign(provider string) bool {
+	if cfg, ok := KnownProviders[provider]; ok {
+		return cfg.LocalByDesign
+	}
+	return false
 }
