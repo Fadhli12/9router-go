@@ -159,6 +159,17 @@ func RequireDashboardAuth(repo *db.Repo) func(http.Handler) http.Handler {
 					return
 				}
 			}
+			// Startup grace: if the cookie is present but SessionValid failed
+			// (transient DB/config read during process restart), retry once
+			// with a direct JWT verification that does not touch the DB.
+			// The JWT secret is persisted in DATA_DIR/jwt-secret, so a token
+			// signed before the restart remains valid. This prevents the
+			// dashboard from bouncing to /login when 9router restarts while
+			// the operator has a live session (issue: keep-logged-out).
+			if auth.SessionCookiePresent(r) && auth.VerifyWithRetry(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
 			handlerutil.WriteJSONError(w, http.StatusUnauthorized, "Unauthorized: dashboard session required")
 		})
 	}

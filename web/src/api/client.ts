@@ -839,11 +839,29 @@ export async function handleUnauthorized(path?: string) {
     return
   }
 
+  // Provider/connection test endpoints return 401 when the *upstream* provider
+  // rejects the test request — that is not a dashboard session failure. The
+  // RequireDashboardAuth middleware does not return 401 for test endpoints
+  // (it returns 200/400 via the handler), so a 401 here is always upstream.
+  // Skipping these prevents a cascade of handleUnauthorized calls that could
+  // race the session check and bounce the dashboard to /login.
+  if (path && (path.includes('/test') || path.includes('/probe'))) {
+    return
+  }
+
   if (typeof window !== 'undefined' && window.location?.pathname === '/login') {
     return
   }
 
-  const session = await checkDashboardSession()
+  // Double-check the session with a retry. During 9router restarts, the
+  // first /api/auth/status may return authenticated:false because config
+  // hasn't loaded the JWT secret yet. A 500ms retry gives the server time
+  // to finish startup and validate the cookie properly.
+  let session = await checkDashboardSession()
+  if (!session.live && session.known) {
+    await new Promise((r) => setTimeout(r, 500))
+    session = await checkDashboardSession()
+  }
   // Only log out when the server explicitly reports the session is gone. A
   // transient network failure (`known: false`) must not clear auth, otherwise a
   // single blip while any endpoint returns 401 bounces the dashboard to /login.

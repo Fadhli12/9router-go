@@ -225,6 +225,36 @@ func SessionValid(r *http.Request) bool {
 	return Verify(c.Value, Secret())
 }
 
+// SessionCookiePresent reports whether the request carries an auth_token
+// cookie with a non-empty value, without verifying it. Used by the dashboard
+// middleware's startup grace path to decide whether a retry is worth
+// attempting (no cookie = no point retrying).
+func SessionCookiePresent(r *http.Request) bool {
+	c, err := r.Cookie(CookieName)
+	return err == nil && c.Value != ""
+}
+
+// VerifyWithRetry retries session verification once. SessionValid may fail
+// during process startup when config.LoadConfig() has not yet cached the
+// JWT secret (it re-reads .env and the jwt-secret file each call). The retry
+// gives the config layer a second chance to resolve the data directory and
+// read the persisted secret. This is safe: the JWT is stateless HS256, the
+// secret is persisted in DATA_DIR/jwt-secret, and the token was signed by
+// the same process or a previous incarnation using the same file.
+func VerifyWithRetry(r *http.Request) bool {
+	c, err := r.Cookie(CookieName)
+	if err != nil || c.Value == "" {
+		return false
+	}
+	secret := Secret()
+	if secret == "" {
+		// Secret still empty after retry — the jwt-secret file is genuinely
+		// unreadable. Do not admit the request.
+		return false
+	}
+	return Verify(c.Value, secret)
+}
+
 // SessionClaimSet decodes the verified session payload, or nil when the
 // request carries no valid auth_token cookie. The fields are the upstream SSO
 // session payload (oidc/saml identity on SSO logins).
