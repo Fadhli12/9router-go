@@ -101,7 +101,7 @@ func ForwardMinimaxCode(w http.ResponseWriter, req *Request) error {
 	if req.ClaudeClient {
 		body = translator.SanitizeClaudePassthrough(body, translator.ClaudeIntentionalPrefill(req.Body))
 	} else {
-		body = EnsureClaudeMessages(body, req.ModelName)
+		body = EnsureClaudeMessagesFor(body, "minimax-code", req.ModelName)
 	}
 
 	resp, err := proxy.DoRequest(reqCtx(req), req.Client, http.MethodPost,

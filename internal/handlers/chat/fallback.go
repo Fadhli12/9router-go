@@ -398,7 +398,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			// Raw OpenAI-format body would be invalid at the Messages API:
 			// convert to a spec-compliant Claude payload (top-level system,
 			// tools, merged roles) — what the dashboard does server-side.
-			pipedBody = executor.EnsureClaudeMessages(pipedBody, model)
+			pipedBody = executor.EnsureClaudeMessagesFor(pipedBody, provider, model)
 		}
 		// The OpenAI→Claude conversion merges turns, so a client body whose
 		// last message was a tool result can still land on an assistant turn.

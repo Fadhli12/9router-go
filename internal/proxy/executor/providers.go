@@ -742,6 +742,13 @@ func EnsureClaudeMessages(body []byte, model string) []byte {
 	return ensureMessagesMaxTokens(body, model)
 }
 
+// EnsureClaudeMessagesFor is EnsureClaudeMessages for a Claude-shaped lane
+// that is not Anthropic itself (minimax-code, opencode-zen, ...): provider
+// selects the capability row that decides the thinking format.
+func EnsureClaudeMessagesFor(body []byte, provider, model string) []byte {
+	return ensureMessagesFor(body, provider, model)
+}
+
 // ensureMessagesMaxTokens converts an incoming request (OpenAI or Claude) into a spec-compliant
 // Claude Messages API request payload:
 // - Guarantees positive integer max_tokens (fallback from max_completion_tokens or default 4096)
@@ -752,6 +759,10 @@ func EnsureClaudeMessages(body []byte, model string) []byte {
 // - Merges consecutive same-role messages to uphold Claude alternating role invariant
 // - Strips OpenAI-only fields like stream_options, store, max_completion_tokens, reasoning_effort
 func ensureMessagesMaxTokens(body []byte, model string) []byte {
+	return ensureMessagesFor(body, "claude", model)
+}
+
+func ensureMessagesFor(body []byte, provider, model string) []byte {
 	var reqMap map[string]any
 	if err := json.Unmarshal(body, &reqMap); err != nil {
 		return body
@@ -834,6 +845,7 @@ func ensureMessagesMaxTokens(body []byte, model string) []byte {
 	// translation on its own — capture it into the Claude field first.
 	// (upstream thinkingUnified captureThinking)
 	applyClaudeThinkingDisplay(reqMap)
+	applyClaudeThinkingType(reqMap, provider, model)
 	delete(reqMap, "stream_options")
 	delete(reqMap, "store")
 	delete(reqMap, "reasoning_effort")
@@ -1328,7 +1340,7 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		messagesBody := ensureMessagesMaxTokens(body, cleanModel)
+		messagesBody := ensureMessagesFor(body, "opencode-go", cleanModel)
 		resp, err := proxy.DoRequest(ctx, req.Client, "POST", messagesURL, headers, messagesBody)
 		if err != nil {
 			return fmt.Errorf("ForwardOpencodeGo (messages route): %w", err)

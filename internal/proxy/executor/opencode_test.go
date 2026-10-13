@@ -401,9 +401,10 @@ func TestEnsureMessagesMaxTokens_ConvertsOpenAIToolsAndSystem(t *testing.T) {
 		t.Errorf("expected model 'claude-sonnet-4-5', got %v", m["model"])
 	}
 
-	// 2. max_tokens converted from max_completion_tokens
-	if m["max_tokens"] != float64(16384) {
-		t.Errorf("expected max_tokens 16384, got %v", m["max_tokens"])
+	// 2. max_tokens converted from max_completion_tokens, then raised to fit
+	// the xhigh thinking budget (32768) plus answer headroom (1024).
+	if m["max_tokens"] != float64(33792) {
+		t.Errorf("expected max_tokens 33792, got %v", m["max_tokens"])
 	}
 	if _, hasMCT := m["max_completion_tokens"]; hasMCT {
 		t.Error("max_completion_tokens should be stripped")

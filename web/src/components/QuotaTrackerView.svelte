@@ -29,7 +29,6 @@
   import { getIconPath } from './connections/types'
   import EditConnectionModal, { type ConnectionUpdate } from './connections/EditConnectionModal.svelte'
   import QuotaTable from './quota/QuotaTable.svelte'
-  import AntigravityQuotaCard from './quota/AntigravityQuotaCard.svelte'
   import {
     ACCOUNT_FILTER_OPTIONS,
     ACCOUNT_PAGE_SIZE_MAX,
@@ -1261,8 +1260,6 @@
               <div class="py-5 text-center">
                 <p class="text-xs text-text-muted">{quota.message}</p>
               </div>
-            {:else if conn.provider === 'antigravity' && visibleQuotas.some((q) => q.modelKey?.includes('gemini_') || q.modelKey?.includes('claude_gpt_'))}
-              <AntigravityQuotaCard quotas={visibleQuotas} />
             {:else}
               <QuotaTable
                 quotas={visibleQuotas}

@@ -333,9 +333,9 @@ func forwardZenMessages(w http.ResponseWriter, req *Request, cleanModel string, 
 		if err != nil {
 			return fmt.Errorf("ForwardOpencodeZen messages lane conversion: %w", err)
 		}
-		body = EnsureClaudeMessages(converted, cleanModel)
+		body = EnsureClaudeMessagesFor(converted, "opencode-zen", cleanModel)
 	default:
-		body = EnsureClaudeMessages(body, cleanModel)
+		body = EnsureClaudeMessagesFor(body, "opencode-zen", cleanModel)
 	}
 	body, toolNameMap := translator.ConcealFingerprintTools(body)
 	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)

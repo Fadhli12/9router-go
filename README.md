@@ -83,7 +83,7 @@ curl -fsSL https://raw.githubusercontent.com/luqman-v1/9router-go/main/install.s
 ```
 
 ```powershell
-# Windows (PowerShell, no admin needed)
+# Windows (PowerShell — installer writes to %LOCALAPPDATA% + user PATH, no admin needed)
 irm https://raw.githubusercontent.com/luqman-v1/9router-go/main/install.ps1 | iex
 ```
 
@@ -112,6 +112,26 @@ leaves nothing behind: the stale pid file is cleaned on the next command.
 > Windows stops the process with `TerminateProcess` instead of `SIGTERM`, so
 > stopping skips the graceful drain; use the dashboard's Shutdown button or
 > `9router-go restart` when you want in-flight streams to finish first.
+
+**Start on boot (autostart):**
+
+```bash
+9router-go service install     # systemd user unit, launchd agent, OpenRC/runit service, cron @reboot, or a Windows logon task
+9router-go service status      # which backend owns the entry, and whether it is enabled/active
+9router-go service start       # start the supervised service now (falls back to the background daemon)
+9router-go service restart     # restart it
+9router-go service stop        # stop it now but keep it enabled for boot
+9router-go service uninstall   # remove the autostart entry
+```
+
+`install` picks the native backend for the host. systemd, launchd, and cron all
+install into the **user** scope and need no root; runit's `~/service` path too.
+Two exceptions: OpenRC is a system service and needs root (`service install`
+refuses without it — run with `sudo`, or pick `--backend cron`), and on Windows
+install registers a scheduled task via `schtasks`, which requires an
+Administrator console. The Windows task runs as the current user at logon, so it
+reads that user's data dir rather than `SYSTEM`'s. Force a backend with
+`--backend systemd|launchd|openrc|runit|cron`.
 
 **2. Connect a FREE provider (no signup needed):**
 

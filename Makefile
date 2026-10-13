@@ -1,5 +1,8 @@
 BINARY_SUFFIX := $(if $(findstring Windows_NT,$(OS)),.exe,)
 BINARY_NAME := 9router-go$(BINARY_SUFFIX)
+# A bare `make` builds the binary and stops there — it never runs the server.
+# `run`/`dev` are explicit, separate goals on purpose.
+.DEFAULT_GOAL := build
 # Central version — single source: VERSION file, fallback to version.json, then git.
 #
 # Read through $(file <VERSION) rather than $(shell cat VERSION 2>/dev/null):
