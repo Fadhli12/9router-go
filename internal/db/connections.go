@@ -95,6 +95,18 @@ func (r *Repo) CreateProviderConnectionFull(id, provider, authType, name string,
 	return nil
 }
 
+// ResolveDefaultPriority returns the next sequential priority for a provider
+// (max(existing priority) + 1), or 1 if no connections exist yet.
+func (r *Repo) ResolveDefaultPriority(provider string) int {
+	if r == nil || r.db == nil {
+		return 1
+	}
+	if next, err := r.NextConnectionPriority(provider); err == nil && next > 0 {
+		return next
+	}
+	return 1
+}
+
 // NextConnectionPriority returns max(priority) + 1 for a provider, or 1 when the
 // provider has no connections yet.
 func (r *Repo) NextConnectionPriority(provider string) (int, error) {

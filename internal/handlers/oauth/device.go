@@ -541,9 +541,13 @@ func (h *OAuthHandler) saveDeviceConnection(provider string, t deviceTokens) sav
 			_, _ = h.Repo.RawDB().Exec(
 				"UPDATE providerConnections SET name = ?, data = ?, updatedAt = ? WHERE id = ?", name, string(raw), now, id)
 		} else {
+			priority := 1
+			if h.Repo != nil {
+				priority = h.Repo.ResolveDefaultPriority(provider)
+			}
 			_, _ = h.Repo.RawDB().Exec(
-				"INSERT INTO providerConnections (id, provider, authType, name, isActive, data, createdAt, updatedAt) VALUES (?, ?, 'oauth', ?, 1, ?, ?, ?)",
-				id, provider, name, string(raw), now, now)
+				"INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES (?, ?, 'oauth', ?, ?, 1, ?, ?, ?)",
+				id, provider, name, priority, string(raw), now, now)
 		}
 	}
 	return savedConn{id, name, email}

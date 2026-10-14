@@ -5,7 +5,6 @@ import (
 	json "encoding/json/v2"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"regexp"
 	"sort"
@@ -193,11 +192,13 @@ func sortProviderConnections(conns []*models.ProviderConnection, sortMode string
 		if c.Priority != nil {
 			return *c.Priority
 		}
-		return math.MaxInt
+		return 0
 	}
 	sort.SliceStable(conns, func(i, j int) bool {
 		a, b := conns[i], conns[j]
-		if sortMode == "provider" {
+
+		// 1. Always group by Provider first so accounts of the same provider stay contiguous
+		if a.Provider != b.Provider {
 			oa, oka := order[a.Provider]
 			if !oka {
 				oa = len(order)
@@ -211,10 +212,22 @@ func sortProviderConnections(conns []*models.ProviderConnection, sortMode string
 			}
 			return a.Provider < b.Provider
 		}
+
+		// 2. Within the same provider, sort by priority
 		if pa, pb := priorityOf(a), priorityOf(b); pa != pb {
 			return pa < pb
 		}
-		return a.Provider < b.Provider
+
+		// 3. Tie-breaker by name ascending
+		nameA := ""
+		if a.Name != nil {
+			nameA = *a.Name
+		}
+		nameB := ""
+		if b.Name != nil {
+			nameB = *b.Name
+		}
+		return nameA < nameB
 	})
 }
 

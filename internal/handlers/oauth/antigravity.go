@@ -271,9 +271,13 @@ func (h *OAuthHandler) HandleAntigravityExchange(w http.ResponseWriter, r *http.
 				connName, string(dataBytes), now, connID,
 			)
 		} else {
+			priority := 1
+			if h.Repo != nil {
+				priority = h.Repo.ResolveDefaultPriority("antigravity")
+			}
 			_, err = h.Repo.RawDB().Exec(
-				"INSERT INTO providerConnections (id, provider, authType, name, isActive, data, createdAt, updatedAt) VALUES (?, 'antigravity', 'oauth', ?, 1, ?, ?, ?)",
-				connID, connName, string(dataBytes), now, now,
+				"INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES (?, 'antigravity', 'oauth', ?, ?, 1, ?, ?, ?)",
+				connID, connName, priority, string(dataBytes), now, now,
 			)
 		}
 		if err != nil {
