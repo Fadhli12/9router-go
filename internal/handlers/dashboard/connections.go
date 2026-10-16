@@ -907,7 +907,8 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 		}
 		status, body, err := validateProbeDo(r.Context(), http.MethodPost, "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", headers, reqPayload)
 		if err != nil {
-			handlerutil.WriteJSONError(w, http.StatusBadGateway, "failed to fetch antigravity models: "+err.Error())
+			statusCode, _, errMsg := ClassifyUpstreamNetworkError(err)
+			handlerutil.WriteJSONError(w, statusCode, "failed to fetch antigravity models: "+errMsg)
 			return
 		}
 		if status != http.StatusOK {
@@ -977,7 +978,8 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 		}
 		status, body, err := validateProbeDo(r.Context(), http.MethodPost, "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", headers, reqPayload)
 		if err != nil {
-			handlerutil.WriteJSONError(w, http.StatusBadGateway, "failed to fetch gemini-cli models: "+err.Error())
+			statusCode, _, errMsg := ClassifyUpstreamNetworkError(err)
+			handlerutil.WriteJSONError(w, statusCode, "failed to fetch gemini-cli models: "+errMsg)
 			return
 		}
 		if status != http.StatusOK {
@@ -1119,7 +1121,8 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 		}
 		status, body, err := validateProbeDo(r.Context(), http.MethodGet, "https://api.cline.bot/api/v1/models", headers, nil)
 		if err != nil {
-			handlerutil.WriteJSONError(w, http.StatusBadGateway, "failed to fetch cline models: "+err.Error())
+			statusCode, _, errMsg := ClassifyUpstreamNetworkError(err)
+			handlerutil.WriteJSONError(w, statusCode, "failed to fetch cline models: "+errMsg)
 			return
 		}
 		if status != http.StatusOK {
@@ -1185,7 +1188,8 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 		}
 		status, body, err := validateProbeDo(r.Context(), http.MethodGet, listURL, headers, nil)
 		if err != nil {
-			handlerutil.WriteJSONError(w, http.StatusBadGateway, "failed to fetch models: "+err.Error())
+			statusCode, _, errMsg := ClassifyUpstreamNetworkError(err)
+			handlerutil.WriteJSONError(w, statusCode, "failed to fetch models: "+errMsg)
 			return
 		}
 		if status != http.StatusOK {
@@ -1242,7 +1246,8 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 	}
 	status, body, err := validateProbeDo(r.Context(), http.MethodGet, baseURL+"/models", headers, nil)
 	if err != nil {
-		handlerutil.WriteJSONError(w, http.StatusBadGateway, validateNodeNetworkMessage(err))
+		statusCode, _, errMsg := ClassifyUpstreamNetworkError(err)
+		handlerutil.WriteJSONError(w, statusCode, "failed to fetch models: "+errMsg)
 		return
 	}
 	if status != http.StatusOK {
