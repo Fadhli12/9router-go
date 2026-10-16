@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	json "encoding/json/v2"
 	"fmt"
 	"io"
@@ -11,8 +13,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"9router/proxy/internal/constants"
 	"9router/proxy/internal/log"
+	"9router/proxy/internal/providers"
 	"9router/proxy/internal/proxy"
 )
 
@@ -35,8 +40,15 @@ func ForwardCodebuddyCN(w http.ResponseWriter, req *Request) error {
 	}
 
 	ctx := req.Ctx
+	// The codebuddy-intl (.ai) gateway enforces a per-conversation identity
+	// header family — without X-Conversation-ID it rejects the request with
+	// HTTP 400 code 11128 "conversation id missing". The CN gateway
+	// (copilot.tencent.com) has no such gate, which is why cbcn never trips
+	// it while cbai does. Inject the headers on a per-request config copy so
+	// the shared static config is never mutated (provider isolation).
+	cfg := codebuddyConfigWithConversationHeaders(req.Config, req.SessionID, body)
 	// Always forward as stream — CodeBuddy rejects stream=false
-	resp, err := proxy.ForwardOpenAI(ctx, req.Client, req.Config, req.APIKey, body, true)
+	resp, err := proxy.ForwardOpenAI(ctx, req.Client, cfg, req.APIKey, body, true)
 	if err != nil {
 		return fmt.Errorf("ForwardCodebuddyCN upstream: %w", err)
 	}
@@ -59,6 +71,38 @@ func ForwardCodebuddyCN(w http.ResponseWriter, req *Request) error {
 		data = converted
 	}
 	return jsonResponse(req.Ctx, w, bytes.NewReader(data), req.TranslateResp, req.ResponseBuf)
+}
+
+// codebuddyConversationID derives a stable per-conversation id from the
+// session id when present, falling back to a hash of the message content so
+// turns of the same conversation map to the same cache bucket.
+func codebuddyConversationID(sessionID string, body []byte) string {
+	if sessionID != "" {
+		sum := sha256.Sum256([]byte("codebuddy:" + sessionID))
+		return hex.EncodeToString(sum[:16])
+	}
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:16])
+}
+
+// codebuddyConfigWithConversationHeaders returns a copy of cfg with the
+// per-request conversation-identity header family injected.
+func codebuddyConfigWithConversationHeaders(cfg *providers.ProviderConfig, sessionID string, body []byte) *providers.ProviderConfig {
+	cp := *cfg
+	headers := make(map[string]string, len(cfg.StaticHeaders)+8)
+	for k, v := range cfg.StaticHeaders {
+		headers[k] = v
+	}
+	traceID := uuid.NewString()
+	headers["X-Conversation-ID"] = codebuddyConversationID(sessionID, body)
+	headers["X-Conversation-Request-ID"] = uuid.NewString()
+	headers["X-Conversation-Message-ID"] = uuid.NewString()
+	headers["X-Request-ID"] = traceID
+	headers["X-Trace-ID"] = traceID
+	headers["X-Agent-Intent"] = "craft"
+	headers["X-Agent-Purpose"] = "conversation"
+	cp.StaticHeaders = headers
+	return &cp
 }
 
 // transformCodebuddyBody forces stream=true and handles reasoning params.
@@ -135,11 +179,11 @@ func execCodebuddySSEStream(w http.ResponseWriter, upstream io.Reader, req *Requ
 	flusher := proxy.WriteSSEHeaders(hw)
 
 	var (
-		reasoningBuf strings.Builder
-		reasoningID  string
+		reasoningBuf     strings.Builder
+		reasoningID      string
 		reasoningCreated float64
-		lastFlush    = time.Now()
-		bufSize      = 0
+		lastFlush        = time.Now()
+		bufSize          = 0
 	)
 
 	flushReasoning := func() {

@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"9router/proxy/internal/providers"
 )
 
 func TestTransformCodebuddyBody_ForceStream(t *testing.T) {
@@ -132,6 +134,58 @@ func TestTransformCodebuddyBody_UpstreamMessageShape(t *testing.T) {
 	block, _ := blocks[0].(map[string]any)
 	if block["type"] != "text" || block["text"] != "hi" {
 		t.Errorf("unexpected user block: %#v", block)
+	}
+}
+
+func TestCodebuddyConfigWithConversationHeaders(t *testing.T) {
+	base := &providers.ProviderConfig{
+		BaseURL: "https://www.codebuddy.ai/v2/chat/completions",
+		StaticHeaders: map[string]string{
+			"User-Agent": "IDE/2.108.1 CodeBuddy/2.108.1",
+		},
+	}
+	out := codebuddyConfigWithConversationHeaders(base, "sess-1", []byte(`{"messages":[{"role":"user","content":"hi"}]}`))
+
+	if out == base {
+		t.Fatal("must return a copy, not the shared static config")
+	}
+	if _, ok := base.StaticHeaders["X-Conversation-ID"]; ok {
+		t.Fatal("shared static config must not be mutated")
+	}
+
+	got := out.StaticHeaders
+	for _, k := range []string{
+		"X-Conversation-ID",
+		"X-Conversation-Request-ID",
+		"X-Conversation-Message-ID",
+		"X-Request-ID",
+		"X-Trace-ID",
+		"X-Agent-Intent",
+		"X-Agent-Purpose",
+	} {
+		if got[k] == "" {
+			t.Errorf("missing header %q", k)
+		}
+	}
+	if got["X-Agent-Intent"] != "craft" || got["X-Agent-Purpose"] != "conversation" {
+		t.Errorf("agent intent/purpose mismatch: %v", got)
+	}
+	if got["X-Request-ID"] != got["X-Trace-ID"] {
+		t.Errorf("X-Request-ID and X-Trace-ID must match, got %q vs %q", got["X-Request-ID"], got["X-Trace-ID"])
+	}
+	if got["X-Conversation-Request-ID"] == got["X-Conversation-Message-ID"] {
+		t.Error("per-request IDs must differ")
+	}
+
+	// Same session + body must yield a stable conversation id.
+	a := codebuddyConfigWithConversationHeaders(base, "sess-1", []byte(`{"messages":[{"role":"user","content":"hi"}]}`))
+	if a.StaticHeaders["X-Conversation-ID"] != got["X-Conversation-ID"] {
+		t.Errorf("conversation id must be stable across turns, got %q then %q", got["X-Conversation-ID"], a.StaticHeaders["X-Conversation-ID"])
+	}
+	// A different session must map to a different bucket.
+	b := codebuddyConfigWithConversationHeaders(base, "sess-2", []byte(`{"messages":[{"role":"user","content":"hi"}]}`))
+	if b.StaticHeaders["X-Conversation-ID"] == got["X-Conversation-ID"] {
+		t.Error("different sessions must not share a conversation id")
 	}
 }
 
