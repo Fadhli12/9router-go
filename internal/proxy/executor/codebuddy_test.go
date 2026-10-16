@@ -1,13 +1,8 @@
 package executor
 
 import (
-	"context"
 	json "encoding/json/v2"
-	"net/http/httptest"
-	"strings"
 	"testing"
-
-	"9router/proxy/internal/providers"
 )
 
 func TestTransformCodebuddyBody_ForceStream(t *testing.T) {
@@ -137,58 +132,6 @@ func TestTransformCodebuddyBody_UpstreamMessageShape(t *testing.T) {
 	}
 }
 
-func TestCodebuddyConfigWithConversationHeaders(t *testing.T) {
-	base := &providers.ProviderConfig{
-		BaseURL: "https://www.codebuddy.ai/v2/chat/completions",
-		StaticHeaders: map[string]string{
-			"User-Agent": "IDE/2.108.1 CodeBuddy/2.108.1",
-		},
-	}
-	out := codebuddyConfigWithConversationHeaders(base, "sess-1", []byte(`{"messages":[{"role":"user","content":"hi"}]}`))
-
-	if out == base {
-		t.Fatal("must return a copy, not the shared static config")
-	}
-	if _, ok := base.StaticHeaders["X-Conversation-ID"]; ok {
-		t.Fatal("shared static config must not be mutated")
-	}
-
-	got := out.StaticHeaders
-	for _, k := range []string{
-		"X-Conversation-ID",
-		"X-Conversation-Request-ID",
-		"X-Conversation-Message-ID",
-		"X-Request-ID",
-		"X-Trace-ID",
-		"X-Agent-Intent",
-		"X-Agent-Purpose",
-	} {
-		if got[k] == "" {
-			t.Errorf("missing header %q", k)
-		}
-	}
-	if got["X-Agent-Intent"] != "craft" || got["X-Agent-Purpose"] != "conversation" {
-		t.Errorf("agent intent/purpose mismatch: %v", got)
-	}
-	if got["X-Request-ID"] != got["X-Trace-ID"] {
-		t.Errorf("X-Request-ID and X-Trace-ID must match, got %q vs %q", got["X-Request-ID"], got["X-Trace-ID"])
-	}
-	if got["X-Conversation-Request-ID"] == got["X-Conversation-Message-ID"] {
-		t.Error("per-request IDs must differ")
-	}
-
-	// Same session + body must yield a stable conversation id.
-	a := codebuddyConfigWithConversationHeaders(base, "sess-1", []byte(`{"messages":[{"role":"user","content":"hi"}]}`))
-	if a.StaticHeaders["X-Conversation-ID"] != got["X-Conversation-ID"] {
-		t.Errorf("conversation id must be stable across turns, got %q then %q", got["X-Conversation-ID"], a.StaticHeaders["X-Conversation-ID"])
-	}
-	// A different session must map to a different bucket.
-	b := codebuddyConfigWithConversationHeaders(base, "sess-2", []byte(`{"messages":[{"role":"user","content":"hi"}]}`))
-	if b.StaticHeaders["X-Conversation-ID"] == got["X-Conversation-ID"] {
-		t.Error("different sessions must not share a conversation id")
-	}
-}
-
 func TestSSEToOpenAIJSON_MergesChunks(t *testing.T) {
 	sse := "data: {\"id\":\"chatcmpl-1\",\"created\":123,\"model\":\"glm-5.2\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"}}]}\n\n" +
 		"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"}}]}\n\n" +
@@ -279,66 +222,5 @@ func TestSSEToOpenAIJSON_NotSSE(t *testing.T) {
 	// A plain JSON error body must pass through untouched.
 	if _, ok := sseToOpenAIJSON([]byte(`{"error":{"message":"boom","code":400}}`)); ok {
 		t.Error("plain JSON should not be treated as SSE")
-	}
-}
-
-func TestExecCodebuddySSEStream_ReasoningBatched(t *testing.T) {
-	// Simulate CodeBuddy upstream emitting one reasoning token per SSE event.
-	upstream := "data: {\"id\":\"chatcmpl-1\",\"created\":123,\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"The\"}}]}\n\n" +
-		"data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\" user\"}}]}\n\n" +
-		"data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\" wants\"}}]}\n\n" +
-		"data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\" to\"}}]}\n\n" +
-		"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"}}]}\n\n" +
-		"data: [DONE]\n\n"
-
-	rec := httptest.NewRecorder()
-	req := &Request{
-		Ctx: context.Background(),
-	}
-	err := execCodebuddySSEStream(rec, strings.NewReader(upstream), req)
-	if err != nil {
-		t.Fatalf("execCodebuddySSEStream: %v", err)
-	}
-
-	body := rec.Body.String()
-	// Count how many SSE data events carry reasoning_content.
-	reasoningEvents := strings.Count(body, `"reasoning_content"`)
-	if reasoningEvents != 1 {
-		t.Errorf("expected 1 batched reasoning event, got %d\nbody: %s", reasoningEvents, body)
-	}
-	// The batched reasoning must contain the full text.
-	if !strings.Contains(body, `"reasoning_content":"The user wants to"`) {
-		t.Errorf("batched reasoning content mismatch\nbody: %s", body)
-	}
-	// The non-reasoning delta must still be forwarded.
-	if !strings.Contains(body, `"content":"Hello"`) {
-		t.Errorf("non-reasoning delta missing\nbody: %s", body)
-	}
-	if !strings.Contains(body, "data: [DONE]") {
-		t.Errorf("terminal DONE missing\nbody: %s", body)
-	}
-}
-
-func TestExecCodebuddySSEStream_NoReasoningPassthrough(t *testing.T) {
-	// When no reasoning_content is present, events pass through unchanged.
-	upstream := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"}}]}\n\n" +
-		"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"}}]}\n\n" +
-		"data: [DONE]\n\n"
-
-	rec := httptest.NewRecorder()
-	req := &Request{
-		Ctx: context.Background(),
-	}
-	err := execCodebuddySSEStream(rec, strings.NewReader(upstream), req)
-	if err != nil {
-		t.Fatalf("execCodebuddySSEStream: %v", err)
-	}
-
-	body := rec.Body.String()
-	if !strings.Contains(body, `"content":"Hello"`) {
-		t.Errorf("first content missing\nbody: %s", body)
-	}
-	if !strings.Contains(body, `"content":" world"`) {
-		t.Errorf("second content missing\nbody: %s", body)
 	}
 }

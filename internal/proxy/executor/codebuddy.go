@@ -1,11 +1,8 @@
 package executor
 
 import (
-	"bufio"
 	"bytes"
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"crypto/sha1"
 	json "encoding/json/v2"
 	"fmt"
 	"io"
@@ -13,12 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"9router/proxy/internal/constants"
-	"9router/proxy/internal/log"
-	"9router/proxy/internal/providers"
 	"9router/proxy/internal/proxy"
+
+	"github.com/google/uuid"
 )
 
 // ForwardCodebuddyCN forwards to Tencent CodeBuddy with force-stream
@@ -40,13 +35,27 @@ func ForwardCodebuddyCN(w http.ResponseWriter, req *Request) error {
 	}
 
 	ctx := req.Ctx
-	// The codebuddy-intl (.ai) gateway enforces a per-conversation identity
-	// header family — without X-Conversation-ID it rejects the request with
-	// HTTP 400 code 11128 "conversation id missing". The CN gateway
-	// (copilot.tencent.com) has no such gate, which is why cbcn never trips
-	// it while cbai does. Inject the headers on a per-request config copy so
-	// the shared static config is never mutated (provider isolation).
-	cfg := codebuddyConfigWithConversationHeaders(req.Config, req.SessionID, body)
+	cfg := req.Config
+	// The intl gateway (codebuddy.ai) added "channel verification": requests
+	// without the X-Conversation-* header family the official IDE sends on
+	// every turn are rejected with HTTP 400 code 11128 ("conversation id
+	// missing") — 9router issue #4892. A/B against the live upstream with the
+	// same credentials and body: family absent -> 11128, family present ->
+	// 200 SSE. codebuddy-cn (copilot.tencent.com) is not gated, so only the
+	// intl BaseURL gets the family. Headers merge into a config copy so the
+	// shared StaticHeaders map is never mutated.
+	if cfg != nil && strings.Contains(cfg.BaseURL, "codebuddy.ai") {
+		merged := make(map[string]string, len(cfg.StaticHeaders)+3)
+		for k, v := range cfg.StaticHeaders {
+			merged[k] = v
+		}
+		for k, v := range codebuddyConversationHeaders(req, body) {
+			merged[k] = v
+		}
+		cfgCopy := *cfg
+		cfgCopy.StaticHeaders = merged
+		cfg = &cfgCopy
+	}
 	// Always forward as stream — CodeBuddy rejects stream=false
 	resp, err := proxy.ForwardOpenAI(ctx, req.Client, cfg, req.APIKey, body, true)
 	if err != nil {
@@ -57,7 +66,7 @@ func ForwardCodebuddyCN(w http.ResponseWriter, req *Request) error {
 	if req.IsStream {
 		stallReader := proxy.NewStallReaderWithContext(req.Ctx, resp.Body, 0, "codebuddy-cn")
 		defer stallReader.Close() // stops the shutdown watcher + stall timer
-		return execCodebuddySSEStream(w, stallReader, req)
+		return execSSEStream(w, stallReader, req)
 	}
 	// Client asked for non-stream, but we sent stream=true upstream, so the
 	// upstream body is OpenAI-chat SSE. Re-aggregate the chunks into a single
@@ -71,38 +80,6 @@ func ForwardCodebuddyCN(w http.ResponseWriter, req *Request) error {
 		data = converted
 	}
 	return jsonResponse(req.Ctx, w, bytes.NewReader(data), req.TranslateResp, req.ResponseBuf)
-}
-
-// codebuddyConversationID derives a stable per-conversation id from the
-// session id when present, falling back to a hash of the message content so
-// turns of the same conversation map to the same cache bucket.
-func codebuddyConversationID(sessionID string, body []byte) string {
-	if sessionID != "" {
-		sum := sha256.Sum256([]byte("codebuddy:" + sessionID))
-		return hex.EncodeToString(sum[:16])
-	}
-	sum := sha256.Sum256(body)
-	return hex.EncodeToString(sum[:16])
-}
-
-// codebuddyConfigWithConversationHeaders returns a copy of cfg with the
-// per-request conversation-identity header family injected.
-func codebuddyConfigWithConversationHeaders(cfg *providers.ProviderConfig, sessionID string, body []byte) *providers.ProviderConfig {
-	cp := *cfg
-	headers := make(map[string]string, len(cfg.StaticHeaders)+8)
-	for k, v := range cfg.StaticHeaders {
-		headers[k] = v
-	}
-	traceID := uuid.NewString()
-	headers["X-Conversation-ID"] = codebuddyConversationID(sessionID, body)
-	headers["X-Conversation-Request-ID"] = uuid.NewString()
-	headers["X-Conversation-Message-ID"] = uuid.NewString()
-	headers["X-Request-ID"] = traceID
-	headers["X-Trace-ID"] = traceID
-	headers["X-Agent-Intent"] = "craft"
-	headers["X-Agent-Purpose"] = "conversation"
-	cp.StaticHeaders = headers
-	return &cp
 }
 
 // transformCodebuddyBody forces stream=true and handles reasoning params.
@@ -163,151 +140,84 @@ func transformCodebuddyBody(body []byte) ([]byte, error) {
 	return json.Marshal(reqMap)
 }
 
-// execCodebuddySSEStream streams SSE from upstream to client while buffering
-// reasoning_content tokens into larger chunks. CodeBuddy emits one SSE event
-// per reasoning token, which floods the client with hundreds of tiny events
-// and hangs the UI. We accumulate consecutive reasoning_content deltas and
-// flush them as a single event when either (a) a non-reasoning delta arrives,
-// (b) the buffer reaches a size threshold, or (c) a time threshold elapses.
-func execCodebuddySSEStream(w http.ResponseWriter, upstream io.Reader, req *Request) error {
-	ctx := req.Ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	hw := proxy.NewHeartbeatWriter(ctx, w, 0)
-	defer hw.Close()
-	flusher := proxy.WriteSSEHeaders(hw)
-
-	var (
-		reasoningBuf     strings.Builder
-		reasoningID      string
-		reasoningCreated float64
-		lastFlush        = time.Now()
-		bufSize          = 0
-	)
-
-	flushReasoning := func() {
-		if reasoningBuf.Len() == 0 {
-			return
-		}
-		chunk := map[string]any{
-			"id":      reasoningID,
-			"object":  "chat.completion.chunk",
-			"created": reasoningCreated,
-			"choices": []map[string]any{{
-				"index": 0,
-				"delta": map[string]any{"reasoning_content": reasoningBuf.String()},
-			}},
-		}
-		b, err := json.Marshal(chunk)
-		if err != nil {
-			log.Error("executor", "codebuddy reasoning marshal", "error", err)
-			return
-		}
-		line := fmt.Appendf(nil, "data: %s\n\n", string(b))
-		if _, werr := hw.Write(line); werr != nil {
-			return
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
-		reasoningBuf.Reset()
-		bufSize = 0
-		lastFlush = time.Now()
-	}
-
-	scanner := bufio.NewScanner(upstream)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
-			// Forward non-data lines as-is (comments, event types, etc.)
-			if _, err := hw.Write(fmt.Appendf(nil, "%s\n", line)); err != nil {
-				return err
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-			continue
-		}
-
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "" || payload == "[DONE]" {
-			flushReasoning()
-			if _, err := hw.Write(fmt.Appendf(nil, "data: %s\n\n", payload)); err != nil {
-				return err
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-			continue
-		}
-
-		var chunk map[string]any
-		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			// Not JSON — forward as-is.
-			flushReasoning()
-			if _, err := hw.Write(fmt.Appendf(nil, "data: %s\n\n", payload)); err != nil {
-				return err
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-			continue
-		}
-
-		choices, _ := chunk["choices"].([]any)
-		if len(choices) == 0 {
-			flushReasoning()
-			if _, err := hw.Write(fmt.Appendf(nil, "data: %s\n\n", payload)); err != nil {
-				return err
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-			continue
-		}
-
-		choice, _ := choices[0].(map[string]any)
-		delta, _ := choice["delta"].(map[string]any)
-		reasoningDelta, _ := delta["reasoning_content"].(string)
-
-		if reasoningDelta != "" {
-			// Accumulate reasoning tokens.
-			if reasoningBuf.Len() == 0 {
-				reasoningID, _ = chunk["id"].(string)
-				reasoningCreated, _ = chunk["created"].(float64)
-			}
-			reasoningBuf.WriteString(reasoningDelta)
-			bufSize += len(reasoningDelta)
-
-			// Flush when buffer is large enough or enough time has passed.
-			if bufSize >= 64 || time.Since(lastFlush) >= 50*time.Millisecond {
-				flushReasoning()
-			}
-			continue
-		}
-
-		// Non-reasoning delta — flush any pending reasoning first, then forward.
-		flushReasoning()
-		if _, err := hw.Write(fmt.Appendf(nil, "data: %s\n\n", payload)); err != nil {
-			return err
-		}
-		if flusher != nil {
-			flusher.Flush()
+// codebuddyConversationHeaders builds the X-Conversation-* header family the
+// intl gateway requires (see ForwardCodebuddyCN). Mirrors the official IDE:
+// a conversation id derived stably from the session key (uuid5-shaped, so
+// retries of the same turn and account failovers keep the same conversation),
+// plus fresh UUIDs per request and per message.
+func codebuddyConversationHeaders(req *Request, body []byte) map[string]string {
+	sessionKey := req.SessionID
+	if sessionKey == "" {
+		if m, ok := req.ConnData["sessionId"].(string); ok {
+			sessionKey = m
 		}
 	}
-	flushReasoning()
-
-	if err := scanner.Err(); err != nil {
-		code, message := proxy.ClassifyStreamAbort(err)
-		_, _ = hw.Write(proxy.BuildStreamErrorBytes(code, message, proxy.SSEFormatOpenAI))
-		if flusher != nil {
-			flusher.Flush()
-		}
-		return err
+	if sessionKey == "" {
+		sessionKey = firstUserText(body)
 	}
-	return nil
+	var convID string
+	if sessionKey != "" {
+		convID = stableConversationUUID("codebuddy-intl:" + sessionKey)
+	} else {
+		convID = uuid.NewString()
+	}
+	return map[string]string{
+		"X-Conversation-ID":         convID,
+		"X-Conversation-Request-ID": uuid.NewString(),
+		"X-Conversation-Message-ID": uuid.NewString(),
+	}
+}
+
+// stableConversationUUID derives an RFC-4122-v5-shaped UUID from key via
+// SHA-1, matching the JS executor's derivation so the same session key maps
+// to the same conversation id across implementations.
+func stableConversationUUID(key string) string {
+	sum := sha1.Sum([]byte(key))
+	var b [16]byte
+	copy(b[:], sum[:16])
+	b[6] = (b[6] & 0x0f) | 0x50 // version 5
+	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
+	u, err := uuid.FromBytes(b[:])
+	if err != nil {
+		return uuid.NewString()
+	}
+	return u.String()
+}
+
+// firstUserText extracts the opening user message text from an OpenAI-shaped
+// body (string or typed blocks) to use as a conversation-key fallback.
+func firstUserText(body []byte) string {
+	var reqMap map[string]any
+	if err := json.Unmarshal(body, &reqMap); err != nil {
+		return ""
+	}
+	msgs, _ := reqMap["messages"].([]any)
+	for _, raw := range msgs {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := m["role"].(string)
+		if role != "user" {
+			continue
+		}
+		switch content := m["content"].(type) {
+		case string:
+			return content
+		case []any:
+			var sb strings.Builder
+			for _, blk := range content {
+				if bm, ok := blk.(map[string]any); ok {
+					if t, ok := bm["text"].(string); ok {
+						sb.WriteString(t)
+					}
+				}
+			}
+			return sb.String()
+		}
+		return ""
+	}
+	return ""
 }
 
 // sseToOpenAIJSON re-aggregates OpenAI chat-completions SSE chunks into a
