@@ -655,7 +655,9 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		resp, err := forwardOpencodeRequest(ctx, req.Client, &cfg, apiKey, transformedBody, req.IsStream)
+		resp, err := forwardOpenCode(ctx, func() (*http.Response, error) {
+			return forwardOpencodeRequest(ctx, req.Client, &cfg, apiKey, transformedBody, req.IsStream)
+		})
 		if err != nil {
 			return fmt.Errorf("ForwardOpencode (muse-spark responses): %w", err)
 		}
@@ -704,7 +706,9 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	resp, err := forwardOpencodeRequest(ctx, req.Client, &cfg, apiKey, body, true)
+	resp, err := forwardOpenCode(ctx, func() (*http.Response, error) {
+		return forwardOpencodeRequest(ctx, req.Client, &cfg, apiKey, body, true)
+	})
 	if err != nil {
 		return fmt.Errorf("ForwardOpencode: %w", err)
 	}
@@ -1499,7 +1503,9 @@ func forwardOpencodeGoFree(w http.ResponseWriter, req *Request, cleanModel strin
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	resp, err := proxy.ForwardOpenAI(ctx, req.Client, &cfg, "public", body, true)
+	resp, err := forwardOpenCode(ctx, func() (*http.Response, error) {
+		return proxy.ForwardOpenAI(ctx, req.Client, &cfg, "public", body, true)
+	})
 	if err != nil {
 		return fmt.Errorf("ForwardOpencodeGo (free lane): %w", err)
 	}
@@ -1655,7 +1661,9 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		resp, err := proxy.ForwardOpenAI(ctx, req.Client, &cfg, req.APIKey, transformedBody, req.IsStream)
+		resp, err := forwardOpenCode(ctx, func() (*http.Response, error) {
+			return proxy.ForwardOpenAI(ctx, req.Client, &cfg, req.APIKey, transformedBody, req.IsStream)
+		})
 		if err != nil {
 			return fmt.Errorf("ForwardOpencodeGo (muse-spark responses): %w", err)
 		}
@@ -1753,7 +1761,9 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	resp, err := proxy.ForwardOpenAI(ctx, req.Client, &cfg, req.APIKey, body, req.IsStream)
+	resp, err := forwardOpenCode(ctx, func() (*http.Response, error) {
+		return proxy.ForwardOpenAI(ctx, req.Client, &cfg, req.APIKey, body, req.IsStream)
+	})
 	if err != nil {
 		return fmt.Errorf("ForwardOpencodeGo (default route): %w", err)
 	}
