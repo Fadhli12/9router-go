@@ -195,6 +195,29 @@ func IsProviderAllowed(apiKey *models.APIKey, provider string) bool {
 	return false
 }
 
+// AuthenticatedApiKeyFromContext retrieves the authenticated API key from a
+// context rather than a request.
+//
+// The usage ledger needs it after the response is written, when the request
+// object is gone (#365): a per-key token budget is measured from what the
+// caller spent, so the row has to name the caller. The auth middleware already
+// stores the key on the request context, so this is the same value the request
+// path sees, read through the only handle the writer still holds.
+func AuthenticatedApiKeyFromContext(ctx context.Context) *models.APIKey {
+	if ctx == nil {
+		return nil
+	}
+	val := ctx.Value(ApiKeyContextKey)
+	if val == nil {
+		return nil
+	}
+	keyObj, ok := val.(*models.APIKey)
+	if !ok {
+		return nil
+	}
+	return keyObj
+}
+
 // ExtractApiKey extracts the client API key from the request.
 // For standard API routes, only header-based auth is accepted to avoid leaks.
 // For EventSource / SSE stream endpoints (where browsers cannot set custom headers),

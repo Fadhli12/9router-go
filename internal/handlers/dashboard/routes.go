@@ -97,6 +97,14 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Put("/keys/{id}/allowed-providers", h.HandleUpdateApiKeyAllowedProviders)
 		r.Post("/keys/{id}/rotate", h.HandleRotateApiKey)
 
+		// F-3 Plans: reusable policy templates the keys inherit from.
+		r.Get("/plans", h.HandleListPlans)
+		r.Post("/plans", h.HandleCreatePlan)
+		r.Get("/plans/{id}", h.HandleGetPlan)
+		r.Put("/plans/{id}", h.HandleUpdatePlan)
+		r.Delete("/plans/{id}", h.HandleDeletePlan)
+		r.Get("/plans/{id}/keys", h.HandlePlanKeys)
+
 		// F-5 Credential vault: status and master-key rotation.
 		r.Get("/vault/status", h.HandleGetVaultStatus)
 		r.Post("/vault/rotate", h.HandleRotateVault)
