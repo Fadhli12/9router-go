@@ -276,7 +276,13 @@ func forwardZenChat(w http.ResponseWriter, req *Request, cleanModel, sourceForma
 	}
 	cfg.StaticHeaders = zenHeaders(&cfg, req.SessionID, true, free)
 
-	resp, err := proxy.ForwardOpenAI(reqCtx(req), req.Client, &cfg, req.APIKey, body, true)
+	var resp *http.Response
+	var err error
+	if free {
+		resp, err = forwardOpencodeRequest(reqCtx(req), req.Client, &cfg, req.APIKey, body, true)
+	} else {
+		resp, err = proxy.ForwardOpenAI(reqCtx(req), req.Client, &cfg, req.APIKey, body, true)
+	}
 	if err != nil {
 		return fmt.Errorf("ForwardOpencodeZen: %w", err)
 	}
@@ -345,7 +351,12 @@ func forwardZenResponses(w http.ResponseWriter, req *Request, cleanModel, source
 	cfg.StaticHeaders = zenHeaders(&cfg, req.SessionID, req.IsStream, free)
 
 	ctx := reqCtx(req)
-	resp, err := proxy.ForwardOpenAI(ctx, req.Client, &cfg, req.APIKey, body, req.IsStream)
+	var resp *http.Response
+	if free {
+		resp, err = forwardOpencodeRequest(ctx, req.Client, &cfg, req.APIKey, body, req.IsStream)
+	} else {
+		resp, err = proxy.ForwardOpenAI(ctx, req.Client, &cfg, req.APIKey, body, req.IsStream)
+	}
 	if err != nil {
 		return fmt.Errorf("ForwardOpencodeZen (responses): %w", err)
 	}

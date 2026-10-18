@@ -618,7 +618,7 @@ func replaceThoughtSignaturesRecursive(v any, replacement string) {
 // fixup: role correction for functionResponse, stripping of thought-only parts
 // that Gemini 3 rejects, and backfilling of thoughtSignature on functionCall
 // parts (parity with open-sse/executors/antigravity.js).
-func fixAntigravityContents(req *GeminiRequest) bool {
+func fixAntigravityContents(req *GeminiRequest, model string) bool {
 	if req == nil || len(req.Contents) == 0 {
 		return false
 	}
@@ -675,7 +675,7 @@ func fixAntigravityContents(req *GeminiRequest) bool {
 		}
 		fixed[i] = GeminiContent{Role: role, Parts: filtered}
 	}
-	normalized := NormalizeGeminiContents(fixed)
+	normalized := NormalizeGeminiContentsForModel(fixed, model)
 	if changed || len(normalized) != len(req.Contents) {
 		req.Contents = normalized
 		return true
@@ -696,7 +696,7 @@ func WrapForAntigravity(geminiBody []byte, projectID, modelName string) ([]byte,
 	var geminiReq GeminiRequest
 	if err := json.Unmarshal(geminiBody, &geminiReq); err == nil {
 		contentCount = len(geminiReq.Contents)
-		fixAntigravityContents(&geminiReq)
+		fixAntigravityContents(&geminiReq, modelName)
 		cleanedReq := StripCompetitivePrompts(&geminiReq)
 		if len(cleanedReq.Tools) > 0 {
 			cloaked, _ := CloakAntigravityRequest(cleanedReq, "")
