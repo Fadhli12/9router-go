@@ -874,9 +874,6 @@ var KnownProviders = map[string]ProviderConfig{
 		BaseURL:    "https://www.codebuff.com/api/v1/chat/completions",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
-		StaticHeaders: map[string]string{
-			"User-Agent": "ai-sdk/openai-compatible/1.0/codebuff",
-		},
 	},
 
 	"aws-polly": {

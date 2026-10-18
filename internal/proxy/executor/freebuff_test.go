@@ -178,6 +178,12 @@ func TestForwardFreebuff_FullCycle(t *testing.T) {
 
 		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
 			atomic.AddInt64(&chatCalls, 1)
+			if got := r.Header.Get("User-Agent"); got != "ai-sdk/openai-compatible/0.0.0-test/codebuff" {
+				t.Errorf("chat User-Agent = %q, want official SDK fingerprint", got)
+			}
+			if got := r.Header.Get("x-freebuff-sse-gzip-recovery"); got != "1" {
+				t.Errorf("chat gzip recovery header = %q, want 1", got)
+			}
 			bodyBytes, _ := io.ReadAll(r.Body)
 			var body map[string]any
 			_ = json.Unmarshal(bodyBytes, &body)
@@ -352,6 +358,45 @@ func TestForwardFreebuff_InvalidJSON(t *testing.T) {
 	err := ForwardFreebuff(rec, req)
 	if err == nil {
 		t.Fatalf("expected error on invalid JSON, got nil")
+	}
+}
+
+func TestForwardFreebuff_UpdateRequiredDoesNotReclaimSession(t *testing.T) {
+	var sessionCalls atomic.Int32
+	var chatCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case freebuffSessionPath:
+			sessionCalls.Add(1)
+			_, _ = w.Write([]byte(`{"status":"active","instanceId":"inst-update-required","expiresAt":"2030-01-01T00:00:00Z"}`))
+		case freebuffRunPath:
+			_, _ = w.Write([]byte(`{"runId":"run-update-required"}`))
+		case "/chat/completions":
+			chatCalls.Add(1)
+			w.WriteHeader(http.StatusGone)
+			_, _ = w.Write([]byte(`{"error":"freebuff_update_required","message":"Update Freebuff"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	model := "deepseek/deepseek-v4-flash"
+	token := "tok-update-required"
+	clearFreebuffSession(token, model)
+	req := &Request{
+		Ctx: t.Context(), Client: server.Client(),
+		Config: &providers.ProviderConfig{BaseURL: server.URL + "/chat/completions"},
+		APIKey: token,
+		Body:   []byte(`{"model":"deepseek/deepseek-v4-flash","messages":[{"role":"user","content":"hi"}]}`),
+	}
+	err := ForwardFreebuff(httptest.NewRecorder(), req)
+	var upstream *proxy.UpstreamError
+	if !errors.As(err, &upstream) || upstream.StatusCode != http.StatusGone {
+		t.Fatalf("expected upstream 410, got %v", err)
+	}
+	if sessionCalls.Load() != 1 || chatCalls.Load() != 1 {
+		t.Errorf("update-required should not re-claim/retry: sessions=%d chats=%d", sessionCalls.Load(), chatCalls.Load())
 	}
 }
 

@@ -21,7 +21,7 @@ import (
 const (
 	freebuffRunPath       = "/api/v1/agent-runs"
 	freebuffSystemMarker  = "You are Buffy, the strategic coding assistant."
-	freebuffChatUserAgent = "ai-sdk/openai-compatible/1.0/codebuff"
+	freebuffChatUserAgent = "ai-sdk/openai-compatible/0.0.0-test/codebuff"
 )
 
 var freebuffRootAgentByModel = map[string]string{
@@ -317,8 +317,9 @@ func ForwardFreebuff(w http.ResponseWriter, req *Request) error {
 	// 4. Execute Chat Request
 	doChat := func(body []byte) (*http.Response, error) {
 		headers := map[string]string{
-			"Authorization": "Bearer " + token,
-			"User-Agent":    freebuffChatUserAgent,
+			"Authorization":                "Bearer " + token,
+			"User-Agent":                   freebuffChatUserAgent,
+			"x-freebuff-sse-gzip-recovery": "1",
 		}
 		if req.IsStream {
 			headers["Accept"] = "text/event-stream"
@@ -361,6 +362,9 @@ func ForwardFreebuff(w http.ResponseWriter, req *Request) error {
 		// A blocked region is not a stale seat: re-claiming would loop.
 		if freebuffCountryRefusal(respBytes) {
 			return newCountryBlockedError(w, errData.CountryCode, errData.CountryBlockReason)
+		}
+		if errData.Error == "freebuff_update_required" {
+			return &proxy.UpstreamError{StatusCode: resp.StatusCode, Body: respBytes}
 		}
 
 		// If limited IP, fail immediately
