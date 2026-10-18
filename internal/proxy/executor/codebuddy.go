@@ -66,7 +66,8 @@ func ForwardCodebuddyCN(w http.ResponseWriter, req *Request) error {
 	if req.IsStream {
 		stallReader := proxy.NewStallReaderWithContext(req.Ctx, resp.Body, 0, "codebuddy-cn")
 		defer stallReader.Close() // stops the shutdown watcher + stall timer
-		return execSSEStream(w, stallReader, req)
+		filtered := stripReasoningContentStream(stallReader)
+		return execSSEStream(w, filtered, req)
 	}
 	// Client asked for non-stream, but we sent stream=true upstream, so the
 	// upstream body is OpenAI-chat SSE. Re-aggregate the chunks into a single
@@ -182,6 +183,104 @@ func stableConversationUUID(key string) string {
 		return uuid.NewString()
 	}
 	return u.String()
+}
+
+// stripReasoningContentStream forwards OpenAI chat-completion SSE but drops
+// delta.reasoning_content. CodeBuddy-intl/kimi-k2.7 can stream reasoning for
+// tens of seconds; clients that print each chunk flood the terminal and hang.
+//
+// Stripping the field is not enough on its own: a reasoning-only chunk would
+// then re-marshal as `"delta":{}` and still be forwarded, so a long think still
+// pushes thousands of empty frames at the client. Chunks that carry nothing the
+// client can render — no content, no tool_calls, no finish_reason — are dropped
+// entirely, and the pipe stops as soon as the client stops reading.
+func stripReasoningContentStream(upstream io.Reader) io.Reader {
+	pr, pw := io.Pipe()
+	go func() {
+		defer func() { _ = pw.Close() }()
+		var writeErr error
+		emit := func(payload []byte) {
+			if writeErr != nil {
+				return
+			}
+			if _, writeErr = pw.Write(payload); writeErr != nil {
+				// The client hung up. Abort the upstream read too instead of
+				// draining a reasoning flood nobody will see.
+				if c, ok := upstream.(io.Closer); ok {
+					_ = c.Close()
+				}
+			}
+		}
+		err := proxy.ScanStream(upstream, func(payload []byte) {
+			if writeErr != nil {
+				return
+			}
+			if len(payload) == 0 {
+				return
+			}
+			if bytes.Equal(bytes.TrimSpace(payload), []byte("[DONE]")) {
+				emit([]byte("data: [DONE]\n\n"))
+				return
+			}
+			var chunk map[string]any
+			if json.Unmarshal(payload, &chunk) != nil {
+				emit([]byte("data: " + string(payload) + "\n\n"))
+				return
+			}
+			if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
+				if choice, ok := choices[0].(map[string]any); ok {
+					if delta, ok := choice["delta"].(map[string]any); ok {
+						// Vendors disagree on the thought-field name: kimi/GLM/
+						// DeepSeek send reasoning_content, others send bare
+						// reasoning or reasoning_details. Drop all three, or an
+						// alt shape smuggles the flood past the filter.
+						delete(delta, "reasoning_content")
+						delete(delta, "reasoning")
+						delete(delta, "reasoning_details")
+					}
+					if !choiceCarriesOutput(choice) {
+						return // reasoning-only frame: nothing left for the client
+					}
+				}
+			}
+			out, marshalErr := json.Marshal(chunk)
+			if marshalErr != nil {
+				return
+			}
+			emit([]byte("data: " + string(out) + "\n\n"))
+		})
+		if err != nil {
+			pw.CloseWithError(err)
+		}
+	}()
+	return pr
+}
+
+// choiceCarriesOutput reports whether a streamed choice still has something the
+// client can render after reasoning_content was removed. Usage-only chunks have
+// an empty choices array and never reach here; a choice with no content, no
+// tool_calls and no finish_reason is a bare reasoning frame and is dropped.
+func choiceCarriesOutput(choice map[string]any) bool {
+	if fr, ok := choice["finish_reason"].(string); ok && fr != "" {
+		return true
+	}
+	delta, _ := choice["delta"].(map[string]any)
+	if delta == nil {
+		return true // no delta to inspect: leave the frame alone
+	}
+	if c, ok := delta["content"].(string); ok && c != "" {
+		return true
+	}
+	if tcs, ok := delta["tool_calls"].([]any); ok && len(tcs) > 0 {
+		return true
+	}
+	if fc, ok := delta["function_call"].(map[string]any); ok && len(fc) > 0 {
+		return true
+	}
+	if r, ok := delta["role"].(string); ok && r != "" {
+		return true
+	}
+	return false
 }
 
 // firstUserText extracts the opening user message text from an OpenAI-shaped
