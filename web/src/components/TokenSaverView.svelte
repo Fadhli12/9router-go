@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, untrack } from 'svelte'
   import Card from '../lib/ui/Card.svelte'
   import Toggle from '../lib/ui/Toggle.svelte'
   import Modal from '../lib/ui/Modal.svelte'
@@ -231,39 +231,41 @@
   // Sync props from settings
   $effect(() => {
     if (settings) {
-      if (typeof settings.rtkEnabled === 'boolean') rtkEnabled = settings.rtkEnabled
-      if (settings.rtkMode === 'simple' || settings.rtkMode === 'advance') rtkMode = settings.rtkMode
-      if (settings.rtkIntensity === 'minimal' || settings.rtkIntensity === 'standard' || settings.rtkIntensity === 'aggressive') rtkIntensity = settings.rtkIntensity
-      if (typeof settings.rtkMaxLines === 'number' && settings.rtkMaxLines > 0) rtkMaxLines = settings.rtkMaxLines
-      if (typeof settings.rtkMaxChars === 'number' && settings.rtkMaxChars > 0) rtkMaxChars = settings.rtkMaxChars
-      if (typeof settings.rtkDeduplicate === 'boolean') rtkDeduplicate = settings.rtkDeduplicate
-      if (settings.rtkCategories && typeof settings.rtkCategories === 'object') rtkCategories = { ...rtkCategories, ...settings.rtkCategories }
-      if (settings.rtkFilters && typeof settings.rtkFilters === 'object') rtkFilters = { ...settings.rtkFilters }
-      if (settings.rtkRawRetention === 'never' || settings.rtkRawRetention === 'failures' || settings.rtkRawRetention === 'always') rtkRawRetention = settings.rtkRawRetention
+      untrack(() => {
+        if (typeof settings.rtkEnabled === 'boolean') rtkEnabled = settings.rtkEnabled
+        if (settings.rtkMode === 'simple' || settings.rtkMode === 'advance') rtkMode = settings.rtkMode
+        if (settings.rtkIntensity === 'minimal' || settings.rtkIntensity === 'standard' || settings.rtkIntensity === 'aggressive') rtkIntensity = settings.rtkIntensity
+        if (typeof settings.rtkMaxLines === 'number' && settings.rtkMaxLines > 0) rtkMaxLines = settings.rtkMaxLines
+        if (typeof settings.rtkMaxChars === 'number' && settings.rtkMaxChars > 0) rtkMaxChars = settings.rtkMaxChars
+        if (typeof settings.rtkDeduplicate === 'boolean') rtkDeduplicate = settings.rtkDeduplicate
+        if (settings.rtkCategories && typeof settings.rtkCategories === 'object') rtkCategories = { ...rtkCategories, ...settings.rtkCategories }
+        if (settings.rtkFilters && typeof settings.rtkFilters === 'object') rtkFilters = { ...settings.rtkFilters }
+        if (settings.rtkRawRetention === 'never' || settings.rtkRawRetention === 'failures' || settings.rtkRawRetention === 'always') rtkRawRetention = settings.rtkRawRetention
 
-      if (typeof settings.headroomEnabled === 'boolean') headroomEnabled = settings.headroomEnabled
-      if (typeof settings.headroomUrl === 'string' && settings.headroomUrl) headroomUrl = settings.headroomUrl
-      if (typeof settings.headroomTimeoutMs === 'number' && settings.headroomTimeoutMs > 0) {
-        headroomTimeoutMs = settings.headroomTimeoutMs
-      }
-      if (typeof settings.headroomCodeAware === 'boolean') codeAware = settings.headroomCodeAware
-      if (typeof settings.headroomKompress === 'boolean') kompress = settings.headroomKompress
+        if (typeof settings.headroomEnabled === 'boolean') headroomEnabled = settings.headroomEnabled
+        if (typeof settings.headroomUrl === 'string' && settings.headroomUrl) headroomUrl = settings.headroomUrl
+        if (typeof settings.headroomTimeoutMs === 'number' && settings.headroomTimeoutMs > 0) {
+          headroomTimeoutMs = settings.headroomTimeoutMs
+        }
+        if (typeof settings.headroomCodeAware === 'boolean') codeAware = settings.headroomCodeAware
+        if (typeof settings.headroomKompress === 'boolean') kompress = settings.headroomKompress
 
-      if (typeof settings.cavemanEnabled === 'boolean') cavemanEnabled = settings.cavemanEnabled
-      if (settings.cavemanMode === 'simple' || settings.cavemanMode === 'advance') cavemanMode = settings.cavemanMode
-      if (typeof settings.cavemanLevel === 'string' && settings.cavemanLevel) cavemanLevel = settings.cavemanLevel
-      if (typeof settings.cavemanAutoClarity === 'boolean') cavemanAutoClarity = settings.cavemanAutoClarity
-      if (typeof settings.cavemanLanguage === 'string' && settings.cavemanLanguage) cavemanLanguage = settings.cavemanLanguage
-      if (typeof settings.cavemanInputMode === 'boolean') cavemanInputMode = settings.cavemanInputMode
-      if (typeof settings.cavemanPreserveKeywords === 'string') cavemanPreserveKeywords = settings.cavemanPreserveKeywords
+        if (typeof settings.cavemanEnabled === 'boolean') cavemanEnabled = settings.cavemanEnabled
+        if (settings.cavemanMode === 'simple' || settings.cavemanMode === 'advance') cavemanMode = settings.cavemanMode
+        if (typeof settings.cavemanLevel === 'string' && settings.cavemanLevel) cavemanLevel = settings.cavemanLevel
+        if (typeof settings.cavemanAutoClarity === 'boolean') cavemanAutoClarity = settings.cavemanAutoClarity
+        if (typeof settings.cavemanLanguage === 'string' && settings.cavemanLanguage) cavemanLanguage = settings.cavemanLanguage
+        if (typeof settings.cavemanInputMode === 'boolean') cavemanInputMode = settings.cavemanInputMode
+        if (typeof settings.cavemanPreserveKeywords === 'string') cavemanPreserveKeywords = settings.cavemanPreserveKeywords
 
-      if (typeof settings.ponytailEnabled === 'boolean') ponytailEnabled = settings.ponytailEnabled
-      if (typeof settings.ponytailLevel === 'string' && settings.ponytailLevel) ponytailLevel = settings.ponytailLevel
-      if (typeof settings.adhdEnabled === 'boolean') adhdEnabled = settings.adhdEnabled
-      if (typeof settings.adhdLevel === 'string' && settings.adhdLevel) adhdLevel = settings.adhdLevel
-      if (typeof settings.semanticCacheEnabled === 'boolean') semanticCacheEnabled = settings.semanticCacheEnabled
-      if (typeof settings.semanticCacheTTL === 'number' && settings.semanticCacheTTL > 0) semanticCacheTTL = String(settings.semanticCacheTTL)
-      if (typeof settings.semanticCacheMaxEntries === 'number' && settings.semanticCacheMaxEntries > 0) semanticCacheMaxEntries = String(settings.semanticCacheMaxEntries)
+        if (typeof settings.ponytailEnabled === 'boolean') ponytailEnabled = settings.ponytailEnabled
+        if (typeof settings.ponytailLevel === 'string' && settings.ponytailLevel) ponytailLevel = settings.ponytailLevel
+        if (typeof settings.adhdEnabled === 'boolean') adhdEnabled = settings.adhdEnabled
+        if (typeof settings.adhdLevel === 'string' && settings.adhdLevel) adhdLevel = settings.adhdLevel
+        if (typeof settings.semanticCacheEnabled === 'boolean') semanticCacheEnabled = settings.semanticCacheEnabled
+        if (typeof settings.semanticCacheTTL === 'number' && settings.semanticCacheTTL > 0) semanticCacheTTL = String(settings.semanticCacheTTL)
+        if (typeof settings.semanticCacheMaxEntries === 'number' && settings.semanticCacheMaxEntries > 0) semanticCacheMaxEntries = String(settings.semanticCacheMaxEntries)
+      })
     }
   })
 
