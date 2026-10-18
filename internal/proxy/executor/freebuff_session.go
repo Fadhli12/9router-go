@@ -20,7 +20,13 @@ import (
 const (
 	freebuffSessionPath  = "/api/v1/freebuff/session"
 	freebuffSessionTTL   = 60 * time.Minute
-	freebuffCLIUserAgent = "codebuff-cli/0.0.138"
+	freebuffCLIUserAgent = "freebuff-cli"
+
+	// FreebuffCLIUserAgent is the client identity upstream expects. It is
+	// exported so the OAuth/dashboard handlers send the same string: upstream
+	// gates old clients with 410 freebuff_update_required, and a stale copy in
+	// one handler is enough to break login, session switching or the probe.
+	FreebuffCLIUserAgent = freebuffCLIUserAgent
 
 	// freebuffInstanceHeader names the session a release (DELETE) targets. The
 	// CLI sends the same header only on GET and DELETE — POST takes the model.
