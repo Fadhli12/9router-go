@@ -561,8 +561,6 @@ export interface UsageLifetime {
   longestStreak: number
   topModel: UsageTopModel | null
   cacheHitRate: number | null
-  cacheTokens: number
-  cacheRequests: number
 }
 export interface UsageNodeHealth {
   name?: string
@@ -1477,11 +1475,14 @@ return conns.map(normalizeConnection)
       body: JSON.stringify(settings),
     }),
   /**
-   * Reads live USD rates for the requested codes and stores the subset.
-   * `codes` is the catalog the dashboard offers (web/src/lib/currency.ts).
+   * Reads live USD rates for the requested codes and overlays them on the
+   * stored table. `codes` is the catalog the dashboard offers
+   * (web/src/lib/currency.ts), `ratesStored` counts the rates the provider
+   * answered with, and `ratesMissing` names the requested codes it did not
+   * publish, whose manual rates were kept.
    */
   refreshCurrencyRates: (payload: { code: string; showBoth: boolean; codes: string[] }) =>
-    request<{ displayCurrency: unknown; source: string; ratesStored: number }>(
+    request<{ displayCurrency: unknown; source: string; ratesStored: number; ratesMissing: string[] }>(
       '/api/settings/currency/refresh',
       {
         method: 'POST',
