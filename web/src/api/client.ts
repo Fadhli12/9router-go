@@ -948,6 +948,7 @@ export async function handleUnauthorized(path?: string) {
     path === '/api/auth/login' ||
     path === '/api/auth/status' ||
     path === '/api/settings/require-login' ||
+    path === '/api/settings/database/stats' ||
     path === '/api/changelog'
   ) {
     return
