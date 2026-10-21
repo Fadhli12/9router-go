@@ -572,11 +572,10 @@ func TestTestConnection_CodexProbeSendsAccountIDHeader(t *testing.T) {
 		t.Fatalf("create connection: %v", err)
 	}
 
-	var gotHeaders map[string]string
+	probeCalled := false
 	original := connectionProbeDo
-	connectionProbeDo = func(_ context.Context, _ *http.Client, _, _ string, headers map[string]string, _ []byte) (int, []byte, error) {
-		gotHeaders = headers
-		// 400 is the codex probe's accepted "token ok" status.
+	connectionProbeDo = func(_ context.Context, _ *http.Client, _, _ string, _ map[string]string, _ []byte) (int, []byte, error) {
+		probeCalled = true
 		return http.StatusBadRequest, nil, nil
 	}
 	t.Cleanup(func() { connectionProbeDo = original })
@@ -585,10 +584,7 @@ func TestTestConnection_CodexProbeSendsAccountIDHeader(t *testing.T) {
 	if body["valid"] != true {
 		t.Fatalf("probe should be valid, got %v", body)
 	}
-	if gotHeaders["chatgpt-account-id"] != "acct-123" {
-		t.Errorf("chatgpt-account-id header = %q, want acct-123", gotHeaders["chatgpt-account-id"])
-	}
-	if gotHeaders["Authorization"] != "Bearer tok" {
-		t.Errorf("Authorization header = %q, want %q", gotHeaders["Authorization"], "Bearer tok")
+	if probeCalled {
+		t.Errorf("codex probe should check expiry only, not issue an upstream call")
 	}
 }

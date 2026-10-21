@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { api, type ProviderConnection, type ProviderNode } from '../../api/client'
+  import { api, type ProviderConnection, type ProviderNode, type ProviderNodeLimitsPatch } from '../../api/client'
+  import { hasAnyNodeLimitPatch } from '../../lib/node-limits'
   import ProvidersOverviewGrid from './ProvidersOverviewGrid.svelte'
   import ProviderDetailView from './ProviderDetailView.svelte'
   import AddCompatibleNodeModal from './AddCompatibleNodeModal.svelte'
@@ -40,6 +41,7 @@
     apiType?: 'chat' | 'responses'
     type: string
     urlSuffix: string
+    limits: ProviderNodeLimitsPatch
   }) {
     try {
       const node = await api.createProviderNode({
@@ -50,6 +52,15 @@
         type: data.type as unknown as string,
         urlSuffix: data.urlSuffix || undefined
       })
+      if (hasAnyNodeLimitPatch(data.limits)) {
+        try {
+          await api.setProviderNodeLimits(node.id, data.limits)
+        } catch (err) {
+          alert(
+            `Provider node created, but its capacity limits did not save: ${err instanceof Error ? err.message : String(err)}`,
+          )
+        }
+      }
       showAddOpenAIModal = false
       showAddAnthropicModal = false
       onRefresh()

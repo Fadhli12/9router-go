@@ -4,6 +4,9 @@
   import Button from '../../lib/ui/Button.svelte'
   import Input from '../../lib/ui/Input.svelte'
   import Modal from '../../lib/ui/Modal.svelte'
+  import ProviderNodeLimitsField from './ProviderNodeLimitsField.svelte'
+  import { EMPTY_NODE_LIMITS, nodeLimitsPatchOf, type NodeLimitsDraft } from '../../lib/node-limits'
+  import type { ProviderNodeLimitsPatch } from '../../api/client'
 
   interface Props {
     isOpen: boolean
@@ -17,6 +20,8 @@
       apiType?: 'chat' | 'responses'
       type: string
       urlSuffix: string
+      /** Capacity limits to apply once the node exists; all zero means unlimited. */
+      limits: ProviderNodeLimitsPatch
     }) => Promise<void> | void
   }
 
@@ -69,6 +74,10 @@
   let validating = $state(false)
   let validationResult = $state<{ valid: boolean; error?: string; method?: string; dimensions?: number } | null>(null)
   let submitting = $state(false)
+  // A new node has no policy yet, so the section starts closed; the values travel
+  // with the create and are written right after it (the limits endpoint needs the
+  // node id, which only exists once the create answers).
+  let limitsDraft = $state<NodeLimitsDraft>({ ...EMPTY_NODE_LIMITS })
 
   // The literal the backend pins in front of the suffix, so the field can show
   // the provider id the user is about to create instead of a bare "suffix".
@@ -135,6 +144,7 @@
       apiType: config.hasApiType ? formApiType : undefined,
       type,
       urlSuffix: formUrlSuffix.trim(),
+      limits: nodeLimitsPatchOf(limitsDraft),
     })).finally(() => {
       submitting = false
     })
@@ -235,6 +245,11 @@
         {/if}
       {/if}
     </div>
+
+    <!-- Capacity limits use the same fields as the ones above, separated by a rule
+         and collapsed until needed. They travel with the create and are written
+         immediately afterwards, because the limits endpoint needs the node id. -->
+    <ProviderNodeLimitsField bind:draft={limitsDraft} />
 
     <div class="flex flex-col gap-2 sm:flex-row">
       <Button
