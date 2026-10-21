@@ -260,11 +260,12 @@ export interface Settings {
   outboundNoProxy?: string
   providerStrategies?: Record<string, ProviderStrategyConfig>
   /**
-   * Feature Visibility: sidebar entry ids the operator hid. The canonical id
-   * list lives in web/src/lib/nav.ts; the server only checks the shape
+   * Sidebar layout: the entry ids the operator hid, and the arrangement they
+   * moved the entries into. The canonical id list lives in web/src/lib/nav.ts;
+   * the server only checks the shape
    * (internal/handlers/dashboard/navvisibility.go).
    */
-  navVisibility?: { hidden?: string[] }
+  navVisibility?: { hidden?: string[]; order?: string[] }
   /**
    * Display currency for every cost surface. Costs themselves are stored in USD;
    * see web/src/lib/currency.ts for the catalog and the formatting rules.
@@ -998,13 +999,19 @@ async function checkDashboardSession(): Promise<SessionStatus> {
 }
 
 export async function handleUnauthorized(path?: string) {
-  // Do not redirect for public auth endpoints or if already on login page
+  // Do not redirect for public auth endpoints, for the storage stats probe, or
+  // if already on the login page. The stats probe is read-only and always
+  // admin-gated on the server, so on an install whose dashboard is open without
+  // a session it answers 401 while every other call succeeds — bouncing the
+  // operator to the login screen and clearing the stored key there was wrong;
+  // the storage card reports the 401 and offers a retry instead. A genuinely
+  // expired session still logs out through any other request.
   if (
     path === '/api/auth/login' ||
     path === '/api/auth/status' ||
     path === '/api/settings/require-login' ||
-    path === '/api/settings/database/stats' ||
-    path === '/api/changelog'
+    path === '/api/changelog' ||
+    path === '/api/settings/database/stats'
   ) {
     return
   }
@@ -1192,6 +1199,23 @@ return conns.map(normalizeConnection)
       return { supported: false, valid: false }
     }
   },
+  /**
+   * Open a throwaway browser and sign in to Gemini Web, so the session is
+   * captured without a browser that keeps running and rotating the same
+   * cookies. Answers with the cookie header to paste.
+   */
+  geminiWebBrowserLogin: async (): Promise<{ cookie: string }> =>
+    request<{ cookie: string }>('/api/providers/gemini-web/browser-login', { method: 'POST' }),
+  /**
+   * Read a session out of a browser that is already signed in, and answer with
+   * the cookie header to paste. The warning says what to do about a browser
+   * that is still running.
+   */
+  geminiWebImportChrome: async (profile?: string): Promise<{ cookie: string; warning: string }> =>
+    request<{ cookie: string; warning: string }>('/api/providers/gemini-web/import-chrome', {
+      method: 'POST',
+      body: JSON.stringify({ profile: profile ?? '' }),
+    }),
   updateConnection: (
     id: string,
     payload:
@@ -1851,8 +1875,11 @@ return conns.map(normalizeConnection)
     ),
   /** Details-section dashboard payload: heatmap days, lifetime cards, node health. */
   getUsageDashboard: () => request<UsageDashboardResponse>('/api/usage/dashboard'),
-  getRequestDetails: (limit = 50, offset = 0) =>
-    request<any>(`/api/usage/request-details?limit=${limit}&offset=${offset}`),
+  /** Paged request rows; period windows the server query (?period=<preset|n>d|n>h). */
+  getRequestDetails: (limit = 50, offset = 0, period = '') =>
+    request<any>(
+      `/api/usage/request-details?limit=${limit}&offset=${offset}${period ? `&period=${encodeURIComponent(period)}` : ''}`
+    ),
   /** Full stored payload for one request; the list omits request/response bodies. */
   getRequestDetail: (id: string) => request<any>(`/api/usage/request-details/${encodeURIComponent(id)}`),
   resetHealth: (provider: string, model?: string) =>
