@@ -34,6 +34,12 @@ type ProviderConfig struct {
 	// LocalByDesign marks a provider whose upstream endpoint is intended to run on the
 	// local host or loopback network (e.g. ollama-local on localhost:11434).
 	LocalByDesign bool
+
+	// Hidden keeps a provider out of the lists a person scans — the provider
+	// pickers, the quota page — while leaving it fully reachable: connections
+	// still resolve it and requests still route to it. The MMF entries use it
+	// because they exist to serve traffic, not to be chosen.
+	Hidden bool
 }
 
 // Bedrock protocol constants. Region is substituted per request by the executor, so the
@@ -143,6 +149,15 @@ var modelsListURL = map[string]string{
 	// SumoPod exposes the standard OpenAI /v1/models catalogue (auth required,
 	// same contract as tokenharbor/dahl).
 	"sumopod": "https://ai.sumopod.com/v1/models",
+	"nous":    "https://inference-api.nousresearch.com/v1/models",
+	// Command Code publishes its whole Provider API catalogue on the standard
+	// OpenAI /v1/models shape, keyless: every id it sells, the free tiers
+	// included (reflection/beam:free, stealth/glyph-cluster:free,
+	// poolside/laguna-s-2.1-free) and the paid ones added since the registry
+	// snapshot (minimax/minimax-m3.1-flash, z-ai/glm-5.3-flash, …). The
+	// registry catalog is a fixed 22-model list, so without this entry the
+	// dashboard cannot discover anything the snapshot predates.
+	"commandcode": "https://api.commandcode.ai/provider/v1/models",
 }
 
 // modelsListHeaders carries the extra headers one live-catalogue endpoint
@@ -497,6 +512,7 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthScheme:    "bearer",
 		DefaultAPIKey: "mimo-dynamic",
 		NoAuth:        true,
+		Hidden:        true,
 	},
 	"blackbox": {
 		BaseURL:    "https://api.blackbox.ai/v1/chat/completions",
@@ -607,10 +623,10 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 		StaticHeaders: map[string]string{
-			"User-Agent":          "IDE/2.108.1 CodeBuddy/2.108.1",
+			"User-Agent":          "CLI/2.108.1 CodeBuddy/2.108.1",
 			"X-Product":           "SaaS",
-			"X-IDE-Type":          "IDE",
-			"X-IDE-Name":          "IDE",
+			"X-IDE-Type":          "CLI",
+			"X-IDE-Name":          "CLI",
 			"x-requested-with":    "XMLHttpRequest",
 			"x-codebuddy-request": "1",
 		},
@@ -619,6 +635,7 @@ var KnownProviders = map[string]ProviderConfig{
 		BaseURL:    "https://gitlab.com/api/v4/chat/completions",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
+		Hidden:     true,
 	},
 	"glm-cn": {
 		BaseURL:    "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
@@ -642,6 +659,7 @@ var KnownProviders = map[string]ProviderConfig{
 		BaseURL:    "https://apis.iflow.cn/v1/chat/completions",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
+		Hidden:     true,
 	},
 	"alitp-intl": {
 		BaseURL:    "https://token-plan.ap-southeast-1.aliyuncs.com/v1/chat/completions",
@@ -656,6 +674,11 @@ var KnownProviders = map[string]ProviderConfig{
 
 	"nebius": {
 		BaseURL:    "https://api.studio.nebius.ai/v1/chat/completions",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+	},
+	"nous": {
+		BaseURL:    "https://inference-api.nousresearch.com/v1/chat/completions",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
@@ -891,6 +914,7 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "x-api-key",
 		AuthScheme: "raw",
 		TTSURL:     "https://api.cartesia.ai/tts/bytes",
+		Hidden:     true,
 	},
 	"exa": {
 		BaseURL:    "https://api.exa.ai/search",
@@ -929,6 +953,7 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 		TTSURL:     "https://api.play.ht/api/v2/tts/stream",
+		Hidden:     true,
 	},
 	// TinyFish — one x-api-key credential behind two separate hosts (search
 	// and fetch), which is why BaseURL is a non-endpoint root here: appending
@@ -1032,11 +1057,13 @@ var KnownProviders = map[string]ProviderConfig{
 		BaseURL: "http://localhost:5000/api/tts",
 		NoAuth:  true,
 		TTSURL:  "http://localhost:5000/api/tts",
+		Hidden:  true,
 	},
 	"coqui": {
 		BaseURL: "http://localhost:5002/api/tts",
 		NoAuth:  true,
 		TTSURL:  "http://localhost:5002/api/tts",
+		Hidden:  true,
 	},
 	"edge-tts": {
 		BaseURL: "",
@@ -1089,6 +1116,11 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
+	"daoxe": {
+		BaseURL:    "https://api.daoxe.com/v1/chat/completions",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+	},
 	"bazaarlink": {
 		BaseURL:    "https://bazaarlink.ai/api/v1/chat/completions",
 		AuthHeader: "Authorization",
@@ -1098,6 +1130,7 @@ var KnownProviders = map[string]ProviderConfig{
 		BaseURL:    "https://api.bluesminds.com/v1/chat/completions",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
+		Hidden:     true,
 	},
 	"devin-cli": {
 		BaseURL:    "devin://acp/stdio",
@@ -1119,6 +1152,16 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
+	"nan": {
+		BaseURL:    "https://api.nan.builders/v1/chat/completions",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+	},
+	"openadapter": {
+		BaseURL:    "https://api.openadapter.in/v1/chat/completions",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+	},
 	"poolside": {
 		BaseURL:    "https://inference.poolside.ai/v1/chat/completions",
 		AuthHeader: "Authorization",
@@ -1128,6 +1171,7 @@ var KnownProviders = map[string]ProviderConfig{
 		BaseURL:    "https://api.sambanova.ai/v1/chat/completions",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
+		Hidden:     true,
 	},
 	"tencent": {
 		BaseURL:    "https://api.hunyuan.cloud.tencent.com/v1/chat/completions",

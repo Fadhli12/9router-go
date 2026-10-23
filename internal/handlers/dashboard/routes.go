@@ -50,6 +50,11 @@ func getURLParam(r *http.Request, key string) string {
 	if v := chi.URLParam(r, key); v != "" {
 		return v
 	}
+	if key == "key" {
+		if v := chi.URLParam(r, "*"); v != "" {
+			return v
+		}
+	}
 	return r.PathValue(key)
 }
 
@@ -66,6 +71,9 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Post("/connections/{id}/test", h.HandleTestConnection)
 		r.Post("/providers/{id}/test", h.HandleTestConnection)
 		r.Get("/providers/{id}/models", h.HandleGetConnectionModels)
+		// Bulk removal for the rows the import path writes; the single-row form
+		// stays at DELETE /models/custom/{key}.
+		r.Delete("/providers/{id}/models", h.HandleDeleteProviderModels)
 		r.Get("/providers/{id}/overrides", h.HandleGetProviderOverrides)
 		r.Put("/providers/{id}/overrides", h.HandleSaveProviderOverrides)
 		r.Post("/providers/validate", h.HandleValidateProvider)
@@ -87,7 +95,13 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Post("/combos", h.HandleCreateCombo)
 		r.Post("/combos/auto-free", h.HandleAutoFreeCombo)
 		r.Post("/combos/auto-family", h.HandleAutoFamilyCombos)
+		r.Get("/combos/presets", h.HandleGetComboPresets)
+		r.Post("/combos/presets", h.HandleCreateComboPresets)
 		r.Put("/combos/{id}", h.HandleUpdateCombo)
+		// Smart select combo: dry-run a rule list, and apply every combo's rules
+		// on demand. The automatic half runs on each model write.
+		r.Post("/combos/reconcile", h.HandleReconcileSmartCombos)
+		r.Post("/combos/{id}/smart/preview", h.HandleComboSmartPreview)
 		r.Delete("/combos/{id}", h.HandleDeleteCombo)
 
 		// Proxy Pools
@@ -135,6 +149,7 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Get("/models/caps", h.HandleGetModelCaps)
 		r.Post("/models/custom", h.HandleSaveCustomModel)
 		r.Delete("/models/custom/{key}", h.HandleDeleteCustomModel)
+		r.Delete("/models/custom/*", h.HandleDeleteCustomModel)
 		r.Get("/models/disabled", h.HandleGetDisabledModels)
 		r.Put("/models/disabled/{provider}", h.HandleSaveDisabledModels)
 

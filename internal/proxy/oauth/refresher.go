@@ -20,6 +20,7 @@ type TokenResult struct {
 	ExpiresIn    int // seconds
 	Scope        string
 	ProjectID    string // provider-specific extra field
+	APIKey       string
 }
 
 // Params holds all inputs for a refresh call.

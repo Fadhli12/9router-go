@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"9router/proxy/internal/constants"
+	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/providers"
 	"9router/proxy/internal/proxy"
 	"9router/proxy/internal/proxy/executor"
@@ -95,7 +96,7 @@ func (h *ChatHandler) forwardGeminiNativeRequest(
 		}
 		// gemini-cli keeps its OpenAI-style fallback.
 		log.Info("gemini", "no projectID, fallback to OpenAI", "provider", provider)
-		return h.forwardRequest(ctx, w, cfg, apiKey, body, isStream, translateResponse, metrics, httpClient)
+		return h.forwardRequest(ctx, w, cfg, apiKey, body, isStream, translateResponse, metrics, httpClient, provider)
 	}
 
 	resp, err := proxy.ForwardGemini(ctx, httpClient, cfg, apiKey, string(body), isStream, projectID, modelName)
@@ -214,7 +215,7 @@ func (h *ChatHandler) refreshOAuthTokenIfExpired(connectionID, currentToken stri
 		if oauthData != nil {
 			projectID = oauthData.ProjectID
 		}
-// The token is usable, so there is nothing to refresh. Hand back exactly
+		// The token is usable, so there is nothing to refresh. Hand back exactly
 		// the credential the caller passed in, untouched: the stored accessToken
 		// is not interchangeable with it, and the request path picks the right
 		// one deliberately.
@@ -247,7 +248,7 @@ func (h *ChatHandler) refreshOAuthTokenIfExpired(connectionID, currentToken stri
 			})
 			if err != nil {
 				h.parkRejectedOAuthAccount(connectionID, err)
-return oauthTokenResult{token: currentToken, projectID: projectID, passthrough: true},
+				return oauthTokenResult{token: currentToken, projectID: projectID, passthrough: true},
 					fmt.Errorf("OAuth refresh for %s: %w", provider, err)
 			}
 			if result == nil {
@@ -327,7 +328,7 @@ return oauthTokenResult{token: currentToken, projectID: projectID, passthrough: 
 		return oauthTokenResult{token: tokenResp.AccessToken, projectID: projectID}, nil
 	})
 
-// A shared flight must not hand one caller's token to another: when the
+	// A shared flight must not hand one caller's token to another: when the
 	// leader found the connection healthy, it returned its own token as a
 	// pass-through, and that value belongs to the leader alone.
 	if err != nil {
@@ -487,7 +488,7 @@ func (h *ChatHandler) handleGeminiStream(ctx context.Context, w http.ResponseWri
 	hw := proxy.NewHeartbeatWriter(ctx, w, 0)
 	defer hw.Close()
 	flusher := proxy.WriteSSEHeaders(hw)
-	geminiState := &translator.GeminiStreamState{}
+	geminiState := &translator.GeminiStreamState{SessionID: handlerutil.GetSessionID(ctx)}
 	start := time.Now()
 	// A /v1/responses client is one hop further out: Gemini events become
 	// OpenAI chunks here and those chunks become Responses events, so the

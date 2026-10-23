@@ -47,8 +47,43 @@ export interface Combo {
   strategy: string
   createdAt: string
   updatedAt: string
+  /** Raw JSON of the combo's smart rules. Absent means the combo has none. */
+  matchRules?: string
+  /** Derived server-side: the members the rules currently own. */
+  autoMembers?: string[]
 }
 
+/** One smart-select rule: a pattern plus the membership it currently owns. */
+export interface SmartRule {
+  id: string
+  pattern: string
+  mode: 'glob' | 'keyword' | 'regex'
+  effect: 'include' | 'exclude'
+  enabled: boolean
+  /** 0 means unlimited. */
+  maxMembers: number
+  allKinds: boolean
+  resolved?: string[]
+  excluded?: string[]
+}
+
+/** What one rule would contribute, as the preview endpoint reports it. */
+export interface SmartRulePreview {
+  id: string
+  matched: number
+  applied: number
+  capped: boolean
+}
+
+/** The dry run of a rule list against the live model set. */
+export interface ComboRulesPreview {
+  combo: string
+  candidates: number
+  models: string[]
+  added: string[]
+  removed: string[]
+  rules: SmartRulePreview[]
+}
 /** Resolved server-side capabilities for one catalog model. */
 export interface ModelCaps {
   vision: boolean
@@ -1377,7 +1412,7 @@ return conns.map(normalizeConnection)
     const res = await request<any>('/api/combos')
     return Array.isArray(res) ? res : (res.combos || [])
   },
-  createCombo: (payload: { id?: string; name: string; kind?: string; models: string | string[]; strategy?: string }) =>
+  createCombo: (payload: { id?: string; name: string; kind?: string; models: string | string[]; strategy?: string; matchRules?: SmartRule[] }) =>
     request<{ success: boolean; id: string }>('/api/combos', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -1391,6 +1426,18 @@ return conns.map(normalizeConnection)
     request<{ success: boolean }>(`/api/combos/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     }),
+  /** Dry-run a rule list: what it would add, remove and own. Writes nothing. */
+  previewComboRules: (id: string, matchRules: SmartRule[]) =>
+    request<ComboRulesPreview>(`/api/combos/${encodeURIComponent(id)}/smart/preview`, {
+      method: 'POST',
+      body: JSON.stringify({ matchRules }),
+    }),
+  /** Apply every combo's rules now, or just the named one. */
+  reconcileCombos: (id?: string) =>
+    request<{ status: string; reconciled: number; added: string[]; removed: string[] }>(
+      id ? `/api/combos/reconcile?id=${encodeURIComponent(id)}` : '/api/combos/reconcile',
+      { method: 'POST' },
+    ),
 
   // API Keys
   getApiKeys: () => request<APIKey[]>('/api/keys'),
@@ -1566,6 +1613,17 @@ return conns.map(normalizeConnection)
     request<{ success: boolean }>(`/api/models/custom/${encodeURIComponent(key)}`, {
       method: 'DELETE',
     }),
+  /**
+   * Removes every model one provider node carries (imported custom models plus
+   * the aliases pointing at them) in a single request — the undo for
+   * "Import from /models", which writes hundreds of rows. Catalog models that
+   * ship with the build are not stored per node and are left alone.
+   */
+  deleteProviderModels: (provider: string) =>
+    request<{ status: string; provider: string; removedModels: string[]; removedAliases: string[]; count: number }>(
+      `/api/providers/${encodeURIComponent(provider)}/models`,
+      { method: 'DELETE' }
+    ),
   saveDisabledModels: (provider: string, modelIds: string[]) =>
     request<{ success: boolean }>(`/api/models/disabled/${encodeURIComponent(provider)}`, {
       method: 'PUT',

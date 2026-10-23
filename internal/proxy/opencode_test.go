@@ -146,3 +146,58 @@ func TestHasValidOpenCodeVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestIsCanonicalOpenCodeSession(t *testing.T) {
+	for range 20 {
+		if id := proxy.GenerateOpenCodeSessionID(); !proxy.IsCanonicalOpenCodeSession(id) {
+			t.Fatalf("minted session %q is not canonical", id)
+		}
+	}
+	tests := []struct {
+		name, id string
+		want     bool
+	}{
+		{"canonical hint", "ses_f52b0d414ffeObbCKcHUQYZR2I", true},
+		{"ascending timestamp", "ses_000000000001AAAAAAAAAAAA", false},
+		{"foreign hex", "ses_0123456789abAAAAAAAAAAAA", false},
+		{"wrong prefix", "msg_f52b0d414ffeObbCKcHUQYZR2I", false},
+		{"too short", "ses_f52b0d414ff", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := proxy.IsCanonicalOpenCodeSession(tt.id); got != tt.want {
+				t.Errorf("IsCanonicalOpenCodeSession(%q) = %v, want %v", tt.id, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTranslateOpenCodeSessionIDReencodesForeignEncoding(t *testing.T) {
+	// Right ses_ shape, wrong time encoding: the gate decodes the prefix and
+	// answers an ascending or foreign value with 403 FreeTierError, so it must
+	// be re-encoded instead of forwarded.
+	foreign := "ses_000000000001ObbCKcHUQYZR2I"
+	got := proxy.TranslateOpenCodeSessionID(foreign, "")
+	if got == foreign {
+		t.Fatalf("foreign-encoded session was forwarded verbatim: %s", got)
+	}
+	if !proxy.IsCanonicalOpenCodeSession(got) {
+		t.Errorf("re-encoded session %q is not canonical", got)
+	}
+	if again := proxy.TranslateOpenCodeSessionID(foreign, ""); again != got {
+		t.Errorf("re-encoding is not deterministic: %q then %q", got, again)
+	}
+}
+
+func TestStableOpenCodeSessionID(t *testing.T) {
+	first := proxy.StableOpenCodeSessionID("conn-a")
+	if again := proxy.StableOpenCodeSessionID("conn-a"); again != first {
+		t.Errorf("same key minted two sessions: %q then %q", first, again)
+	}
+	if !proxy.IsCanonicalOpenCodeSession(first) {
+		t.Errorf("stable session %q is not canonical", first)
+	}
+	if other := proxy.StableOpenCodeSessionID("conn-b"); other == first {
+		t.Errorf("different keys share one session: %q", first)
+	}
+}

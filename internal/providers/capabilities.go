@@ -479,6 +479,17 @@ func init() {
 		},
 	}
 
+	providerCapabilities["nous"] = map[string]Capabilities{
+		"meituan/longcat-2.0:free":         {Tools: true, Reasoning: true, ThinkingFormat: "nous", ContextWindow: 1048756, MaxOutput: 262144},
+		"meituan/longcat-2.5-preview:free": {Tools: true, Vision: true, Reasoning: true, ThinkingFormat: "nous", ContextWindow: 1048576, MaxOutput: 131072},
+		"stepfun/step-5-preview:free":      {Tools: true, Vision: true, VideoInput: true, Reasoning: true, ThinkingFormat: "nous", ContextWindow: 1000000, MaxOutput: 64000},
+		"upstage/solar-mini4:free":         {Tools: true, Reasoning: true, ThinkingFormat: "nous", ContextWindow: 524288, MaxOutput: 131072},
+		"stepfun/step-3.7-flash:free":      {Tools: true, Vision: true, VideoInput: true, Reasoning: true, ThinkingFormat: "nous", ContextWindow: 262144, MaxOutput: 256000},
+		"poolside/laguna-s-2.1:free":       {Tools: true, Reasoning: true, ThinkingFormat: "nous", ContextWindow: 262144, MaxOutput: 131072},
+		"poolside/laguna-xs-2.1:free":      {Tools: true, Reasoning: true, ThinkingFormat: "nous", ContextWindow: 262144, MaxOutput: 32768},
+		"stealth/missingno":                {Tools: true, Reasoning: true, ThinkingFormat: "nous", ContextWindow: 262144, MaxOutput: 131072},
+	}
+
 	// `cx` is the alias codex publishes under, so it serves the same catalog
 	// upstream does (open-sse/providers/capabilities.js:
 	// PROVIDER_CAPABILITIES.cx = PROVIDER_CAPABILITIES.codex).
@@ -488,6 +499,32 @@ func init() {
 	// table rather than restating it (upstream
 	// PROVIDER_CAPABILITIES["minimax-code-global"] = PROVIDER_CAPABILITIES["minimax-code"]).
 	providerCapabilities["minimax-code-global"] = providerCapabilities["minimax-code"]
+
+	// DaoXE (daoxe) — OpenAI-compatible free tier
+	providerCapabilities["daoxe"] = map[string]Capabilities{
+		"gpt-4o":        {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 128000, MaxOutput: 16384},
+		"gpt-4o-mini":   {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 128000, MaxOutput: 16384},
+		"gpt-3.5-turbo": {Tools: true},
+	}
+
+	// NaN.Builders (nanbuilders) — OpenAI-compatible free tier
+	providerCapabilities["nanbuilders"] = map[string]Capabilities{
+		"gpt-4o":        {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 128000, MaxOutput: 16384},
+		"gpt-4o-mini":   {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 128000, MaxOutput: 16384},
+		"gpt-3.5-turbo": {Tools: true},
+	}
+
+	// OpenAdapter (openadapter) — OpenAI-compatible free tier
+	providerCapabilities["openadapter"] = map[string]Capabilities{
+		"gpt-4o":        {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 128000, MaxOutput: 16384},
+		"gpt-4o-mini":   {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 128000, MaxOutput: 16384},
+		"gpt-3.5-turbo": {Tools: true},
+	}
+
+	// Aliases share the same capabilities catalog
+	providerCapabilities["dx"] = providerCapabilities["daoxe"]
+	providerCapabilities["nan"] = providerCapabilities["nanbuilders"]
+	providerCapabilities["oad"] = providerCapabilities["openadapter"]
 
 	initPatternIndex()
 }
