@@ -2669,6 +2669,17 @@
     // catalog is a 22-model snapshot, so this is the only path that surfaces
     // models added after it (reflection/beam:free, minimax/minimax-m3.1-flash).
     'commandcode',
+    // Five more keyless catalogues, each probed live at 200 with no
+    // Authorization header. vercel-ai-gateway and chutes ship no static
+    // catalog at all, so this is the only surface that can list a model for
+    // either; nvidia and ollama carry 11 and 8 static rows against 84 and 23
+    // live ones; openrouter already had a free-tier fetcher but no backend
+    // entry, so its button never rendered.
+    'vercel-ai-gateway',
+    'chutes',
+    'nvidia',
+    'ollama',
+    'openrouter',
   ])
 
   // canListLiveModels mirrors the backend's list of providers with a live
@@ -2677,7 +2688,7 @@
   let canListLiveModels = $derived(
     providerId.startsWith('openai-compatible-') ||
       isCompatibleNode ||
-      ['antigravity', 'gemini-cli', 'cline', 'clinepass', 'qoder', 'qoder-cn'].includes(providerId) ||
+      ['antigravity', 'gemini-cli', 'cline', 'clinepass', 'qoder', 'qoder-cn', 'zed'].includes(providerId) ||
       ModelsListURLs.has(providerId)
   )
 
@@ -4127,7 +4138,7 @@
         Add Model
       </button>
 
-      {#if (providerId === 'cline' || providerId === 'clinepass' || providerId === 'qoder' || providerId === 'qoder-cn' || providerId === 'commandcode') && providerConnections.some((c) => c.isActive !== 0)}
+      {#if (providerId === 'cline' || providerId === 'clinepass' || providerId === 'qoder' || providerId === 'qoder-cn' || providerId === 'commandcode' || providerId === 'vercel-ai-gateway' || providerId === 'chutes' || providerId === 'nvidia' || providerId === 'ollama' || providerId === 'openrouter') && providerConnections.some((c) => c.isActive !== 0)}
         <button
           type="button"
           onclick={handleImportLiveCatalogModels}
