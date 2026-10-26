@@ -292,6 +292,9 @@ func kiroUpstreamBody(req *Request) ([]byte, error) {
 	if idx := strings.IndexByte(model, '('); idx > 0 {
 		model = model[:idx]
 	}
+	// Anthropic spellings (claude-sonnet-4-5-20250929) 400 on Kiro's data
+	// plane; fold them onto the dotted upstream alias.
+	model = normalizeKiroUpstreamModelId(model)
 
 	profileArn := kiroProfileArn(req.ConnData)
 
@@ -673,16 +676,20 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 			baseURL = strings.TrimSuffix(baseURL, "/chat/completions")
 			cfg.BaseURL = opencodeInferenceBase(baseURL) + "/responses"
 		}
-		cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, opencodeSessionHint(req, true), req.IsStream)
+		baseHeaders := cfg.StaticHeaders
+		hint := opencodeSessionHint(req, true)
+		cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, hint, req.IsStream)
 		ctx := req.Ctx
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		resp, err := forwardOpenCode(ctx, func() (*http.Response, error) {
+		resp, err := forwardOpenCodeRotating(ctx, func() (*http.Response, error) {
 			return forwardOpencodeRequest(ctx, req.Client, &cfg, apiKey, transformedBody, req.IsStream)
 		}, func() (*http.Response, error) {
 			return forwardOpencodeRequestDirect(ctx, &cfg, apiKey, transformedBody, req.IsStream)
-		})
+		}, rotateOpencodeStableSession(opencodeStableSessionKey(req, true), hint, func(session string) {
+			cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(baseHeaders, session, req.IsStream)
+		}))
 		if err != nil {
 			return fmt.Errorf("ForwardOpencode (muse-spark responses): %w", err)
 		}
@@ -702,10 +709,23 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	}
 
 	body := InjectReasoningContent(req.Body, "opencode")
+	// The free lane's MiMo route streams thinking as reasoning +
+	// reasoning_details[] instead of reasoning_content; the passthrough lifts
+	// the alias so OpenAI-shaped clients see the thinking. Every other model
+	// on the lane already emits reasoning_content, so the lift is a no-op
+	// there (upstream quirks.reasoningAliasFields).
+	req.LiftReasoningAliases = true
 	// opencode Chat Completions path: same conceal + restore of tool names.
 	body, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(body, false, isOpenCodeAutoToolChoiceModel(cleanModel))
 	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 	w = NewToolNameRestoringWriter(w, toolNameMap)
+	// Strict models wrap caller tool calls as execute/CALL_TOOL; hand the
+	// client back its own spelling. The bridge buffers whole SSE lines, so it
+	// may only wrap a streaming response — the non-streaming lane rewrites
+	// the re-aggregated JSON instead (bridgeOpenCodeExecuteToolCallsJSON).
+	if req.IsStream {
+		w = NewOpenCodeExecuteBridgeWriter(w)
+	}
 
 	// Upstream OpenCode free tier strictly requires stream=true.
 	// Non-streaming calls are blocked with 403 FreeTierError.
@@ -714,6 +734,14 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		reqMap["stream"] = true
 		if cleanModel != "" {
 			reqMap["model"] = cleanModel
+		}
+		// The free backend validates reasoning_effort against the plain
+		// OpenAI enum and answers 400 "Invalid option" for "auto", which
+		// adaptive thinking (Claude Code's thinking:{type:"adaptive"})
+		// arrives as. Omitting it lets the upstream pick its own default,
+		// which is what adaptive means.
+		if v, ok := reqMap["reasoning_effort"].(string); ok && v == "auto" {
+			delete(reqMap, "reasoning_effort")
 		}
 		// Deterministic marshaling keeps the serialized request prefix
 		// stable across turns, which DeepSeek's prefix prompt cache
@@ -731,17 +759,21 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	} else {
 		cfg.BaseURL = opencodeChatURL(cfg.BaseURL)
 	}
-	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, opencodeSessionHint(req, true), true)
+	baseHeaders := cfg.StaticHeaders
+	hint := opencodeSessionHint(req, true)
+	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, hint, true)
 
 	ctx := req.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	resp, err := forwardOpenCode(ctx, func() (*http.Response, error) {
+	resp, err := forwardOpenCodeRotating(ctx, func() (*http.Response, error) {
 		return forwardOpencodeRequest(ctx, req.Client, &cfg, apiKey, body, true)
 	}, func() (*http.Response, error) {
 		return forwardOpencodeRequestDirect(ctx, &cfg, apiKey, body, true)
-	})
+	}, rotateOpencodeStableSession(opencodeStableSessionKey(req, true), hint, func(session string) {
+		cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(baseHeaders, session, true)
+	}))
 	if err != nil {
 		return fmt.Errorf("ForwardOpencode: %w", err)
 	}
@@ -762,6 +794,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	if converted, ok := sseToOpenAIJSON(data); ok {
 		data = converted
 	}
+	data = bridgeOpenCodeExecuteToolCallsJSON(data)
 	return jsonResponse(req.Ctx, w, bytes.NewReader(data), req.TranslateResp, req.ResponseBuf)
 }
 
@@ -1330,7 +1363,7 @@ func normalizeClaudeBlocks(c any) []any {
 // plus any Muse Spark model (upstream isMuseSparkModel:
 // /^muse[-_]?spark(?:$|[-_:.\s])/i), so future free Spark ids keep the
 // Responses lane without a code change. Paid lanes must not share this
-// predicate — opencode-go has its own (isOpencodeGoResponsesModel).
+// predicate — opencode-go routes on the catalog (goTargetFormat).
 func isOpencodeResponsesModel(model string) bool {
 	base := model
 	if parenIdx := strings.IndexByte(base, '('); parenIdx != -1 {
@@ -1352,15 +1385,22 @@ func isOpencodeResponsesModel(model string) bool {
 	return false
 }
 
-// isOpencodeGoResponsesModel preserves the paid opencode-go lane rule exactly
-// as it was before the v2 free-tier port: go models route on the broader
-// predicate and must never follow the free executor's narrowing.
-func isOpencodeGoResponsesModel(model string) bool {
-	base := model
-	if parenIdx := strings.IndexByte(base, '('); parenIdx != -1 {
-		base = base[:parenIdx]
+// goTargetFormat reports which opencode-go endpoint a request must travel on,
+// the paid sibling of zenTargetFormat and museTargetFormat: a client that
+// already speaks a lane the model serves is forwarded on it, anything else is
+// translated into the model's target lane (open-sse/handlers/chatCore.js
+// resolveTransport). deepseek-v4* serves /responses next to chat, so a
+// Responses client reaches it with nested reasoning while a Chat client keeps
+// the deepseek thinking shape on /chat/completions.
+func goTargetFormat(ctx context.Context, model string) string {
+	formats, declared := providers.GetModelFormats("opencode-go", model)
+	if !declared {
+		return providers.FormatOpenAI
 	}
-	return strings.Contains(base, "muse-spark") || base == "grok-4.6" || base == "gpt-5.6-luna"
+	if formats.SupportsFormat(clientFormatFor(ctx)) {
+		return clientFormatFor(ctx)
+	}
+	return formats.TargetFormat
 }
 
 func deriveOpencodeSession(rawSession, clientTool, connID string) string {
@@ -1465,7 +1505,9 @@ func museSparkCleanModel(model string) string {
 }
 
 // normalizeMuseSparkResponsesBody reshapes an OpenAI Responses body for the
-// Muse Spark lane. model is the id exactly as the client sent it (prefix and
+// opencode /responses lanes: the Muse Spark ids it is named for, plus every
+// other model the go lane routes there (deepseek-v4*, grok-4.x, gpt-*-luna).
+// model is the id exactly as the client sent it (prefix and
 // "(level)" override included) so the request modifier survives the cleaning.
 func normalizeMuseSparkResponsesBody(body []byte, model string) ([]byte, error) {
 	cleanModel := museSparkCleanModel(model)
@@ -1474,20 +1516,37 @@ func normalizeMuseSparkResponsesBody(body []byte, model string) ([]byte, error) 
 	if err := json.Unmarshal(body, &m); err != nil {
 		return body, nil
 	}
+	// Reasoning folds into the nested Responses shape the way
+	// applyZenResponsesReasoning does for zen: an explicit "none" has no nested
+	// equivalent and is expressed upstream by removing reasoning entirely —
+	// sending effort "none" instead asks a model to think at the lowest level
+	// rather than to not think, which is a different (and billable) request.
 	if rEffort, ok := m["reasoning_effort"].(string); ok {
-		if rEffort == "max" {
-			rEffort = "xhigh"
-		}
-		m["reasoning"] = map[string]any{
-			"effort":  rEffort,
-			"summary": "auto",
-		}
 		delete(m, "reasoning_effort")
-	} else if rMap, ok := m["reasoning"].(map[string]any); ok {
-		if eff, ok := rMap["effort"].(string); ok && eff == "max" {
-			rMap["effort"] = "xhigh"
+		if strings.EqualFold(strings.TrimSpace(rEffort), "none") {
+			delete(m, "reasoning")
+		} else if rEffort != "" {
+			if rEffort == "max" {
+				rEffort = "xhigh"
+			}
+			m["reasoning"] = map[string]any{
+				"effort":  rEffort,
+				"summary": "auto",
+			}
 		}
-		rMap["summary"] = "auto"
+	} else if rMap, ok := m["reasoning"].(map[string]any); ok {
+		if eff, ok := rMap["effort"].(string); ok {
+			if strings.EqualFold(strings.TrimSpace(eff), "none") {
+				delete(m, "reasoning")
+			} else if eff == "max" {
+				rMap["effort"] = "xhigh"
+			}
+		}
+		if _, still := m["reasoning"]; still {
+			if rMap["summary"] == nil {
+				rMap["summary"] = "auto"
+			}
+		}
 	} else if effort := museSparkEffortSuffix(model); effort != "" {
 		// Fill-only: an explicit body effort already won above, so the model-id
 		// override never silently replaces what the caller asked for in the body.
@@ -1553,6 +1612,11 @@ func forwardOpencodeGoFree(w http.ResponseWriter, req *Request, cleanModel strin
 	body, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(body, false, isOpenCodeAutoToolChoiceModel(cleanModel))
 	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 	w = NewToolNameRestoringWriter(w, toolNameMap)
+	// Same execute/CALL_TOOL bridge as the free chat lane: streaming only —
+	// the non-streaming lane rewrites the re-aggregated JSON below.
+	if req.IsStream {
+		w = NewOpenCodeExecuteBridgeWriter(w)
+	}
 
 	var reqMap map[string]any
 	if err := json.Unmarshal(body, &reqMap); err == nil {
@@ -1573,17 +1637,21 @@ func forwardOpencodeGoFree(w http.ResponseWriter, req *Request, cleanModel strin
 	} else {
 		cfg.BaseURL = opencodeGoInferenceBase(cfg.BaseURL) + "/chat/completions"
 	}
-	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, opencodeSessionHint(req, true), true)
+	baseHeaders := cfg.StaticHeaders
+	hint := opencodeSessionHint(req, true)
+	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, hint, true)
 
 	ctx := req.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	resp, err := forwardOpenCode(ctx, func() (*http.Response, error) {
+	resp, err := forwardOpenCodeRotating(ctx, func() (*http.Response, error) {
 		return forwardOpencodeRequest(ctx, req.Client, &cfg, "public", body, true)
 	}, func() (*http.Response, error) {
 		return forwardOpencodeRequestDirect(ctx, &cfg, "public", body, true)
-	})
+	}, rotateOpencodeStableSession(opencodeStableSessionKey(req, true), hint, func(session string) {
+		cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(baseHeaders, session, true)
+	}))
 	if err != nil {
 		return fmt.Errorf("ForwardOpencodeGo (free lane): %w", err)
 	}
@@ -1604,6 +1672,7 @@ func forwardOpencodeGoFree(w http.ResponseWriter, req *Request, cleanModel strin
 	if converted, ok := sseToOpenAIJSON(data); ok {
 		data = converted
 	}
+	data = bridgeOpenCodeExecuteToolCallsJSON(data)
 	return jsonResponse(req.Ctx, w, bytes.NewReader(data), req.TranslateResp, req.ResponseBuf)
 }
 
@@ -1691,7 +1760,7 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 		return forwardOpencodeGoGemini(w, req, cleanModel, sessionHeader)
 	}
 
-	if isOpencodeGoResponsesModel(cleanModel) {
+	if goTargetFormat(reqCtx(req), cleanModel) == providers.FormatOpenAIResponses {
 		// Route through Responses API format: https://opencode.ai/zen/go/v1/responses (#3819, #3820, v0.5.75)
 		transformedBody, _, err := buildResponsesBody(req.Body)
 		if err != nil {

@@ -92,6 +92,8 @@ func SetupRoutes(r interface {
 	r.Get("/api/media-providers/tts/deepgram/voices", mediaH.HandleAudioVoices)
 	r.Get("/api/media-providers/tts/elevenlabs/voices", mediaH.HandleAudioVoices)
 	r.Post("/audio/transcriptions", mediaH.HandleAudioTranscriptions)
+	r.Post("/audio/sound-generation", mediaH.HandleAudioSoundGeneration)
+	r.Post("/v1/audio/sound-generation", mediaH.HandleAudioSoundGeneration)
 	r.Post("/videos/generations", mediaH.HandleVideoGenerations)
 	r.Post("/videos/edits", mediaH.HandleVideoEdits)
 	r.Post("/videos/extensions", mediaH.HandleVideoExtensions)
@@ -614,6 +616,12 @@ func SetupServerRouter(r chi.Router, repo *db.Repo, ts *TokenSaverConfig) *chat.
 		r.Get("/api/cli-tools/hermes-settings", hermesH.HandleGet)
 		r.Post("/api/cli-tools/hermes-settings", hermesH.HandlePost)
 		r.Delete("/api/cli-tools/hermes-settings", hermesH.HandleDelete)
+		// pi writes the same kind of file Hermes does — a CLI agent's own
+		// config on the operator's disk — so it rides the same dashboard group.
+		piH := media.NewPiHandler(repo)
+		r.Get("/api/cli-tools/pi-settings", piH.HandleGet)
+		r.Post("/api/cli-tools/pi-settings", piH.HandlePost)
+		r.Delete("/api/cli-tools/pi-settings", piH.HandleDelete)
 	})
 
 	SetupConsoleLogRoutes(r, repo)

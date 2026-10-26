@@ -89,6 +89,8 @@ export interface ModelCaps {
   vision: boolean
   search: boolean
   reasoning: boolean
+  /** Uncensored / unrestricted — accepts prompts a filtered model refuses. */
+  jailbreak: boolean
   contextWindow: number
   maxOutput: number
   /** Selectable thinking levels, or empty for a model without reasoning. */

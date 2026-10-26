@@ -21,6 +21,7 @@ type ProviderConfig struct {
 	VideoURL      string            // override /videos/generations endpoint
 	VoicesURL     string            // override /audio/voices listing endpoint
 	SystemoneURL  string            // override /systemone endpoint (System One structured evaluation)
+	SystemonePath string            // registry path a saved host override is joined with (empty: override is a full URL)
 	FetchURL      string            // override /web/fetch endpoint (Jina, Firecrawl, etc.)
 	FetchMethod   string            // HTTP method for fetch: GET or POST (default POST)
 	UsageURL      string            // override /usage endpoint (quota tracker)
@@ -40,6 +41,11 @@ type ProviderConfig struct {
 	// still resolve it and requests still route to it. The MMF entries use it
 	// because they exist to serve traffic, not to be chosen.
 	Hidden bool
+
+	// RequireClaudeToolType marks providers whose Anthropic-compatible Messages
+	// endpoint strictly rejects tool declarations that omit the `type` field
+	// (e.g. MiniMax). When true, DefaultClaudeToolType will inject `type: "custom"`.
+	RequireClaudeToolType bool
 }
 
 // Bedrock protocol constants. Region is substituted per request by the executor, so the
@@ -523,16 +529,23 @@ var KnownProviders = map[string]ProviderConfig{
 	// an OpenAI-shaped error body. That is the lane ForwardOpenAI already speaks,
 	// so the fix needs no native-translator port.
 	"ollama": {
-		BaseURL:     "https://ollama.com/v1/chat/completions",
-		AuthHeader:  "Authorization",
-		AuthScheme:  "bearer",
-		FetchURL:    "https://ollama.com/api/web_fetch",
-		FetchMethod: "POST",
+		BaseURL:      "https://ollama.com/v1/chat/completions",
+		AuthHeader:   "Authorization",
+		AuthScheme:   "bearer",
+		FetchURL:     "https://ollama.com/api/web_fetch",
+		FetchMethod:  "POST",
+		SystemoneURL: "https://ollama.com/v1/systemone",
 	},
 	"siliconflow": {
 		BaseURL:    "https://api.siliconflow.com/v1/chat/completions",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
+	},
+	"sensenova": {
+		BaseURL:    "https://token.sensenova.cn/v1/chat/completions",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+		ImageURL:   "https://token.sensenova.cn/v1/images/generations",
 	},
 	"cloudflare-ai": {
 		BaseURL:    "https://api.cloudflare.com/client/v4/accounts/" + os.Getenv("CLOUDFLARE_ACCOUNT_ID") + "/ai/v1/chat/completions",
@@ -716,9 +729,10 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthScheme: "bearer",
 	},
 	"minimax": {
-		BaseURL:    "https://api.minimax.io/v1/chat/completions",
-		AuthHeader: "Authorization",
-		AuthScheme: "bearer",
+		BaseURL:               "https://api.minimax.io/v1/chat/completions",
+		AuthHeader:            "Authorization",
+		AuthScheme:            "bearer",
+		RequireClaudeToolType: true,
 	},
 	"kimi": {
 		BaseURL:    "https://api.kimi.com/coding/v1/chat/completions",
@@ -762,11 +776,15 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader:    "Authorization",
 		AuthScheme:    "bearer",
 		LocalByDesign: true,
+		SystemoneURL:  "http://localhost:11434/v1/systemone",
+		// Saved host (providerSpecificData.baseUrl) is joined with this path.
+		SystemonePath: "/v1/systemone",
 	},
 	"minimax-cn": {
-		BaseURL:    "https://api.minimaxi.com/v1/chat/completions",
-		AuthHeader: "Authorization",
-		AuthScheme: "bearer",
+		BaseURL:               "https://api.minimaxi.com/v1/chat/completions",
+		AuthHeader:            "Authorization",
+		AuthScheme:            "bearer",
+		RequireClaudeToolType: true,
 	},
 	// MiniMax Code (mcode) — the coding-subscription credits lane, served as a
 	// provider. Anthropic Messages on MiniMax's agent gateway, signed in with
@@ -780,10 +798,11 @@ var KnownProviders = map[string]ProviderConfig{
 	// (AGENTS.md §3.A). Port of upstream decolua/9router registry
 	// minimax-code.js / minimax-code-global.js.
 	"minimax-code": {
-		BaseURL:    "https://agent.minimax.cn/mavis/api/v1/llm/v1/messages",
-		AuthHeader: "Authorization",
-		AuthScheme: "bearer",
-		Format:     "claude",
+		BaseURL:               "https://agent.minimax.cn/mavis/api/v1/llm/v1/messages",
+		AuthHeader:            "Authorization",
+		AuthScheme:            "bearer",
+		Format:                "claude",
+		RequireClaudeToolType: true,
 		StaticHeaders: map[string]string{
 			"User-Agent":       "MiniMaxAgent",
 			"X-Mavis-Agent-Id": "main",
@@ -793,10 +812,11 @@ var KnownProviders = map[string]ProviderConfig{
 		},
 	},
 	"minimax-code-global": {
-		BaseURL:    "https://agent.minimax.io/mavis/api/v1/llm/v1/messages",
-		AuthHeader: "Authorization",
-		AuthScheme: "bearer",
-		Format:     "claude",
+		BaseURL:               "https://agent.minimax.io/mavis/api/v1/llm/v1/messages",
+		AuthHeader:            "Authorization",
+		AuthScheme:            "bearer",
+		Format:                "claude",
+		RequireClaudeToolType: true,
 		StaticHeaders: map[string]string{
 			"User-Agent":        "MiniMaxAgent",
 			"X-Mavis-Agent-Id":  "main",
@@ -976,10 +996,15 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
+	// Perplexity Web (Pro/Max): cookie site with no executor behind it yet —
+	// upstream parks it the same way (serviceKinds: [], "the code and saved
+	// connections remain intact"), so the cookie probe and any stored
+	// connection keep working while it stays out of the lists a person scans.
 	"perplexity-web": {
 		BaseURL:    "https://www.perplexity.ai/rest/sse/perplexity_ask",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
+		Hidden:     true,
 	},
 	"playht": {
 		BaseURL:    "https://api.play.ht/api/v2/tts/stream",
@@ -1070,6 +1095,22 @@ var KnownProviders = map[string]ProviderConfig{
 		BaseURL:    "https://grok.com/rest/app-chat/conversations/new",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
+	},
+	// UC web (uncensored.com persona): image + video over the un-metered
+	// internal API; the credential is the full uncensored.com Cookie header
+	// and every request mints a short-lived Clerk session from __client.
+	"uc-web": {
+		BaseURL:    "https://internal.chatuncensored.ai",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+	},
+	// veoaifree.com free tier: WordPress AJAX, no credentials (~6 requests
+	// per hour per IP); image and video lanes are executor-driven.
+	"veoaifree-web": {
+		BaseURL:    "https://veoaifree.com",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+		NoAuth:     true,
 	},
 
 	"sdwebui": {

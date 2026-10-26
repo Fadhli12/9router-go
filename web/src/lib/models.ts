@@ -122,6 +122,7 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "selfhosted-stt": "selfhosted-stt",
   "selfhosted-tts": "selfhosted-tts",
   "siliconflow": "siliconflow",
+  "sensenova": "sensenova",
   "stability-ai": "stability",
   "tencent": "hunyuan",
   "together": "together",
@@ -1034,6 +1035,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     }
   ],
   "cx": [
+    {
+      "id": "transcribe",
+      "name": "Codex Transcription"
+    },
     {
       "id": "gpt-6.1-sol",
       "name": "GPT 6.1 Sol",
@@ -2358,11 +2363,11 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     },
     {
       "id": "gemini-3-flash-preview",
-      "name": "Gemini 3 Flash"
+      "name": "Gemini 3 Flash Preview"
     },
     {
       "id": "gemini-3.1-pro-preview",
-      "name": "Gemini 3.1 Pro"
+      "name": "Gemini 3.1 Pro Preview"
     },
     {
       "id": "grok-code-fast-1",
@@ -2370,11 +2375,11 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     },
     {
       "id": "oswe-vscode-prime",
-      "name": "Raptor Mini"
+      "name": "OSWE VSCode Prime"
     },
     {
       "id": "goldeneye-free-auto",
-      "name": "GoldenEye"
+      "name": "Goldeneye Free Auto"
     },
     {
       "id": "text-embedding-3-small",
@@ -2540,6 +2545,22 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "grok-4.2",
       "name": "Grok 4.2 (4.20 Beta)"
+    },
+    {
+      "id": "grok-4.20",
+      "name": "Grok 4.20"
+    },
+    {
+      "id": "grok-4.20-beta",
+      "name": "Grok 4.20 Beta"
+    },
+    {
+      "id": "grok-image",
+      "name": "Grok Imagine Image"
+    },
+    {
+      "id": "grok-video",
+      "name": "Grok Imagine Video"
     }
   ],
   "groq": [
@@ -3603,6 +3624,21 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "deepseek-v4.1-flash:cloud",
       "name": "DeepSeek V4.1 Flash (Cloud)"
+    },
+    {
+      "id": "clef",
+      "name": "Clef",
+      "kind": "systemone"
+    },
+    {
+      "id": "clef-flash",
+      "name": "Clef Flash",
+      "kind": "systemone"
+    },
+    {
+      "id": "clef:cloud",
+      "name": "Clef (Cloud)",
+      "kind": "systemone"
     }
   ],
   "openai": [
@@ -4741,6 +4777,14 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "id": "mmodel",
       "name": "MiniMax-M3"
     },
+    {
+      "id": "smodel",
+      "name": "Sonus"
+    },
+    {
+      "id": "cmodel",
+      "name": "Cantus"
+    },
   ],
   "qd": [
     {
@@ -4806,6 +4850,14 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "mmodel",
       "name": "MiniMax-M3"
+    },
+    {
+      "id": "smodel",
+      "name": "Sonus"
+    },
+    {
+      "id": "cmodel",
+      "name": "Cantus"
     }
   ],
   "recraft": [
@@ -4878,6 +4930,54 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
         "size"
       ],
       "kind": "image"
+    }
+  ],
+  "sensenova": [
+    {
+      "id": "sensenova-6.8-flash-lite",
+      "name": "SenseNova 6.8 Flash Lite"
+    },
+    {
+      "id": "sensenova-u1.5-lite",
+      "name": "SenseNova U1.5 Lite",
+      "kind": "image",
+      "params": [
+        "n",
+        "size",
+        "output_format",
+        "response_format",
+        "watermark",
+        "prompt_extend"
+      ]
+    },
+    {
+      "id": "sensenova-u1.5-fast",
+      "name": "SenseNova U1.5 Fast",
+      "kind": "image",
+      "params": [
+        "n",
+        "size",
+        "output_format",
+        "response_format",
+        "watermark",
+        "prompt_extend"
+      ]
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash"
+    },
+    {
+      "id": "deepseek-flash",
+      "name": "DeepSeek V4.1 Flash"
+    },
+    {
+      "id": "glm-5.2",
+      "name": "GLM-5.2"
+    },
+    {
+      "id": "kimi-k3",
+      "name": "Kimi K3"
     }
   ],
   "siliconflow": [
@@ -5589,6 +5689,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     }
   ],
   "xai": [
+    {
+      "id": "grok-4.7",
+      "name": "Grok 4.7"
+    },
     {
       "id": "grok-4.6",
       "name": "Grok 4.6"

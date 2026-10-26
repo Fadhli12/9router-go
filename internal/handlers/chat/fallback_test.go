@@ -267,7 +267,6 @@ func TestHandleMessagesComboFallback_RetriesOnceOnBoundedRetryAfter(t *testing.T
 			// inside brief429RetryTolerance — past that the account is out of
 			// quota and re-hitting it deepens the upstream's backoff — so the
 			// bound, not the old 8s cap, is what this covers.
-			ra := time.Now().Add(time.Second).Format(time.RFC3339)
 			w.WriteHeader(http.StatusTooManyRequests)
 			w.Write([]byte(retryAfterBody(time.Now(), time.Second)))
 			return
