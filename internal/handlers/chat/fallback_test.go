@@ -268,6 +268,11 @@ func TestHandleMessagesComboFallback_RetriesOnceOnBoundedRetryAfter(t *testing.T
 			// quota and re-hitting it deepens the upstream's backoff — so the
 			// bound, not the old 8s cap, is what this covers.
 			w.WriteHeader(http.StatusTooManyRequests)
+			// The wait travels as a duration, not as an instant: an instant
+			// decays while the router processes the failure, and on a loaded
+			// machine the wait can be gone before the router reads it. Then
+			// the second pass never runs and this test fails on the
+			// machine's speed instead of on the behaviour.
 			w.Write([]byte(deltaRetryAfterBody(time.Second)))
 			return
 		}

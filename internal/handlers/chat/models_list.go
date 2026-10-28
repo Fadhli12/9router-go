@@ -11,6 +11,7 @@ import (
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlers/shared"
 	"9router/proxy/internal/models"
+	"9router/proxy/internal/pricing"
 	"9router/proxy/internal/providers"
 )
 
@@ -31,8 +32,9 @@ type ModelInfoObject struct {
 	// the client would read as a real limit. Upstream emits them on combo
 	// entries too (comboSeatLimits in src/app/api/v1/models/route.js), taking
 	// the smallest window in the combo's seat tree.
-	ContextLength       *int `json:"context_length,omitempty"`
-	MaxCompletionTokens *int `json:"max_completion_tokens,omitempty"`
+	ContextLength       *int                       `json:"context_length,omitempty"`
+	MaxCompletionTokens *int                       `json:"max_completion_tokens,omitempty"`
+	Pricing             *pricing.OpenRouterPricing `json:"pricing,omitempty"`
 	// InputModalities / OutputModalities are the flat modality arrays that
 	// OmniRoute and other clients inspect to decide whether image attachment
 	// is permitted. Without them a client defaults image input to false.
@@ -561,10 +563,11 @@ func (h *ChatHandler) buildModelsListForMode(
 
 	customs := h.customModelsByProvider()
 	aliases := h.modelAliasTargets()
+	nodePrefixes := h.providerNodePrefixMap()
 
 	for _, provID := range order {
 		conn := firstPerProvider[provID]
-		data = h.appendConnectionModels(ctx, data, seen, conn, provID, customs, aliases, isDisabled)
+		data = h.appendConnectionModels(ctx, data, seen, conn, provID, customs, aliases, nodePrefixes, isDisabled)
 	}
 	// 4. Connected mode additionally publishes the noAuth registry providers
 	// that have no connection row, mirroring the dashboard picker, which keeps
@@ -590,6 +593,7 @@ func (h *ChatHandler) appendConnectionModels(
 	providerID string,
 	customs map[string][]*db.CustomModel,
 	aliases map[string]string,
+	nodePrefixes map[string]string,
 	isDisabled func(provider, modelID string) bool,
 ) []ModelInfoObject {
 	connData := parseConnectionModelData(conn)
@@ -604,6 +608,15 @@ func (h *ChatHandler) appendConnectionModels(
 		outputAlias = connData.ProviderSpecificData.Prefix
 	case connData.Prefix != "":
 		outputAlias = connData.Prefix
+	case isCompatibleProviderID(providerID):
+		// Older dashboard builds created the connection without copying the
+		// node's prefix into providerSpecificData. The node row still owns the
+		// public alias, so publish that instead of the internal node id. The
+		// disabled-model gate below checks staticAlias as well, which keeps
+		// lists written under the old node-id spelling effective.
+		if prefix := nodePrefixes[providerID]; prefix != "" {
+			outputAlias = prefix
+		}
 	}
 
 	ids := connData.EnabledModels()
@@ -731,6 +744,7 @@ func (h *ChatHandler) appendConnectionModels(
 				Capabilities:        live.Capabilities,
 				ContextLength:       optionalTokenLimit(ctxLen),
 				MaxCompletionTokens: optionalTokenLimit(maxOut),
+				Pricing:             pricing.BuildOpenRouterPricing(outputAlias, modelID),
 			})
 			continue
 		}
@@ -754,6 +768,7 @@ func (h *ChatHandler) appendConnectionModels(
 			MaxCompletionTokens: optionalTokenLimit(maxOut),
 			InputModalities:     inMod,
 			OutputModalities:    outMod,
+			Pricing:             pricing.BuildOpenRouterPricing(outputAlias, modelID),
 		})
 	}
 	return data
@@ -842,6 +857,7 @@ func appendStaticModel(data []ModelInfoObject, seen map[string]bool, alias, mode
 		MaxCompletionTokens: optionalTokenLimit(maxOut),
 		InputModalities:     inMod,
 		OutputModalities:    outMod,
+		Pricing:             pricing.BuildOpenRouterPricing(alias, modelID),
 	})
 }
 
@@ -905,6 +921,7 @@ func (h *ChatHandler) appendLooseCustomModels(
 				MaxCompletionTokens: optionalTokenLimit(maxOut),
 				InputModalities:     inMod,
 				OutputModalities:    outMod,
+				Pricing:             pricing.BuildOpenRouterPricing(prefix, cm.ID),
 			})
 		}
 	}
@@ -1170,6 +1187,20 @@ func (h *ChatHandler) appendCombos(data []ModelInfoObject, seen map[string]bool)
 		contextWindow, maxOutput := comboSeatLimits(index, combo.Name)
 		entry.ContextLength = optionalTokenLimit(contextWindow)
 		entry.MaxCompletionTokens = optionalTokenLimit(maxOutput)
+
+		// Pricing: inherit from first leaf model
+		if combo.Models != "" {
+			var leaves []string
+			if err := json.Unmarshal([]byte(combo.Models), &leaves); err == nil && len(leaves) > 0 {
+				if flattened, err := h.flattenComboModels(leaves); err == nil && len(flattened) > 0 {
+					first := flattened[0]
+					if slash := strings.Index(first, "/"); slash > 0 {
+						entry.Pricing = pricing.BuildOpenRouterPricing(first[:slash], first[slash+1:])
+					}
+				}
+			}
+		}
+
 		data = append(data, entry)
 	}
 	return data
