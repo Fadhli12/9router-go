@@ -736,14 +736,30 @@ func (h *ChatHandler) appendConnectionModels(
 		// {thinking, agentic}). Upstream then uses that block verbatim and
 		// fills the window from the static fallback, so a kiro model reports
 		// context_length from the table default rather than the live payload.
+		//
+		// The block describes the variant, not the model's media support:
+		// kiro leaves Vision unset on every variant it synthesises while zed
+		// states it, so Vision is the union of the live block and the static
+		// table, and the modality arrays derive from that union — the two can
+		// then never disagree. Both blocks are copied because live entries are
+		// shared cache: writing through either pointer corrupts later reads.
 		if hasLive && live.Capabilities != nil {
+			mergedCaps := caps
+			mergedCaps.Vision = caps.Vision || live.Capabilities.Vision
+
+			liveCaps := *live.Capabilities
+			liveCaps.Vision = mergedCaps.Vision
+
+			inMod, outMod := buildModalities(&mergedCaps)
 			data = append(data, ModelInfoObject{
 				ID:                  fullID,
 				Object:              "model",
 				OwnedBy:             outputAlias,
-				Capabilities:        live.Capabilities,
+				Capabilities:        &liveCaps,
 				ContextLength:       optionalTokenLimit(ctxLen),
 				MaxCompletionTokens: optionalTokenLimit(maxOut),
+				InputModalities:     inMod,
+				OutputModalities:    outMod,
 				Pricing:             pricing.BuildOpenRouterPricing(outputAlias, modelID),
 			})
 			continue
