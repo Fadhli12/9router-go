@@ -956,6 +956,49 @@ var providerTokenLimits = map[string]map[string][2]int{
 		"deepseek-v4-pro":     {1000000, 393216},
 		"deepseek-v4.1-flash": {1000000, 393216},
 	},
+
+	// The `*claude-opus*`/`*claude-sonnet*`/`*claude-haiku*` substring row
+	// answers 200000/8192 for every Claude name, which predates 1M-context
+	// general availability: Anthropic serves Opus 4.6 and later, Sonnet 4.6
+	// and later, and Haiku 5.5 with a 1M window by default, no beta header,
+	// 128k max output.
+	//
+	// Only the names Anthropic documents at 1M are listed. claude-sonnet-4
+	// and claude-haiku-4.5 are 200k upstream, so they stay on the substring
+	// row, which is already right for them. Each thinking/agentic variant
+	// needs its own key: the lookup matches the model name exactly, not by
+	// prefix.
+	//
+	// Haiku 5.5 carries a price premium above 100k tokens upstream; the
+	// window is still the full 1M, and billing is not this table's concern.
+	"kiro": {
+		"claude-haiku-5.5":                   {1000000, 128000},
+		"claude-haiku-5.5-thinking":          {1000000, 128000},
+		"claude-haiku-5.5-agentic":           {1000000, 128000},
+		"claude-haiku-5.5-thinking-agentic":  {1000000, 128000},
+		"claude-opus-5.5":                    {1000000, 128000},
+		"claude-opus-5.5-thinking":           {1000000, 128000},
+		"claude-opus-5.5-agentic":            {1000000, 128000},
+		"claude-opus-5.5-thinking-agentic":   {1000000, 128000},
+		"claude-opus-5":                      {1000000, 128000},
+		"claude-opus-5-thinking":             {1000000, 128000},
+		"claude-opus-5-agentic":              {1000000, 128000},
+		"claude-opus-4.6":                    {1000000, 128000},
+		"claude-opus-4.6-thinking":           {1000000, 128000},
+		"claude-opus-4.6-agentic":            {1000000, 128000},
+		"claude-opus-4.6-thinking-agentic":   {1000000, 128000},
+		"claude-sonnet-5.5":                  {1000000, 128000},
+		"claude-sonnet-5.5-thinking":         {1000000, 128000},
+		"claude-sonnet-5.5-agentic":          {1000000, 128000},
+		"claude-sonnet-5.5-thinking-agentic": {1000000, 128000},
+		"claude-sonnet-5":                    {1000000, 128000},
+		"claude-sonnet-5-thinking":           {1000000, 128000},
+		"claude-sonnet-5-agentic":            {1000000, 128000},
+		"claude-sonnet-4.6":                  {1000000, 128000},
+		"claude-sonnet-4.6-thinking":         {1000000, 128000},
+		"claude-sonnet-4.6-agentic":          {1000000, 128000},
+		"claude-sonnet-4.6-thinking-agentic": {1000000, 128000},
+	},
 }
 
 // lookupProviderTokenLimits returns the limits a provider declares for a model,
