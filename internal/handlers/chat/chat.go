@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -192,8 +193,12 @@ func (h *ChatHandler) handleSingleModel(ctx context.Context, w http.ResponseWrit
 		handlerutil.WriteJSONError(cw, http.StatusBadRequest, "failed to parse request body")
 		return
 	}
+	// The client's model id is the jailbreak key; rewrite the body to the
+	// resolved upstream model first, then inject against the original id.
+	requestedModel, _ := upstreamBody["model"].(string)
 	upstreamBody["model"] = modelInfo.Model
 	repairToolCallIDsInMap(upstreamBody)
+	ctx = h.applyJailbreak(ctx, upstreamBody, requestedModel, jailbreakLegIDs(modelInfo.Provider, modelInfo.Model)...)
 	upstreamJSON, err := json.Marshal(upstreamBody)
 	if err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, "failed to marshal upstream request")
@@ -353,8 +358,12 @@ func (h *ChatHandler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 // handleMessagesSingleModel forwards a translated Claude request for a single model.
 func (h *ChatHandler) handleMessagesSingleModel(ctx context.Context, w http.ResponseWriter, translatedReq map[string]any, modelInfo *ModelInfo, isStream bool, translateResponse bool) {
 	cw := newCommittedResponseWriter(w)
+	// The client's model id is the jailbreak key; rewrite the body to the
+	// resolved upstream model first, then inject against the original id.
+	requestedModel, _ := translatedReq["model"].(string)
 	translatedReq["model"] = modelInfo.Model
 	repairToolCallIDsInMap(translatedReq)
+	ctx = h.applyJailbreak(ctx, translatedReq, requestedModel, jailbreakLegIDs(modelInfo.Provider, modelInfo.Model)...)
 	finalBody, err := json.Marshal(translatedReq)
 	if err != nil {
 		handlerutil.WriteJSONError(cw, http.StatusInternalServerError, "failed to marshal translated request")
@@ -653,35 +662,67 @@ func (h *ChatHandler) HandleModelsByKind(w http.ResponseWriter, r *http.Request)
 	var data []map[string]any
 	now := time.Now().Unix()
 
-	for id, cfg := range providers.KnownProviders {
-		var match bool
-		switch kind {
-		case "image":
-			match = cfg.ImageURL != ""
-		case "tts":
-			match = cfg.TTSURL != ""
-		case "stt":
-			match = cfg.STTURL != ""
-		case "systemone":
-			match = cfg.SystemoneURL != ""
-		case "embedding":
-			match = strings.Contains(cfg.BaseURL, "/embeddings")
-		case "web":
-			match = false
-		case "image-to-text":
-			match = true
+	// A web provider is the search/fetch lane itself, so upstream publishes one
+	// entry per lane — `<alias>/search` when the provider has a searchConfig and
+	// `<alias>/fetch` when it has a fetchConfig (src/app/api/v1/models/route.js
+	// :612-631). Answering `match = false` for the whole kind left the listing
+	// empty and every web client without a model to call.
+	if kind == "web" {
+		for id, cfg := range providers.KnownProviders {
+			alias := providers.GetProviderAlias(id)
+			if cfg.SearchURL != "" {
+				data = append(data, map[string]any{
+					"id":       alias + "/search",
+					"object":   "model",
+					"kind":     "webSearch",
+					"owned_by": alias,
+					"endpoint": "/v1/search",
+					"created":  now,
+				})
+			}
+			if cfg.FetchURL != "" {
+				data = append(data, map[string]any{
+					"id":       alias + "/fetch",
+					"object":   "model",
+					"kind":     "webFetch",
+					"owned_by": alias,
+					"endpoint": "/v1/web/fetch",
+					"created":  now,
+				})
+			}
 		}
-		if !match {
-			continue
-		}
-		data = append(data, map[string]any{
-			"id":       id,
-			"object":   "model",
-			"kind":     kind,
-			"owned_by": id,
-			"endpoint": kindEndpoint(kind),
-			"created":  now,
+		sort.Slice(data, func(i, j int) bool {
+			return data[i]["id"].(string) < data[j]["id"].(string)
 		})
+	} else {
+		for id, cfg := range providers.KnownProviders {
+			var match bool
+			switch kind {
+			case "image":
+				match = cfg.ImageURL != ""
+			case "tts":
+				match = cfg.TTSURL != ""
+			case "stt":
+				match = cfg.STTURL != ""
+			case "systemone":
+				match = cfg.SystemoneURL != ""
+			case "embedding":
+				match = strings.Contains(cfg.BaseURL, "/embeddings")
+			case "image-to-text":
+				match = true
+			}
+			if !match {
+				continue
+			}
+			data = append(data, map[string]any{
+				"id":       id,
+				"object":   "model",
+				"kind":     kind,
+				"owned_by": id,
+				"endpoint": kindEndpoint(kind),
+				"created":  now,
+			})
+		}
 	}
 
 	// Per-key policy applies to the kind listing too — it is the same

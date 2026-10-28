@@ -268,7 +268,7 @@ func TestHandleMessagesComboFallback_RetriesOnceOnBoundedRetryAfter(t *testing.T
 			// quota and re-hitting it deepens the upstream's backoff — so the
 			// bound, not the old 8s cap, is what this covers.
 			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(retryAfterBody(time.Now(), time.Second)))
+			w.Write([]byte(deltaRetryAfterBody(time.Second)))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -300,11 +300,11 @@ func TestHandleMessagesComboFallback_RetriesOnceOnBoundedRetryAfter(t *testing.T
 	rec := httptest.NewRecorder()
 	h.handleMessagesComboFallback(context.Background(), rec, translatedReq, comboModels, "fallback", false, "combo-retry", 0)
 
-	if got := hits.Load(); got != 1 {
-		t.Errorf("expected 1 upstream hit (account parked for 30s, no retry), got %d", got)
+	if got := hits.Load(); got != 2 {
+		t.Errorf("expected 2 upstream hits (1 failure + 1 retry), got %d", got)
 	}
-	if rec.Code != http.StatusTooManyRequests {
-		t.Errorf("expected 429 surfaced to client, got %d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected the retry to succeed, got %d", rec.Code)
 	}
 }
 

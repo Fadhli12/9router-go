@@ -10,6 +10,7 @@ import (
 	"9router/proxy/internal/fetchgate"
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
+	"9router/proxy/internal/providers"
 )
 
 type cachedUsageEntry struct {
@@ -229,6 +230,10 @@ func (h *DashboardHandler) HandleGetUsageProviders(w http.ResponseWriter, r *htt
 	var list []ProviderItem
 	for _, c := range conns {
 		if c.Provider != "" && !seen[c.Provider] {
+			canonical := providers.ResolveAlias(c.Provider)
+			if cfg, ok := providers.KnownProviders[canonical]; ok && cfg.Hidden {
+				continue
+			}
 			seen[c.Provider] = true
 			list = append(list, ProviderItem{
 				ID:   c.Provider,

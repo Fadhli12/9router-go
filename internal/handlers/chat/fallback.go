@@ -258,7 +258,7 @@ func (h *ChatHandler) handleAccountFallback(
 			// Classify error to get dynamic cooldown; provider-scoped rules
 			// key off the canonical provider the request routed to.
 			classification := providers.ClassifyErrorForProvider(ue.StatusCode, errorText, currentBackoffLevel, provider)
-			cooldownSec := retryableCooldownSec(ue.StatusCode, time.Duration(classification.CooldownMs)*time.Millisecond, ue)
+			cooldownSec := retryableCooldownSec(ue.StatusCode, time.Duration(classification.CooldownMs)*time.Millisecond, ue, provider)
 			// A 402 is a spent quota/billing window, not a transient blip. Kiro
 			// resets its monthly request count on the 1st, so park the account
 			// until the next month instead of letting the 2-hour cap re-pick it.
@@ -699,6 +699,26 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	if deduped := translator.DedupeToolsDeepSeek(pipedBody, model); len(deduped) != len(pipedBody) {
 		log.Debug("fallback", "deduped duplicate tool names", "provider", provider, "model", model)
 		pipedBody = deduped
+	}
+	// DeepSeek (and Kimi) thinking mode requires every assistant message echoed
+	// back with a reasoning_content field whenever the request declares tools;
+	// OpenAI-shaped clients drop it when replaying history, and the API answers
+	// 400 ("The reasoning_content in the thinking mode must be passed back to
+	// the API") without it. A placeholder satisfies the validator; reasoning the
+	// client really sent is preserved. Port of upstream
+	// utils/reasoningContentInjector.js, run at the same last-point-before-
+	// dispatch stage as the tool collapse above. Internal provider/model rules
+	// decide applicability (any provider serving a deepseek/kimi model id), so
+	// the call itself is unconditional on non-Claude lanes.
+	if !upstreamClaude {
+		pipedBody = executor.InjectReasoningContent(pipedBody, provider)
+		if provider == "deepseek" {
+			// DeepSeek V4 models think by default and reject required/named
+			// tool_choice while thinking is on ("Thinking mode does not
+			// support this tool_choice"); downgrade the pin to auto so the
+			// turn is served instead of failing with 400.
+			pipedBody = executor.NormalizeDeepSeekThinkingToolChoice(pipedBody)
+		}
 	}
 
 	// Fit tool names exceeding MaxToolNameLength (64 chars) to prevent upstream HTTP 400.

@@ -48,6 +48,23 @@ const brief429RetryTolerance = 2 * time.Second
 // on a 429 names a quota window that waiting out here cannot shorten.
 const comboRetryWaitCap = 8 * time.Second
 
+// deepSeekWebMaxMuteCooldown is the ceiling for a DeepSeek web mute the site
+// announced. Its mute envelope names a real release time, and the generic 2h
+// cap would re-pick the muted account long before the mute ends — which is how
+// a brief mute becomes a longer one.
+const deepSeekWebMaxMuteCooldown = 7 * 24 * time.Hour
+
+// maxCooldownFor returns the ceiling for an announced wait on one provider.
+// Every provider shares maxResetCooldown; deepseek-web is the exception because
+// its enforcement payload carries the actual release time and clamping it
+// defeats the purpose of reporting it.
+func maxCooldownFor(provider string) time.Duration {
+	if provider == "deepseek-web" {
+		return deepSeekWebMaxMuteCooldown
+	}
+	return maxResetCooldown
+}
+
 // comboPassRetryWait returns how long to hold a fully-failed combo pass before
 // repeating it, or 0 when the pass must not be repeated.
 //
@@ -68,15 +85,17 @@ func comboPassRetryWait(earliest time.Duration, rateLimited bool) time.Duration 
 }
 
 // minRateLimitCooldownSec is the shortest an account may be parked after a
-// 429, regardless of what Retry-After or the classifier's own backoff named.
-// A short-lived burst limit (sub-second RetryInfo, or no carrier at all under
-// a low classifier backoff level) used to park the account for only that
-// brief window; the very next fallback pass then re-picked the same account
-// before Google's limiter had actually cleared, so one rate-limited request
-// could repeatedly re-trigger the same account instead of giving it a safe
-// parking period. 30s is long enough that a short burst window has reliably
-// cleared upstream by the time the account is eligible again, while staying
-// well under maxResetCooldown for a named long window.
+// 429 the upstream did not put a number on. With no Retry-After, no RetryInfo
+// and no reset field, the only duration available is the classifier's own
+// backoff — 2s at a low level, and under 1s for some providers. The very next
+// fallback pass then re-picked the same account before the limiter had
+// actually cleared, so one rate-limited request kept re-triggering the same
+// account instead of giving it a safe parking period. 30s is long enough that
+// an unnamed burst window has reliably cleared upstream by the time the
+// account is eligible again, while staying well under maxResetCooldown.
+//
+// It is deliberately NOT applied to a window the upstream did name: see
+// retryableCooldownSec.
 const minRateLimitCooldownSec = 30
 
 // retryableCooldownSec returns how long a failed account must stay out of
@@ -88,25 +107,27 @@ const minRateLimitCooldownSec = 30
 // came back two seconds later and absorbed another failing request), and
 // honour a short one and the bounded second pass below actually finds the
 // account again instead of waiting out a lock it set itself. Every other
-// status keeps the quota-reset reading it has always had. maxResetCooldown
+// status keeps the quota-reset reading it has always had. maxCooldownFor
 // stops a hostile or nonsensical duration from parking an account forever.
 //
-// A 429 is additionally floored at minRateLimitCooldownSec: whatever Retry-After
-// or the classifier named, a rate-limited upstream account (Antigravity /
-// Gemini / Kiro) is never parked for less than 30s, so the next failover pass
-// does not immediately hammer the same still-limited account.
-func retryableCooldownSec(statusCode int, base time.Duration, ue *upstreamError) int {
+// The 30s floor is scoped to the case it was written for: a 429 that carries
+// no wait at all. An upstream that names a short window is telling us when it
+// will serve again, and flooring that to 30s defeats the bounded brief-retry
+// pass (comboPassRetryWait), which only repeats inside brief429RetryTolerance
+// — the pass would wait out a lock this function had just set itself. An
+// unnamed 429 has no such signal to respect, so it takes the floor.
+func retryableCooldownSec(statusCode int, base time.Duration, ue *upstreamError, provider string) int {
 	cooldown := base
 	if statusCode == http.StatusTooManyRequests {
-		if wait, ok := retryAfterWait(ue); ok {
-			cooldown = wait
+		if wait, named := retryAfterWait(ue); named {
+			return ceilSeconds(min(wait, maxCooldownFor(provider)))
 		}
-		return ApplyAccountCooldownFloor(ceilSeconds(min(cooldown, maxResetCooldown)))
+		return ApplyAccountCooldownFloor(ceilSeconds(min(cooldown, maxCooldownFor(provider))))
 	}
 	if dur, ok := extractResetDuration(ue.Body); ok {
 		cooldown = dur
 	}
-	return ceilSeconds(min(cooldown, maxResetCooldown))
+	return ceilSeconds(min(cooldown, maxCooldownFor(provider)))
 }
 
 // ApplyAccountCooldownFloor raises a persisted account-lock cooldown (seconds)
@@ -118,13 +139,14 @@ func retryableCooldownSec(statusCode int, base time.Duration, ue *upstreamError)
 //
 // This is the exported half of the two-tier cooldown design: retryableCooldownSec
 // floors the duration written to LockConnectionModel/LockConnectionRateLimit
-// (what keeps an account OUT of rotation), while comboPassRetryWait keeps
-// deciding the in-turn brief-retry fast path from the un-floored wait returned
-// by retryAfterWait/passRetry.note. Call sites that lock an account outside the
-// chat/combo path (the media handlers, which have no brief-retry pass to
-// preserve) must still floor what they persist, so they call this directly
-// instead of duplicating the ad-hoc `max(cooldownSec, 1)` that let any
-// classifier cooldown under 30s park an account for less than a safe window.
+// (what keeps an account OUT of rotation) for a 429 the upstream put no number
+// on, while comboPassRetryWait keeps deciding the in-turn brief-retry fast path
+// from the un-floored wait returned by retryAfterWait/passRetry.note. Call
+// sites that lock an account outside the chat/combo path (the media handlers,
+// which have no brief-retry pass to preserve) must still floor what they
+// persist, so they call this directly instead of duplicating the ad-hoc
+// `max(cooldownSec, 1)` that let any classifier cooldown under 30s park an
+// account for less than a safe window.
 func ApplyAccountCooldownFloor(cooldownSec int) int {
 	return max(cooldownSec, minRateLimitCooldownSec)
 }

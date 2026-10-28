@@ -7,16 +7,17 @@ import (
 )
 
 // TestRetryableCooldownSec_429Floor verifies the smart cooldown floor for
-// rate-limited (429) upstreams: whatever Retry-After or the classifier's own
-// backoff names, the account is never parked for less than
-// minRateLimitCooldownSec (30s), so a short-lived burst limit cannot re-pick the
-// same still-limited account on the very next failover pass.
+// rate-limited (429) upstreams that named no window: with nothing but the
+// classifier's own backoff to go on, the account is never parked for less than
+// minRateLimitCooldownSec (30s), so an unnamed burst limit cannot re-pick the
+// same still-limited account on the very next failover pass. A window the
+// upstream did name is honoured as given — see retryableCooldownSec.
 func TestRetryableCooldownSec_429Floor(t *testing.T) {
 	tests := []struct {
-		name     string
-		base     time.Duration
-		ue       *upstreamError
-		wantSec  int
+		name    string
+		base    time.Duration
+		ue      *upstreamError
+		wantSec int
 	}{
 		{
 			name:    "classifier backoff below floor is lifted to 30s",
@@ -25,10 +26,10 @@ func TestRetryableCooldownSec_429Floor(t *testing.T) {
 			wantSec: minRateLimitCooldownSec,
 		},
 		{
-			name:    "short Retry-After below floor is lifted to 30s",
+			name:    "short Retry-After is honoured, not lifted: the upstream named it",
 			base:    2 * time.Second,
 			ue:      &upstreamError{StatusCode: http.StatusTooManyRequests, Header: http.Header{"Retry-After": []string{"5"}}},
-			wantSec: minRateLimitCooldownSec,
+			wantSec: 5,
 		},
 		{
 			name:    "no carrier at all still floors at 30s",
@@ -43,9 +44,9 @@ func TestRetryableCooldownSec_429Floor(t *testing.T) {
 			wantSec: 60,
 		},
 		{
-			name:    "RetryInfo delay above floor is honoured",
-			base:    2 * time.Second,
-			ue:      &upstreamError{
+			name: "RetryInfo delay above floor is honoured",
+			base: 2 * time.Second,
+			ue: &upstreamError{
 				StatusCode: http.StatusTooManyRequests,
 				Body:       []byte(`{"error":{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"45s"}]}}`),
 			},
@@ -55,7 +56,7 @@ func TestRetryableCooldownSec_429Floor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := retryableCooldownSec(http.StatusTooManyRequests, tt.base, tt.ue)
+			got := retryableCooldownSec(http.StatusTooManyRequests, tt.base, tt.ue, "")
 			if got != tt.wantSec {
 				t.Errorf("retryableCooldownSec() = %d, want %d", got, tt.wantSec)
 			}
@@ -70,7 +71,7 @@ func TestRetryableCooldownSec_Non429Unchanged(t *testing.T) {
 
 	// No reset carrier: cooldown falls back to the classifier's base, clamped
 	// only by maxResetCooldown (never lifted to 30s).
-	got := retryableCooldownSec(http.StatusInternalServerError, base, &upstreamError{StatusCode: http.StatusInternalServerError})
+	got := retryableCooldownSec(http.StatusInternalServerError, base, &upstreamError{StatusCode: http.StatusInternalServerError}, "")
 	if got != int(ceilSeconds(base)) {
 		t.Errorf("expected non-429 cooldown %d, got %d", int(ceilSeconds(base)), got)
 	}

@@ -791,7 +791,8 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 					continue
 				}
 			}
-			if (endpoint == "/v1/images/generations" || endpoint == "/images/generations") && (subInfo.Provider == "antigravity" || subInfo.Provider == "ag") {
+			if (endpoint == "/v1/images/generations" || endpoint == "/images/generations" ||
+				endpoint == "/v1/images/edits" || endpoint == "/images/edits") && (subInfo.Provider == "antigravity" || subInfo.Provider == "ag") {
 				if err := h.handleAntigravityImage(w, r, body, subInfo); err == nil {
 					return
 				} else {
@@ -801,7 +802,8 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 			}
 			// Gemini image models answer the native generateContent shape, not
 			// the OpenAI images endpoint the generic forward would dial.
-			if (endpoint == "/v1/images/generations" || endpoint == "/images/generations") && (subInfo.Provider == "gemini" || subInfo.Provider == "gm") {
+			if (endpoint == "/v1/images/generations" || endpoint == "/images/generations" ||
+				endpoint == "/v1/images/edits" || endpoint == "/images/edits") && (subInfo.Provider == "gemini" || subInfo.Provider == "gm") {
 				if err := h.handleGeminiImage(w, r, body, subInfo); err == nil {
 					return
 				} else {
@@ -810,7 +812,8 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 				}
 			}
 			// Codex image models are Responses-API models, not an image endpoint.
-			if (endpoint == "/v1/images/generations" || endpoint == "/images/generations") && (subInfo.Provider == "codex" || subInfo.Provider == "cx") {
+			if (endpoint == "/v1/images/generations" || endpoint == "/images/generations" ||
+				endpoint == "/v1/images/edits" || endpoint == "/images/edits") && (subInfo.Provider == "codex" || subInfo.Provider == "cx") {
 				if err := h.handleCodexImage(w, r, body, subInfo); err == nil {
 					return
 				} else {
@@ -866,24 +869,39 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 			}
 
 			finalBody := handlerutil.UpdateModelInBody(body, subInfo.Model)
+			// The endpoint the caller used is a route on this gateway, not a
+			// path on the vendor's host: appending it to BaseURL built URLs the
+			// vendor never serves (tavily got api.tavily.com/search/v1/search,
+			// serper got google.serper.dev/v1/search). Each vendor publishes its
+			// own search/fetch URL and verb in the registry.
 			targetURL := strings.TrimRight(providerCfg.BaseURL, "/") + endpoint
 			method := r.Method
-			// Use provider FetchURL for web/fetch when configured (e.g., ollama cloud)
-			if endpoint == "/v1/web/fetch" && providerCfg.FetchURL != "" {
-				targetURL = providerCfg.FetchURL
-				if providerCfg.FetchMethod != "" {
-					method = providerCfg.FetchMethod
-				} else {
-					method = "POST"
-				}
-				// Ollama cloud expects {"url": "https://..."} only
-				if subInfo.Provider == "ollama" {
-					var tmp struct {
-						URL string `json:"url"`
+			switch endpoint {
+			case "/v1/search":
+				if providerCfg.SearchURL != "" {
+					targetURL = providerCfg.SearchURL
+					method = strings.ToUpper(providerCfg.SearchMethod)
+					if method == "" {
+						method = http.MethodPost
 					}
-					if err := json.Unmarshal(body, &tmp); err == nil && tmp.URL != "" {
-						if b, err := json.Marshal(map[string]string{"url": tmp.URL}); err == nil {
-							finalBody = b
+				}
+			case "/v1/web/fetch":
+				if providerCfg.FetchURL != "" {
+					targetURL = providerCfg.FetchURL
+					if providerCfg.FetchMethod != "" {
+						method = providerCfg.FetchMethod
+					} else {
+						method = "POST"
+					}
+					// Ollama cloud expects {"url": "https://..."} only
+					if subInfo.Provider == "ollama" {
+						var tmp struct {
+							URL string `json:"url"`
+						}
+						if err := json.Unmarshal(body, &tmp); err == nil && tmp.URL != "" {
+							if b, err := json.Marshal(map[string]string{"url": tmp.URL}); err == nil {
+								finalBody = b
+							}
 						}
 					}
 				}
@@ -959,7 +977,8 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-	if (endpoint == "/v1/images/generations" || endpoint == "/images/generations") && (modelInfo.Provider == "antigravity" || modelInfo.Provider == "ag") {
+	if (endpoint == "/v1/images/generations" || endpoint == "/images/generations" ||
+		endpoint == "/v1/images/edits" || endpoint == "/images/edits") && (modelInfo.Provider == "antigravity" || modelInfo.Provider == "ag") {
 		if err := h.handleAntigravityImage(w, r, body, modelInfo); err != nil {
 			handlerutil.WriteJSONError(w, http.StatusBadGateway, err.Error())
 		}
@@ -967,14 +986,16 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 	}
 	// Gemini image models answer the native generateContent shape, not the
 	// OpenAI images endpoint the generic forward would dial.
-	if (endpoint == "/v1/images/generations" || endpoint == "/images/generations") && (modelInfo.Provider == "gemini" || modelInfo.Provider == "gm") {
+	if (endpoint == "/v1/images/generations" || endpoint == "/images/generations" ||
+		endpoint == "/v1/images/edits" || endpoint == "/images/edits") && (modelInfo.Provider == "gemini" || modelInfo.Provider == "gm") {
 		if err := h.handleGeminiImage(w, r, body, modelInfo); err != nil {
 			handlerutil.WriteJSONError(w, http.StatusBadGateway, err.Error())
 		}
 		return
 	}
 	// Codex image models are Responses-API models, not an image endpoint.
-	if (endpoint == "/v1/images/generations" || endpoint == "/images/generations") && (modelInfo.Provider == "codex" || modelInfo.Provider == "cx") {
+	if (endpoint == "/v1/images/generations" || endpoint == "/images/generations" ||
+		endpoint == "/v1/images/edits" || endpoint == "/images/edits") && (modelInfo.Provider == "codex" || modelInfo.Provider == "cx") {
 		if err := h.handleCodexImage(w, r, body, modelInfo); err != nil {
 			handlerutil.WriteJSONError(w, http.StatusBadGateway, err.Error())
 		}
@@ -983,7 +1004,8 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 
 	// UC web: the persona image API needs a minted Clerk session, not a bearer
 	// key, so the generic forward cannot reach it.
-	if (endpoint == "/v1/images/generations" || endpoint == "/images/generations") && (modelInfo.Provider == "uc-web" || modelInfo.Provider == "uc") {
+	if (endpoint == "/v1/images/generations" || endpoint == "/images/generations" ||
+		endpoint == "/v1/images/edits" || endpoint == "/images/edits") && (modelInfo.Provider == "uc-web" || modelInfo.Provider == "uc") {
 		if err := h.handleUcWebImage(w, r, body, modelInfo); err != nil {
 			writeUcMediaError(w, err)
 		}
@@ -1001,7 +1023,8 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 
 	// veoaifree.com free tier: WordPress AJAX with a scraped CSRF nonce, not
 	// an OpenAI-compatible endpoint.
-	if (endpoint == "/v1/images/generations" || endpoint == "/images/generations") && (modelInfo.Provider == "veoaifree-web" || modelInfo.Provider == "veo-free") {
+	if (endpoint == "/v1/images/generations" || endpoint == "/images/generations" ||
+		endpoint == "/v1/images/edits" || endpoint == "/images/edits") && (modelInfo.Provider == "veoaifree-web" || modelInfo.Provider == "veo-free") {
 		if err := h.handleVeoFreeWebImage(w, r, body, modelInfo); err != nil {
 			handlerutil.WriteJSONError(w, http.StatusBadGateway, err.Error())
 		}
@@ -1017,7 +1040,8 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 	// grok.com Imagine: the Cloudflare-gated conversations/new endpoint and
 	// the assets.grok.com download live in the chat executor's transport, so
 	// the lane delegates there (upstream imageProvider useExecutor: true).
-	if (endpoint == "/v1/images/generations" || endpoint == "/images/generations") && (modelInfo.Provider == "grok-web" || modelInfo.Provider == "gw") {
+	if (endpoint == "/v1/images/generations" || endpoint == "/images/generations" ||
+		endpoint == "/v1/images/edits" || endpoint == "/images/edits") && (modelInfo.Provider == "grok-web" || modelInfo.Provider == "gw") {
 		if err := h.handleGrokWebImage(w, r, body, modelInfo); err != nil {
 			handlerutil.WriteJSONError(w, http.StatusBadGateway, err.Error())
 		}
@@ -1162,11 +1186,11 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 
 	var targetURL string
 	switch endpoint {
-	case "/v1/images/generations", "/images/generations":
+	case "/v1/images/generations", "/images/generations", "/v1/images/edits", "/images/edits":
 		if !hasCustomBaseURL && providerCfg.ImageURL != "" {
 			targetURL = providerCfg.ImageURL
 		} else {
-			targetURL = strings.TrimSuffix(baseURL, "/v1") + "/v1/images/generations"
+			targetURL = strings.TrimSuffix(baseURL, "/v1") + endpoint
 		}
 	case "/v1/audio/speech", "/audio/speech":
 		if !hasCustomBaseURL && providerCfg.TTSURL != "" {
