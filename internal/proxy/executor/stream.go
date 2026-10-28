@@ -32,6 +32,7 @@ type CodexStreamState struct {
 	ToolCallArgs      map[string]string
 	ItemIDToIdx       map[string]int
 	ArgsEmitted       map[int]bool
+	Usage             *translator.OpenAIUsage
 }
 
 func ProcessCodexEvent(data string, state *CodexStreamState, responseID string, created int64) []string {
@@ -438,6 +439,9 @@ func ProcessCodexEvent(data string, state *CodexStreamState, responseID string, 
 				chunk["usage"] = chunkUsage
 			}
 		}
+		if u := translator.ParseResponsesUsage([]byte(data)); u != nil {
+			state.Usage = u
+		}
 		b, err := json.Marshal(chunk)
 		if err != nil {
 			return nil
@@ -662,6 +666,8 @@ func handleCodexStream(w http.ResponseWriter, req *Request, upstream io.Reader) 
 
 		if usage := translator.GetStreamUsage(sessionKey); usage != nil {
 			translator.SetUsage(req.Ctx, usage)
+		} else if state.Usage != nil {
+			translator.SetUsage(req.Ctx, state.Usage)
 		} else {
 			translator.SetUsage(req.Ctx, &translator.OpenAIUsage{
 				CompletionTokens: state.OutputLength / 4,
@@ -709,6 +715,9 @@ func handleCodexStream(w http.ResponseWriter, req *Request, upstream io.Reader) 
 		// served empty turn and ended combo fallback on this model, so report
 		// the 502 and let the router move on.
 		return proxy.UpstreamFailure(http.StatusBadGateway, proxy.NoCompletionInStream)
+	}
+	if state.Usage != nil {
+		translator.SetUsage(req.Ctx, state.Usage)
 	}
 	return jsonResponse(req.Ctx, w, bytes.NewReader(converted), req.TranslateResp, req.ResponseBuf)
 }
@@ -803,9 +812,13 @@ func writeSSEFinish(w http.ResponseWriter, flusher http.Flusher, req *Request, s
 		flusher.Flush()
 	}
 
-	translator.SetUsage(req.Ctx, &translator.OpenAIUsage{
-		CompletionTokens: state.OutputLength / 4,
-	})
+	if state.Usage != nil {
+		translator.SetUsage(req.Ctx, state.Usage)
+	} else {
+		translator.SetUsage(req.Ctx, &translator.OpenAIUsage{
+			CompletionTokens: state.OutputLength / 4,
+		})
+	}
 	return nil
 }
 

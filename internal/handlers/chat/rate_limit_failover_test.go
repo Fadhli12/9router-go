@@ -30,8 +30,9 @@ func isoRetryAfterBody(d time.Duration) string {
 	return retryAfterBody(time.Now(), d)
 }
 
-// deltaRetryAfterBody carries the wait as a duration rather than an instant.
-// An instant decays while the router handles the failure, so on a loaded
+// deltaRetryAfterBody carries the wait as a duration instead of an instant.
+//
+// An instant decays while the router processes the failure: on a loaded
 // machine the wait it asks for can be gone before the router reads it — the
 // 429 then looks like one that named no window at all, takes the 30s floor,
 // and a test asserting on the bounded second pass fails on the machine's

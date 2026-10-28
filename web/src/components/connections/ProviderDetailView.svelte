@@ -90,6 +90,7 @@
   import { PauseCircle } from 'lucide-svelte'
   import ProviderHeaderOverridesModal from './ProviderHeaderOverridesModal.svelte'
   import EditCompatibleNodeModal from './EditCompatibleNodeModal.svelte'
+  import ExportKeysModal from './ExportKeysModal.svelte'
   import FreebuffSessionBanner from './FreebuffSessionBanner.svelte'
   import ProviderIcon from './ProviderIcon.svelte'
 
@@ -710,6 +711,7 @@
   let addConnectionError = $state('')
   let showAddCustomModelModal = $state(false)
   let showEditNodeModal = $state(false)
+  let showExportKeysModal = $state(false)
   let showHeaderOverrides = $state(false)
   // Freebuff specific state & session tracking
   let isFreebuff = $derived(
@@ -3264,47 +3266,49 @@
     </button>
 
     <div class="flex min-w-0 items-center justify-between gap-3 sm:gap-4">
-      <div
-        class="flex size-12 shrink-0 items-center justify-center rounded-lg"
-        style="background-color: {providerColor}15;"
-      >
-        <ProviderIcon
-          id={providerId}
-          apiType={selectedNode?.apiType}
-          size="lg"
-          class="border-transparent bg-transparent"
-        />
-      </div>
-
-      <div class="min-w-0">
-        <div class="flex items-center gap-3 flex-wrap">
-          <h1 class="truncate text-2xl font-semibold tracking-tight sm:text-3xl">
-            {providerName}
-          </h1>
-          {#if providerWebsite}
-            <a
-              href={providerWebsite}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="text-xs text-primary hover:underline inline-flex items-center gap-1"
-            >
-              <span class="material-symbols-outlined text-sm">open_in_new</span>
-              {providerWebsiteLabel}
-            </a>
-          {/if}
+      <div class="flex min-w-0 items-center gap-3 sm:gap-4">
+        <div
+          class="flex size-12 shrink-0 items-center justify-center rounded-lg"
+          style="background-color: {providerColor}15;"
+        >
+          <ProviderIcon
+            id={providerId}
+            apiType={selectedNode?.apiType}
+            size="lg"
+            class="border-transparent bg-transparent"
+          />
         </div>
-        <div class="flex items-center gap-2 flex-wrap">
-          <p class="text-text-muted">
-            {providerConnections.length} connection{providerConnections.length === 1 ? '' : 's'}
-          </p>
-          {#if isProviderAllDisabled}
-            <Badge variant="default" size="sm">
-              <span class="flex items-center gap-1">
-                <PauseCircle class="w-3 h-3" />
-                Disabled
-              </span>
-            </Badge>
-          {/if}
+
+        <div class="min-w-0">
+          <div class="flex items-center gap-3 flex-wrap">
+            <h1 class="truncate text-2xl font-semibold tracking-tight sm:text-3xl">
+              {providerName}
+            </h1>
+            {#if providerWebsite}
+              <a
+                href={providerWebsite}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-xs text-primary hover:underline inline-flex items-center gap-1"
+              >
+                <span class="material-symbols-outlined text-sm">open_in_new</span>
+                {providerWebsiteLabel}
+              </a>
+            {/if}
+          </div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <p class="text-text-muted">
+              {providerConnections.length} connection{providerConnections.length === 1 ? '' : 's'}
+            </p>
+            {#if isProviderAllDisabled}
+              <Badge variant="default" size="sm">
+                <span class="flex items-center gap-1">
+                  <PauseCircle class="w-3 h-3" />
+                  Disabled
+                </span>
+              </Badge>
+            {/if}
+          </div>
         </div>
       </div>
 
@@ -3371,6 +3375,14 @@
           >
             <span class="material-symbols-outlined text-[18px]">add</span>
             Add API Key
+          </button>
+          <button
+            type="button"
+            onclick={() => (showExportKeysModal = true)}
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px] w-full sm:w-auto"
+          >
+            <span class="material-symbols-outlined text-[18px]">download</span>
+            Export Keys
           </button>
           <button
             type="button"
@@ -4138,6 +4150,16 @@
         >
           <span class="material-symbols-outlined text-[18px]">add</span>
           Add
+        </button>
+      {/if}
+      {#if providerConnections.length > 0}
+        <button
+          type="button"
+          onclick={() => (showExportKeysModal = true)}
+          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px] w-full sm:w-auto"
+        >
+          <span class="material-symbols-outlined text-[18px]">download</span>
+          Export Keys
         </button>
       {/if}
     </div>
@@ -5386,3 +5408,10 @@
     </div>
   </div>
 </Modal>
+
+<ExportKeysModal
+  isOpen={showExportKeysModal}
+  providerId={providerId}
+  providerName={providerName}
+  onClose={() => (showExportKeysModal = false)}
+/>
