@@ -86,8 +86,18 @@ func DedupRefresh(ctx context.Context, provider, oldToken string, force bool, fn
 	if oldToken == "" || provider == "" {
 		return fn(ctx)
 	}
+	return dedupRefreshKeyed(ctx, cacheKey(provider, oldToken), force, fn)
+}
 
-	key := cacheKey(provider, oldToken)
+// dedupRefreshKeyed is the collapse itself, with the key chosen by the caller.
+// Refresh keys by connection id when it has one: one stored account can carry
+// several refresh tokens over a turn, and keying on the token would let the
+// same account issue a second upstream OAuth call while the first is in flight.
+func dedupRefreshKeyed(ctx context.Context, key string, force bool, fn func(ctx context.Context) (*TokenResult, error)) (*TokenResult, error) {
+	if key == "" {
+		return fn(ctx)
+	}
+
 	if !force {
 		if cached := getCachedRefresh(key); cached != nil {
 			return CopyTokenResult(cached), nil

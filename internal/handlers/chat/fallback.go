@@ -272,6 +272,11 @@ func (h *ChatHandler) handleAccountFallback(
 			if isMonthlyQuotaError(ue.StatusCode, errorText) {
 				cooldownSec = monthlyQuotaCooldownSec(time.Now())
 			}
+			// errMsg is what gets persisted and shown on the connection, so an
+			// upstream that failed with no body still names its status instead
+			// of leaving the operator an empty message. Classification below
+			// keeps reading errorText: it pattern-matches the real body, and a
+			// synthesized string would match nothing.
 			errMsg := errorText
 			if errMsg == "" {
 				errMsg = fmt.Sprintf("%d upstream error", ue.StatusCode)
@@ -286,12 +291,12 @@ func (h *ChatHandler) handleAccountFallback(
 			// (upstream applyErrorState). Only lock if error is account-scoped,
 			// not model-scoped (e.g. 401 auth issues), so unrelated models stay available.
 			if isModelScopedError(ue.StatusCode, errorText, model, ue.Body) {
-				if recErr := h.Repo.RecordConnectionScopedError(connObj.ID, model, "chat", ue.StatusCode, errorText, classification.NewBackoffLevel); recErr != nil {
+				if recErr := h.Repo.RecordConnectionScopedError(connObj.ID, model, "chat", ue.StatusCode, errMsg, classification.NewBackoffLevel); recErr != nil {
 					log.Warn("fallback", "record connection error failed", "conn", connObj.ID, "error", recErr)
 				}
 			} else {
 				until := time.Now().UTC().Add(time.Duration(cooldownSec) * time.Second)
-				if lockErr := h.Repo.LockConnectionRateLimit(connObj.ID, until, classification.NewBackoffLevel, ue.StatusCode, errorText); lockErr != nil {
+				if lockErr := h.Repo.LockConnectionRateLimit(connObj.ID, until, classification.NewBackoffLevel, ue.StatusCode, errMsg); lockErr != nil {
 					log.Warn("fallback", "rate limit lock failed", "conn", connObj.ID, "error", lockErr)
 				}
 			}

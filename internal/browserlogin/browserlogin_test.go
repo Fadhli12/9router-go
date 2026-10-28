@@ -117,8 +117,10 @@ func TestReadSessionNeedsBothSessionCookies(t *testing.T) {
 // DISPLAY/WAYLAND_DISPLAY, but a browser can still open a window if it is
 // handed the socket the session actually listens on.
 func TestResolveDisplayEnvFillsWayland(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("session sockets are a unix concept")
+	// Guarding on Windows alone left this asserting linux-only discovery on
+	// macOS, where resolveDisplayEnv returns the environment untouched.
+	if runtime.GOOS != "linux" {
+		t.Skip("resolveDisplayEnv only discovers session sockets on linux")
 	}
 	t.Setenv("DISPLAY", "")
 	t.Setenv("WAYLAND_DISPLAY", "")
@@ -190,8 +192,8 @@ func TestEnvNamesDisplay(t *testing.T) {
 // process environment but a live Wayland socket, the resolved environment
 // names a display and the launch must proceed to the browser, not refuse.
 func TestResolveDisplayEnvSatisfiesTheLaunchGate(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("session sockets are a unix concept")
+	if runtime.GOOS != "linux" {
+		t.Skip("resolveDisplayEnv only discovers session sockets on linux")
 	}
 	t.Setenv("DISPLAY", "")
 	t.Setenv("WAYLAND_DISPLAY", "")

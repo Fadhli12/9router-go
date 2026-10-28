@@ -276,6 +276,25 @@ func dropCount(total, kept int) int {
 	return total - kept
 }
 
+// The breakdown queries below are best-effort by design: a query that fails
+// leaves its own breakdown absent while the totals still render. Iteration was
+// the gap — a loop that stops early on rows.Err() has already filled part of
+// the result, and a half-filled breakdown is the one outcome that reads as
+// complete. These two drop a partial result so it is absent instead, matching
+// what a failed query already does.
+
+func dropPartialMap[K comparable, V any](rows *sql.Rows, m map[K]V) {
+	if rows.Err() != nil {
+		clear(m)
+	}
+}
+
+func dropPartialSlice[T any](rows *sql.Rows, s *[]T) {
+	if rows.Err() != nil {
+		*s = nil
+	}
+}
+
 func (r *Repo) queryCompressionAnalyticsTable(ctx context.Context, summary *CompressionAnalyticsSummary, win analyticsrange.Window) (*CompressionAnalyticsSummary, error) {
 	whereClause := windowPredicate(win)
 	args := windowArgs(win)
@@ -334,6 +353,7 @@ GROUP BY mode`, whereClause)
 				}
 			}
 		}
+		dropPartialMap(modeRows, summary.ByMode)
 	}
 
 	// By Provider. The blank-provider filter is kept because a run with no
@@ -369,6 +389,7 @@ LIMIT %d`, provWhere, maxBreakdownGroups)
 				}
 			}
 		}
+		dropPartialMap(provRows, summary.ByProvider)
 	}
 	summary.TruncatedProviders = droppedGroups(ctx, r.db, provQuery, args, len(summary.ByProvider))
 
@@ -404,6 +425,7 @@ LIMIT %d`, modelWhere, maxBreakdownGroups)
 				}
 			}
 		}
+		dropPartialMap(modelRows, summary.ByModel)
 	}
 	summary.TruncatedModels = droppedGroups(ctx, r.db, modelQuery, args, len(summary.ByModel))
 
@@ -439,6 +461,7 @@ ORDER BY hr ASC`
 					})
 				}
 			}
+			dropPartialSlice(trendRows, &summary.Trend)
 		}
 	}
 
@@ -494,6 +517,12 @@ LIMIT %d`, whereClause, maxBreakdownGroups)
 					}
 					dynamicUsd += (float64(saved) / 1_000_000.0) * rate
 				}
+			}
+			// A partial sum is worse than none here: it stays positive, so it
+			// would be published as a per-model estimate that is simply too
+			// low. Zeroing it takes the flat-rate fallback below instead.
+			if pRows.Err() != nil {
+				dynamicUsd = 0
 			}
 		}
 		if dynamicUsd > 0 {
@@ -551,6 +580,7 @@ LIMIT 10`, whereClause)
 				summary.TopSavers = append(summary.TopSavers, saver)
 			}
 		}
+		dropPartialSlice(topRows, &summary.TopSavers)
 	}
 
 	return summary, nil
@@ -619,6 +649,7 @@ LIMIT %d`, whereClause, maxBreakdownGroups)
 				}
 			}
 		}
+		dropPartialMap(provRows, summary.ByProvider)
 	}
 	summary.TruncatedProviders = droppedGroups(ctx, r.db, provQuery, args, len(summary.ByProvider))
 
@@ -649,6 +680,7 @@ ORDER BY hr ASC`, whereClause)
 					})
 				}
 			}
+			dropPartialSlice(trendRows, &summary.Trend)
 		}
 	}
 
@@ -706,6 +738,7 @@ LIMIT 10`, whereClause)
 				summary.TopSavers = append(summary.TopSavers, saver)
 			}
 		}
+		dropPartialSlice(uhTopRows, &summary.TopSavers)
 	}
 
 	return summary, nil

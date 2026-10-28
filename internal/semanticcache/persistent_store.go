@@ -138,6 +138,9 @@ FROM semanticCacheEntries`
 			})
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("PersistentLRUStore.Hydrate: %w", err)
+	}
 	return nil
 }
 

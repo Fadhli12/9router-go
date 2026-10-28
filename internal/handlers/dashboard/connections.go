@@ -1195,6 +1195,12 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 					_ = h.Repo.UpdateProviderConnection(conn.ID, connName, conn.Priority, conn.IsActive == 1, string(newBytes))
 
 					status, body, err = validateProbeDo(r.Context(), http.MethodGet, "https://cli-chat-proxy.grok.com/v1/models", headers, nil)
+					// Dropping this err left status at 0, surfacing as
+					// "failed to fetch models: 0" rather than the cause.
+					if err != nil {
+						handlerutil.WriteJSONError(w, http.StatusBadGateway, "failed to fetch grok-cli models after refresh: "+err.Error())
+						return
+					}
 				}
 			}
 		}

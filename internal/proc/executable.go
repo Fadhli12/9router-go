@@ -49,6 +49,19 @@ func resolveImagePath(path string) string {
 	return filepath.Clean(path)
 }
 
+// trimNUL cuts a C string short at its terminator. Both the BSD sysctl and the
+// darwin proc_info syscall hand back a fixed-size NUL-terminated char array, so
+// a raw conversion carries trailing NULs that never compare equal to
+// SelfExecutable's path.
+func trimNUL(s string) string {
+	for i := range len(s) {
+		if s[i] == 0 {
+			return s[:i]
+		}
+	}
+	return s
+}
+
 // sameExecutable reports whether two image paths name the same binary.
 func sameExecutable(a, b string) bool {
 	if a == "" || b == "" {

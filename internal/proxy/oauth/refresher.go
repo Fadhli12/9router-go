@@ -5,8 +5,10 @@ package oauth
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
+	"time"
 )
 
 // TokenResult holds the result of a token refresh.
@@ -26,6 +28,10 @@ type Params struct {
 	RefreshToken string
 	AccessToken  string // current (possibly expired) token
 	Force        bool
+	// ConnectionID identifies the stored connection being refreshed. When set,
+	// it keys deduplication so concurrent refreshes for the same connection
+	// coalesce into one upstream OAuth call.
+	ConnectionID string
 	// ProviderSpecificData carries per-account OAuth material stored at login
 	// time (e.g. Kiro clientId/clientSecret/region for AWS SSO OIDC refresh).
 	ProviderSpecificData map[string]string
@@ -37,6 +43,37 @@ type Refresher func(ctx context.Context, p *Params) (*TokenResult, error)
 var (
 	registryMu sync.RWMutex
 	registry   = map[string]Refresher{}
+
+	// DefaultOAuthTransport pools connections and keeps them alive across token
+	// refreshes. A fresh transport per refresh would redo the TLS handshake with
+	// the same few OAuth endpoints on every expiry, for every account.
+	DefaultOAuthTransport = &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+	}
+
+	// DefaultTransport is an alias for DefaultOAuthTransport.
+	DefaultTransport = DefaultOAuthTransport
+
+	// DefaultOAuthClient is the shared client every refresher gets when the
+	// caller supplies none.
+	DefaultOAuthClient = &http.Client{
+		Transport: DefaultOAuthTransport,
+		Timeout:   30 * time.Second,
+	}
+
+	// DefaultClient is an alias for DefaultOAuthClient.
+	DefaultClient = DefaultOAuthClient
 )
 
 // Register adds a refresher for the given provider.
@@ -64,14 +101,35 @@ func Unregister(provider string) {
 }
 
 // Refresh calls the provider's refresher, or falls back to standard OAuth2.
+// Concurrent calls for the same connection — or for the same provider and
+// refresh token when no connection id is given — collapse into one upstream
+// OAuth call.
 func Refresh(ctx context.Context, p *Params) (*TokenResult, error) {
+	if p == nil {
+		return nil, fmt.Errorf("oauth: params cannot be nil")
+	}
+	// The cancellation is checked before the registry lookup so a caller that
+	// gave up is told so, rather than being told its provider is unknown.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	fn := Get(p.Provider)
 	if fn == nil {
 		return nil, fmt.Errorf("no OAuth refresher for: %s", p.Provider)
 	}
-	return DedupRefresh(ctx, p.Provider, p.RefreshToken, p.Force, func(ctx context.Context) (*TokenResult, error) {
-		return fn(ctx, p)
-	})
+
+	// The client is injected into a copy: the caller's Params is its own, and
+	// a refresher that reads p.Client must still see a usable one.
+	pCopy := *p
+	if pCopy.Client == nil {
+		pCopy.Client = DefaultOAuthClient
+	}
+
+	call := func(ctx context.Context) (*TokenResult, error) { return fn(ctx, &pCopy) }
+	if pCopy.ConnectionID != "" {
+		return dedupRefreshKeyed(ctx, "conn:"+pCopy.ConnectionID, pCopy.Force, call)
+	}
+	return DedupRefresh(ctx, pCopy.Provider, pCopy.RefreshToken, pCopy.Force, call)
 }
 
 // StringMap flattens a connection providerSpecificData blob to the string
