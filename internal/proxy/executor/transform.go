@@ -117,7 +117,7 @@ func rewriteCodexUpstreamModel(body []byte) []byte {
 		return body
 	}
 	m["model"] = upstream
-	out, err := json.Marshal(m)
+	out, err := marshalStable(m)
 	if err != nil {
 		return body
 	}
@@ -144,6 +144,7 @@ func buildResponsesBody(body []byte) ([]byte, string, error) {
 		MaxTokens           *int   `json:"max_tokens,omitempty"`
 		MaxCompletionTokens *int   `json:"max_completion_tokens,omitempty"`
 		MaxOutputTokens     *int   `json:"max_output_tokens,omitempty"`
+		PromptCacheKey      any    `json:"prompt_cache_key,omitempty"`
 	}
 	if err := json.Unmarshal(body, &quickCheck); err == nil && quickCheck.Input != nil {
 		var m map[string]any
@@ -152,6 +153,9 @@ func buildResponsesBody(body []byte) ([]byte, string, error) {
 			m["model"] = cleanModel
 			m["stream"] = true
 			m["store"] = false
+			if quickCheck.PromptCacheKey != nil {
+				m["prompt_cache_key"] = quickCheck.PromptCacheKey
+			}
 			if m["max_output_tokens"] == nil {
 				if quickCheck.MaxCompletionTokens != nil {
 					m["max_output_tokens"] = *quickCheck.MaxCompletionTokens
@@ -261,7 +265,7 @@ func buildResponsesBody(body []byte) ([]byte, string, error) {
 			}
 
 			applyCodexModelShape(m, cleanModel)
-			out, err := json.Marshal(m)
+			out, err := marshalStable(m)
 			return out, cleanModel, err
 		}
 	}
@@ -290,7 +294,8 @@ func buildResponsesBody(body []byte) ([]byte, string, error) {
 		// executor's rule, not the translator's — the Codex backend rewrites
 		// the field in normalizeCodexServiceTier, while the other Responses
 		// providers take it as sent.
-		ServiceTier jsontext.Value `json:"service_tier,omitempty"`
+		ServiceTier    jsontext.Value `json:"service_tier,omitempty"`
+		PromptCacheKey jsontext.Value `json:"prompt_cache_key,omitempty"`
 	}
 	if err := json.Unmarshal(body, &oreq); err != nil {
 		return nil, "", fmt.Errorf("parse request: %w", err)
@@ -529,9 +534,15 @@ func buildResponsesBody(body []byte) ([]byte, string, error) {
 	if oreq.ServiceTier.Kind() != jsontext.KindInvalid {
 		respReq["service_tier"] = oreq.ServiceTier
 	}
+	if oreq.PromptCacheKey.Kind() != jsontext.KindInvalid {
+		var pck any
+		if json.Unmarshal(oreq.PromptCacheKey, &pck) == nil && pck != nil {
+			respReq["prompt_cache_key"] = pck
+		}
+	}
 
 	applyCodexModelShape(respReq, cleanModel)
-	reqBody, err := json.Marshal(respReq)
+	reqBody, err := marshalStable(respReq)
 	return reqBody, cleanModel, err
 }
 

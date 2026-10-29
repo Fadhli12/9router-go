@@ -76,9 +76,29 @@ func ForwardCodex(w http.ResponseWriter, req *Request) error {
 	if err != nil {
 		return fmt.Errorf("transform body: %w", err)
 	}
-	// The ChatGPT Codex backend rejects a max_output_tokens it did not ask
-	// for; every chat-completions client sends one, so drop it here (#48).
-	transformedBody = stripCodexUnsupportedTokenParams(transformedBody)
+
+	// Resolve conversation-stable session_id for Codex prompt caching
+	sessionID := req.SessionID
+	if sessionID == "" {
+		if req.ConnectionID != "" {
+			sessionID = req.ConnectionID
+		} else if req.ConnData != nil {
+			if cid, ok := req.ConnData["connectionId"].(string); ok && cid != "" {
+				sessionID = cid
+			}
+		}
+	}
+	if sessionID == "" {
+		sessionID = "default"
+	}
+
+	// Inject prompt_cache_key for stable Codex prompt caching if not already set
+	transformedBody = injectCodexPromptCacheKey(transformedBody, sessionID)
+
+	responsesLite := codexResponsesLiteBody(transformedBody)
+
+	// The ChatGPT Codex backend rejects unsupported parameters and requires the allowlist
+	transformedBody = stripCodexUnsupportedTokenParams(transformedBody, responsesLite)
 	// Only now that the "(level)" suffix is gone can the catalog id be mapped
 	// to its wire id, so this has to follow the transform rather than precede it.
 	transformedBody = rewriteCodexUpstreamModel(transformedBody)
@@ -87,12 +107,31 @@ func ForwardCodex(w http.ResponseWriter, req *Request) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	resp, err := proxy.ForwardCodex(ctx, req.Client, cfg, req.APIKey, transformedBody, req.IsStream, req.ConnData, codexResponsesLiteBody(transformedBody))
+	resp, err := proxy.ForwardCodex(ctx, req.Client, cfg, req.APIKey, transformedBody, req.IsStream, req.ConnData, responsesLite, sessionID)
 	if err != nil {
 		return fmt.Errorf("ForwardCodex: %w", err)
 	}
 	defer resp.Body.Close()
 	return handleCodexStream(w, req, resp.Body)
+}
+
+func injectCodexPromptCacheKey(body []byte, sessionID string) []byte {
+	if sessionID == "" || sessionID == "default" {
+		return body
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return body
+	}
+	if pck, ok := envelope["prompt_cache_key"].(string); ok && pck != "" {
+		return body
+	}
+	envelope["prompt_cache_key"] = sessionID
+	out, err := marshalStable(envelope)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 // applyCodexCompact routes a compaction request to the codex /compact endpoint
@@ -110,7 +149,7 @@ func applyCodexCompact(cfg *providers.ProviderConfig, body []byte) (*providers.P
 		return cfg, body
 	}
 	delete(envelope, "_compact")
-	out, err := json.Marshal(envelope)
+	out, err := marshalStable(envelope)
 	if err != nil {
 		return cfg, body
 	}
@@ -132,7 +171,7 @@ func ForwardIflow(w http.ResponseWriter, req *Request) error {
 			reqMap["stream_options"] = map[string]any{"include_usage": true}
 		}
 	}
-	reqBody, err := json.Marshal(reqMap)
+	reqBody, err := marshalStable(reqMap)
 	if err != nil {
 		return fmt.Errorf("marshal iflow body: %w", err)
 	}
@@ -179,7 +218,7 @@ func ForwardKimchi(w http.ResponseWriter, req *Request) error {
 
 	CleanKimchiBody(reqBody)
 
-	cleanedBody, err := json.Marshal(reqBody)
+	cleanedBody, err := marshalStable(reqBody)
 	if err != nil {
 		return fmt.Errorf("marshal cleaned body: %w", err)
 	}
@@ -998,7 +1037,7 @@ func ensureMessagesFor(body []byte, provider, model string) []byte {
 	delete(reqMap, "store")
 	delete(reqMap, "reasoning_effort")
 
-	updated, err := json.Marshal(reqMap)
+	updated, err := marshalStable(reqMap)
 	if err != nil {
 		return body
 	}

@@ -49,6 +49,7 @@ stitch-screenshots/
 .omc/
 .omo/
 .smoke-data/
+.superpowers/
 
 # A pasted browser-login credential for scripts/deepseek-web-live.sh. Never
 # belongs in a commit, and `git add -A` would otherwise stage it silently.
