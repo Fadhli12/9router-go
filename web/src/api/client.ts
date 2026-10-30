@@ -2004,7 +2004,7 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ provider, ...opts }) }
     ),
   devicePoll: (provider: string, deviceCode: string, session?: Record<string, unknown>) =>
-    request<{ status: string; connectionId?: string; error?: string }>('/api/oauth/device/poll', {
+    request<{ status: string; connectionId?: string; error?: string; interval?: number }>('/api/oauth/device/poll', {
       method: 'POST',
       body: JSON.stringify({ provider, device_code: deviceCode, session }),
     }),
