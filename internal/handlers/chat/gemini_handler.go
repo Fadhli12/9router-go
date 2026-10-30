@@ -201,26 +201,22 @@ func (h *ChatHandler) refreshOAuthTokenIfExpired(connectionID, currentToken stri
 		return currentToken, "", nil
 	}
 
-	// Fast path: if the stored token is already valid, hand the caller its own
-	// credential back untouched and never take the lock. This is what keeps
-	// iFlow working — it stores an HMAC platform key in apiKey and signs the
-	// outbound request with that key, so substituting the stored accessToken
-	// would sign every healthy connection with the wrong secret. Kiro has the
-	// same shape (`authMethod: "api_key"` sends apiKey even when an accessToken
-	// exists, and sending the other one answers 403).
-	needsRefresh, projectID, err := h.oauthRefreshNeeded(connectionID)
-	if err != nil || !needsRefresh {
-		return currentToken, projectID, nil
-	}
-
 	// The per-connection slot serialises the whole read → refresh → persist
 	// sequence, so N concurrent callers produce exactly one exchange. A caller
-	// that waited learns from the generation counter that the winner already
-	// refreshed and adopts the fresh token instead of issuing a second
-	// exchange with the same single-use refresh token.
+	// that queued learns from the slot state that the winner already refreshed
+	// and adopts the fresh token instead of issuing a second exchange with the
+	// same single-use refresh token.
+	//
+	// The iFlow/Kiro special case (caller's apiKey must not be replaced by the
+	// stored accessToken) is handled inside refreshOAuthLocked: when no
+	// refresh turns out to be needed the passthrough flag keeps the caller's
+	// own credential, and on failure each caller keeps the token it arrived
+	// with.
+	projectID := ""
 	outcome := oauth.RunRefresh(connectionID,
 		func() (bool, error) {
-			needs, _, rerr := h.oauthRefreshNeeded(connectionID)
+			needs, pid, rerr := h.oauthRefreshNeeded(connectionID)
+			projectID = pid
 			return needs, rerr
 		},
 		func() (string, error) {
