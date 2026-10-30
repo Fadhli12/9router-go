@@ -174,18 +174,22 @@ export const TABLE_OPTIONS: { value: TableView; label: string }[] = [
 
 // providerDisplayName resolves a stored provider id to the label the dashboard
 // shows. Custom compatible nodes persist under a synthetic id
-// ("openai-compatible-chat-<uuid>") and the catalog carries the display name for
-// everything else, so the column never renders an opaque id. Unknown ids pass
-// through unchanged.
+// ("openai-compatible-chat-<suffix>") whose suffix can be mixed-case ("Wildy"),
+// while the catalog carries the display name for everything else. Lookups fold
+// case so a lowercased caller key ("...-wildy") still matches the stored node
+// row. Unknown ids pass through unchanged.
 export function providerDisplayName(
   providerId?: string | null,
   nodes?: { id: string; name?: string }[]
 ): string {
   const id = (providerId || '').trim()
   if (!id) return 'unknown'
-  const node = nodes?.find((n) => n?.id === id)
+  const lower = id.toLowerCase()
+  const node = nodes?.find((n) => n?.id === id || n?.id?.toLowerCase().trim() === lower)
   if (node?.name) return node.name
-  const cat = PROVIDER_CATALOG.find((p) => p.id === id || p.alias === id)
+  const cat = PROVIDER_CATALOG.find(
+    (p) => p.id === id || p.alias === id || p.id.toLowerCase() === lower || p.alias?.toLowerCase() === lower
+  )
   return cat?.name || id
 }
 
