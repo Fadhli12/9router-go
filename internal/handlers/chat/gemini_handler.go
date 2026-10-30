@@ -253,7 +253,7 @@ func (h *ChatHandler) refreshOAuthTokenIfExpired(connectionID, currentToken stri
 // connection carries, so a caller that skips the refresh still propagates it.
 func (h *ChatHandler) oauthRefreshNeeded(connectionID string) (needs bool, projectID string, err error) {
 	db := h.Repo.RawDB()
-	row := db.QueryRow("SELECT provider, data FROM providerConnections WHERE id = ?", connectionID)
+	row := db.QueryRowContext(context.Background(), "SELECT provider, data FROM providerConnections WHERE id = ?", connectionID)
 	var provider string
 	var rawData string
 	if scanErr := row.Scan(&provider, &rawData); scanErr != nil {
@@ -281,7 +281,7 @@ func (h *ChatHandler) oauthRefreshNeeded(connectionID string) (needs bool, proje
 // must hold the connection's refresh lock.
 func (h *ChatHandler) refreshOAuthLocked(connectionID, currentToken string) (oauthTokenResult, error) {
 	db := h.Repo.RawDB()
-	row := db.QueryRow("SELECT provider, data FROM providerConnections WHERE id = ?", connectionID)
+	row := db.QueryRowContext(context.Background(), "SELECT provider, data FROM providerConnections WHERE id = ?", connectionID)
 	var provider string
 	var rawData string
 	if err := row.Scan(&provider, &rawData); err != nil {
@@ -348,6 +348,7 @@ func (h *ChatHandler) refreshOAuthLocked(connectionID, currentToken string) (oau
 	h.clearOAuthAccountPark(connectionID)
 	return oauthTokenResult{token: refreshResult.AccessToken, projectID: newPID}, nil
 }
+
 // forceRefreshOAuthToken unconditionally refreshes the OAuth token for a connection ID.
 func (h *ChatHandler) forceRefreshOAuthToken(connectionID string) (string, string, error) {
 	if connectionID == "" {
@@ -375,7 +376,7 @@ func (h *ChatHandler) forceRefreshOAuthToken(connectionID string) (string, strin
 // holds the connection's refresh lock.
 func (h *ChatHandler) forceRefreshLocked(connectionID string) (oauthTokenResult, error) {
 	db := h.Repo.RawDB()
-	row := db.QueryRow("SELECT provider, data FROM providerConnections WHERE id = ?", connectionID)
+	row := db.QueryRowContext(context.Background(), "SELECT provider, data FROM providerConnections WHERE id = ?", connectionID)
 	var provider string
 	var rawData string
 	if err := row.Scan(&provider, &rawData); err != nil {

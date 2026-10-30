@@ -130,4 +130,3 @@ func TestFindDuplicateConnection(t *testing.T) {
 		t.Fatal("expected dupData, got nil")
 	}
 }
-

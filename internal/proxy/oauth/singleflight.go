@@ -119,9 +119,10 @@ func RunRefresh(connectionID string, needsFn func() (bool, error), refreshFn fun
 
 	needs, err := needsFn()
 	if err != nil || !needs {
-		// No exchange needed: nothing changed, so the generation stays put and
-		// the next waiter runs its own check.
-		return RefreshOutcome{Err: err, Led: true}
+		// Another caller already refreshed while we queued: the stored token
+		// is now fresh. Return it so every caller in the flight gets the
+		// winner's token, not the stale one it arrived with.
+		return RefreshOutcome{Token: slot.Token, Err: err, Led: true}
 	}
 
 	token, rerr := refreshFn()
