@@ -129,7 +129,7 @@ export interface APIKey {
   machineId: string | null
   isActive: number
   createdAt: string
-  /** Masked secret, e.g. `sk-6…008f`. Always present. */
+  /** Masked secret, same length as the key itself, e.g. `sk-6••008f`. Always present. */
   keyDisplay?: string
   /** Rate limits. 0 means unlimited. */
   rateLimitRpm?: number

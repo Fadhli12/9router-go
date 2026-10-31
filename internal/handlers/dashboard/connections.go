@@ -256,11 +256,22 @@ func maskConnectionName(name string) string {
 // the edit-connection form (issue #154): enough to confirm *which* key is on
 // file, never enough to replay it. Same shape as maskClientKey, which the
 // dashboard already uses for client API keys.
+//
+// The mask keeps the credential's exact length. Collapsing the middle to a
+// single ellipsis told the reader two things it had no business knowing: that
+// the secret was longer than twelve characters, and roughly how much longer. A
+// mask whose length tracks the thing it hides is not a mask — it is a length
+// oracle.
 func maskConnectionSecret(secret string) string {
-	if handlerutil.RuneCount(secret) <= 12 {
+	n := handlerutil.RuneCount(secret)
+	if n <= 12 {
 		return "***"
 	}
-	return handlerutil.RunePrefix(secret, 6) + "…" + handlerutil.RuneSuffix(secret, 4)
+	const prefix = 6
+	const suffix = 4
+	return handlerutil.RunePrefix(secret, prefix) +
+		strings.Repeat("•", n-prefix-suffix) +
+		handlerutil.RuneSuffix(secret, suffix)
 }
 
 // connectionSecretHint returns the credential a connection actually
