@@ -731,10 +731,12 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthScheme:     "bearer",
 		ThinkingFormat: "openai",
 		StaticHeaders: map[string]string{
-			"User-Agent":          "CLI/2.108.1 CodeBuddy/2.108.1",
+			"User-Agent":          "CLI/2.133.1 CodeBuddy/2.133.1",
 			"X-Product":           "SaaS",
 			"X-IDE-Type":          "CLI",
 			"X-IDE-Name":          "CLI",
+			"X-IDE-Version":       "2.133.1",
+			"X-Domain":            "www.codebuddy.cn",
 			"x-requested-with":    "XMLHttpRequest",
 			"x-codebuddy-request": "1",
 		},
