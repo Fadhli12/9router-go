@@ -2,7 +2,6 @@ package oauth
 
 import (
 	"sync"
-	"sync/atomic"
 )
 
 // Single-flight refresh coordination.
@@ -23,13 +22,7 @@ import (
 // account B.
 type RefreshSlot struct {
 	Mu sync.Mutex
-	// Gen increments after every completed refresh attempt (success or
-	// failure). A caller snapshots it before acquiring Mu and compares after,
-	// which is how it tells "I am the leader" from "someone refreshed while I
-	// waited". Atomic because the snapshot is taken without the lock.
-	Gen atomic.Uint64
-	// Token is the access token a successful refresh produced. Only meaningful
-	// when Err is nil and Gen has advanced past the caller's snapshot.
+	// Token is the access token a successful refresh produced.
 	Token string
 	// Err is the outcome of the most recent attempt.
 	Err error
@@ -105,29 +98,30 @@ func RunRefresh(connectionID string, needsFn func() (bool, error), refreshFn fun
 	}
 
 	slot := SlotFor(connectionID)
-	snapshot := slot.Gen.Load()
-
 	slot.Mu.Lock()
 	defer slot.Mu.Unlock()
-
-	if slot.Gen.Load() != snapshot {
+	if slot.Token != "" || slot.Err != nil {
 		// Someone completed an attempt while we queued. On success hand back
 		// the fresh token; on failure hand back the error and let the caller
 		// keep its own credential.
 		return RefreshOutcome{Token: slot.Token, Err: slot.Err}
 	}
-
 	needs, err := needsFn()
 	if err != nil || !needs {
-		// Another caller already refreshed while we queued: the stored token
-		// is now fresh. Return it so every caller in the flight gets the
-		// winner's token, not the stale one it arrived with.
+		// Token is already fresh (winner refreshed while we queued) or this
+		// caller arrived with a valid credential. Return the slot token if
+		// present; otherwise the caller keeps its own credential.
 		return RefreshOutcome{Token: slot.Token, Err: err, Led: true}
 	}
-
 	token, rerr := refreshFn()
 	slot.Token = token
 	slot.Err = rerr
-	slot.Gen.Add(1)
 	return RefreshOutcome{Token: token, Err: rerr, Led: true}
+}
+
+// ResetRefreshSlots clears the per-connection refresh slots. Test-only.
+func ResetRefreshSlots() {
+	refreshSlotsMu.Lock()
+	defer refreshSlotsMu.Unlock()
+	refreshSlots = make(map[string]*RefreshSlot)
 }

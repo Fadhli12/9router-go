@@ -796,8 +796,9 @@ func (h *ChatHandler) appendLooseCustomModels(
 ) []ModelInfoObject {
 	prefixMap := h.providerNodePrefixMap()
 	customs := h.customModelsByProvider()
+	alive := h.aliveAliases()
 	for providerID, list := range customs {
-		if filterConnected && !isUsableProvider(providerID, usable) {
+		if !alive[providerID] {
 			continue
 		}
 		// A custom row whose alias names no live provider is an orphan: the
@@ -808,9 +809,6 @@ func (h *ChatHandler) appendLooseCustomModels(
 		// connections for provider" anyway, so listing it only pollutes the
 		// picker. Measured on a real database: 1504 uuid-prefixed rows, all
 		// orphaned, went from advertised to hidden.
-		if !h.aliveAliases()[providerID] {
-			continue
-		}
 		if filterConnected && !isUsableProvider(providerID, usable) {
 			continue
 		}

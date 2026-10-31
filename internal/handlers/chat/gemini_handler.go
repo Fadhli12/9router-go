@@ -238,9 +238,61 @@ func (h *ChatHandler) refreshOAuthTokenIfExpired(connectionID, currentToken stri
 	if outcome.Token != "" {
 		return outcome.Token, projectID, nil
 	}
-	// No exchange happened (the winner found the connection healthy, or the
-	// re-check inside the lock said the token is fine). The caller keeps its
-	// own credential.
+	// RunRefresh returned empty token because needsFn reported false inside
+	// the lock. That happens in two distinct situations:
+	//
+	//   1. The winner refreshed while we queued — the DB now holds a fresh
+	//      token that differs from the one this caller arrived with, so the
+	//      caller must adopt it. Returning the caller's own stale token here
+	//      is the "33/33 active but nothing connects" bug in miniature.
+	//   2. The token was already valid when the caller arrived — iFlow and
+	//      Kiro store an HMAC platform key in apiKey and sign requests with
+	//      it, so substituting the stored accessToken would sign every
+	//      healthy connection with the wrong secret.
+	//
+	// The two are told apart by comparing the stored accessToken against the
+	// caller's own credential: a difference means someone refreshed while we
+	// queued, an identical value means the caller already holds the current
+	// credential.
+	// The two are told apart by comparing the stored accessToken against the
+	// caller's own credential: a difference means someone refreshed while we
+	// queued, an identical value means the caller already holds the current
+	// credential.
+	//
+	// iFlow and Kiro are the exception that makes the comparison necessary
+	// rather than merely an optimisation: they store an HMAC platform key in
+	// apiKey and sign requests with it, so a caller whose own credential is
+	// NOT the stored accessToken must never have it substituted. Those
+	// providers are excluded by checking whether the caller's token is the
+	// stored accessToken before adopting anything.
+	stored, _, readErr := h.oauthRefreshNeeded(connectionID)
+	if readErr == nil && !stored {
+		db := h.Repo.RawDB()
+		row := db.QueryRowContext(context.Background(),
+			"SELECT data FROM providerConnections WHERE id = ?", connectionID)
+		var rawData string
+		if err := row.Scan(&rawData); err == nil {
+			var connMap map[string]any
+			if json.Unmarshal([]byte(rawData), &connMap) == nil {
+				at, _ := connMap["accessToken"].(string)
+				// Adopt the stored token only when it differs from the
+				// caller's own credential AND the caller's credential is not
+				// an apiKey-style secret (iFlow/Kiro). A caller that arrived
+				// with the stored accessToken already holds the current
+				// credential and keeps it.
+				if at != "" && at != currentToken && currentToken != "" {
+					// The caller arrived with a credential that is neither
+					// the stored accessToken nor an apiKey. That is the
+					// iFlow/Kiro shape: keep the caller's own secret.
+					if _, hasAPIKey := connMap["apiKey"].(string); !hasAPIKey {
+						return at, projectID, nil
+					}
+				}
+			}
+		}
+	}
+	// No exchange happened and the caller already holds the current
+	// credential (or the DB read failed): the caller keeps its own token.
 	return currentToken, projectID, nil
 }
 
