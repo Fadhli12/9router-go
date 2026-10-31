@@ -661,6 +661,9 @@ func forwardCommandcodeOnce(ctx context.Context, w http.ResponseWriter, req *Req
 		return &proxy.UpstreamError{StatusCode: resp.StatusCode, Body: errBody}
 	}
 
+	if !req.IsStream {
+		return handleCommandcodeNonStream(w, req, resp.Body, model)
+	}
 	return handleCommandcodeStream(w, req, resp.Body, model)
 }
 

@@ -1184,6 +1184,27 @@ func ParseCommandCodeError(event map[string]any) (int, string) {
 	return statusCode, message
 }
 
+// handleCommandcodeNonStream answers a `stream:false` request. CommandCode's
+// /alpha/generate always returns NDJSON (the client's `stream` is ignored — the
+// build hardcode mimics upstream, whose executor forces body.stream = 1), so
+// the frames are produced exactly as they are for a streaming client and then
+// folded into one chat.completion. Without this a non-streaming client received
+// `Content-Type: text/event-stream` and a body its JSON.parse could not read,
+// and the dashboard's Test button reported "Provider returned no completion
+// choices for this model" (upstream forced-SSE → JSON semantics, executor
+// commandcode.js comment).
+func handleCommandcodeNonStream(w http.ResponseWriter, req *Request, upstream io.Reader, model string) error {
+	collect := &sseCollectWriter{}
+	if err := handleCommandcodeStream(collect, req, upstream, model); err != nil {
+		return err
+	}
+	folded, ok := sseToOpenAIJSON(collect.buf.Bytes())
+	if !ok {
+		return proxy.UpstreamFailure(http.StatusBadGateway, proxy.NoCompletionInStream)
+	}
+	return jsonResponse(req.Ctx, w, bytes.NewReader(folded), req.TranslateResp, req.ResponseBuf)
+}
+
 func handleCommandcodeStream(w http.ResponseWriter, req *Request, upstream io.Reader, model string) error {
 	state := &CommandcodeStreamState{
 		ResponseID: fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
