@@ -178,7 +178,7 @@ func TestForwardFreebuff_FullCycle(t *testing.T) {
 
 		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
 			atomic.AddInt64(&chatCalls, 1)
-			if got := r.Header.Get("User-Agent"); got != "ai-sdk/openai-compatible/0.0.0-test/codebuff" {
+			if got := r.Header.Get("User-Agent"); got != freebuffChatUserAgent {
 				t.Errorf("chat User-Agent = %q, want official SDK fingerprint", got)
 			}
 			if got := r.Header.Get("x-freebuff-sse-gzip-recovery"); got != "1" {

@@ -71,7 +71,7 @@
 
   // Issue #310: Copy used to take `renderedKey`, which resolves to the masked
   // `keyDisplay` for every row that was not already revealed — so copying a key
-  // straight off a freshly loaded dashboard put `sk-c07…c93e` on the clipboard
+  // straight off a freshly loaded dashboard put a masked value on the clipboard
   // and the pasted credential 401'd. Copying a secret must not depend on whether
   // it happened to be on screen, so it reads the plaintext and ignores the
   // reveal state.
@@ -90,10 +90,24 @@
     await copy(secret, k.id)
   }
 
+  // The mask keeps the secret's exact length.
+  //
+  // It used to collapse everything between the first six and last four
+  // characters into a fixed run of six bullets, which told the reader two
+  // things it had no business knowing: that the secret was longer than ten
+  // characters, and roughly how much longer. A mask whose length tracks the
+  // thing it hides is not a mask — it is a length oracle.
+  //
+  // Keeping the count also means a revealed key and its mask occupy the same
+  // width, so the row does not reflow when the operator presses reveal and the
+  // buttons beside the value stay where they were.
   function maskSecret(value: string): string {
     if (!value) return ''
     if (value.length <= 10) return value
-    return value.slice(0, 6) + '••••••' + value.slice(-4)
+    const head = value.slice(0, 6)
+    const tail = value.slice(-4)
+    const middle = value.length - head.length - tail.length
+    return head + '•'.repeat(middle) + tail
   }
 
   function keyLabel(k: APIKey): string {

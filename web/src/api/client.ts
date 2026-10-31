@@ -133,7 +133,7 @@ export interface APIKey {
   activeCount?: number
   /** Comma-separated provider ids this key may use; empty = all providers. */
   allowedProviders?: string
-  /** Masked secret, e.g. `sk-6…008f`. Always present. */
+  /** Masked secret, same length as the key itself, e.g. `sk-6••008f`. Always present. */
   keyDisplay?: string
   /** Rate limits. 0 means unlimited. */
   rateLimitRpm?: number
@@ -239,6 +239,10 @@ export interface Settings {
   appLogoUrl?: string
   requireApiKey?: boolean
   tunnelDashboardAccess?: boolean
+  tunnelWatchdogEnabled?: boolean
+  tailscaleWatchdogEnabled?: boolean
+  hideUnusedTunnel?: boolean
+  tunnelWorkerUrl?: string
   rtkEnabled?: boolean
   rtkMode?: 'simple' | 'advance' | string
   rtkIntensity?: 'minimal' | 'standard' | 'aggressive' | string
@@ -338,6 +342,18 @@ export interface TunnelStatusResponse {
     tunnelUrl?: string
     publicUrl?: string
     running?: boolean
+    state?: string
+    mode?: string
+    shortId?: string
+    customDomain?: string
+    token?: string
+    cfApiToken?: string
+    previousUrl?: string
+    rotatedAt?: string
+    workerUrl?: string
+    reachable?: boolean
+    everReachable?: boolean
+    connectingLabel?: string
   }
   tailscale?: {
     enabled?: boolean
@@ -345,6 +361,14 @@ export interface TunnelStatusResponse {
     tunnelUrl?: string
     running?: boolean
     loggedIn?: boolean
+    installed?: boolean
+    reachable?: boolean
+    everReachable?: boolean
+    authUrl?: string
+    authMode?: string
+    authKey?: string
+    statusText?: string
+    repairTunnelOrigin?: boolean
   }
   download?: {
     downloading?: boolean
@@ -2081,7 +2105,7 @@ return conns.map(normalizeConnection)
       { method: 'POST', body: JSON.stringify({ provider, ...opts }) }
     ),
   devicePoll: (provider: string, deviceCode: string, session?: Record<string, unknown>) =>
-    request<{ status: string; connectionId?: string; error?: string }>('/api/oauth/device/poll', {
+    request<{ status: string; connectionId?: string; error?: string; interval?: number }>('/api/oauth/device/poll', {
       method: 'POST',
       body: JSON.stringify({ provider, device_code: deviceCode, session }),
     }),
@@ -2304,12 +2328,36 @@ return conns.map(normalizeConnection)
       tunnel: { enabled: false, running: false, tunnelUrl: '', publicUrl: '' },
       tailscale: { enabled: false, running: false, tunnelUrl: '', loggedIn: false },
     })),
-  enableTunnel: () =>
-    request<{ success?: boolean; tunnelUrl?: string; publicUrl?: string; error?: string }>('/api/tunnel/enable', {
+  enableTunnel: (payload?: {
+    mode?: string
+    shortId?: string
+    customDomain?: string
+    token?: string
+    cfApiToken?: string
+    cfAccountId?: string
+    cfZone?: string
+    workerUrl?: string
+  }) =>
+    request<{
+      success?: boolean
+      tunnelUrl?: string
+      publicUrl?: string
+      error?: string
+      mode?: string
+      shortId?: string
+      customDomain?: string
+      token?: string
+      cfApiToken?: string
+    }>('/api/tunnel/enable', {
       method: 'POST',
+      body: JSON.stringify(payload ?? {}),
     }),
   disableTunnel: () =>
     request<{ success?: boolean; error?: string }>('/api/tunnel/disable', {
+      method: 'POST',
+    }),
+  repairTunnelOrigin: () =>
+    request<{ success?: boolean; hostname?: string; port?: number; error?: string }>('/api/tunnel/repair-origin', {
       method: 'POST',
     }),
   checkTailscale: () =>
@@ -2317,9 +2365,18 @@ return conns.map(normalizeConnection)
       installed: false,
       loggedIn: false,
     })),
-  enableTailscale: () =>
-    request<{ success?: boolean; tunnelUrl?: string; needsLogin?: boolean; authUrl?: string; funnelNotEnabled?: boolean; error?: string }>('/api/tunnel/tailscale-enable', {
+  enableTailscale: (payload?: { authKey?: string; authMode?: string }) =>
+    request<{
+      success?: boolean
+      tunnelUrl?: string
+      needsLogin?: boolean
+      authUrl?: string
+      funnelNotEnabled?: boolean
+      error?: string
+      repairTunnelOrigin?: boolean
+    }>('/api/tunnel/tailscale-enable', {
       method: 'POST',
+      body: JSON.stringify(payload ?? {}),
     }),
   disableTailscale: () =>
     request<{ success?: boolean; error?: string }>('/api/tunnel/tailscale-disable', {
