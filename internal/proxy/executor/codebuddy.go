@@ -76,7 +76,7 @@ func ForwardCodebuddyCN(w http.ResponseWriter, req *Request) error {
 		}
 		return fmt.Errorf("ForwardCodebuddyCN upstream: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	forwardUpstreamResponseHeaders(w, resp.Header)
 
@@ -104,7 +104,7 @@ func ForwardCodebuddyCN(w http.ResponseWriter, req *Request) error {
 			}
 		}
 		stallReader := proxy.NewStallReaderWithContext(req.Ctx, resp.Body, 0, "codebuddy-cn")
-		defer stallReader.Close() // stops the shutdown watcher + stall timer
+		defer func() { _ = stallReader.Close() }() // stops the shutdown watcher + stall timer
 		return execSSEStream(w, stallReader, req)
 	}
 
