@@ -201,7 +201,16 @@ func (h *DashboardHandler) HandleCreateApiKey(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
-
+	// The name is trimmed and capped here for the same reason PUT caps it: it
+	// rides along on every /api/keys listing and is rendered in the dashboard
+	// list, so a pasted megabyte would be echoed on every call. Trimming also
+	// stores a whitespace-only name as empty rather than as a row the table
+	// renders blank, which is what the operator typed by accident.
+	req.Name = strings.TrimSpace(req.Name)
+	if len(req.Name) > maxAPIKeyNameLen {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "name is too long")
+		return
+	}
 	if req.ID == "" {
 		req.ID = uuid.New().String()
 	}
