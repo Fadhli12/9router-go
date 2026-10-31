@@ -50,6 +50,18 @@ describe('providerDisplayName', () => {
     expect(providerDisplayName('openai-compatible-chat-abc', nodes)).toBe('My vLLM')
   })
 
+  it('matches mixed-case custom node ids even when caller lowercases the id', () => {
+    const nodes = [{ id: 'openai-compatible-chat-Wildy', name: 'wildy.ai.id' }]
+
+    // Both exact case (stored key) and lowercased (topology/stream key) resolve
+    expect(providerDisplayName('openai-compatible-chat-Wildy', nodes)).toBe('wildy.ai.id')
+    expect(providerDisplayName('openai-compatible-chat-wildy', nodes)).toBe('wildy.ai.id')
+  })
+
+  it('resolves catalog providers case-insensitively', () => {
+    expect(providerDisplayName('DeepSeek')).toBe('DeepSeek')
+  })
+
   it('resolves catalog providers by id', () => {
     expect(providerDisplayName('deepseek')).toBe('DeepSeek')
   })
