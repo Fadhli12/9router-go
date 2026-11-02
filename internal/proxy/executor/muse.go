@@ -73,7 +73,7 @@ func museModel(body []byte) string {
 	if err := json.Unmarshal(body, &reqObj, handlerutil.ClientBody); err != nil {
 		return ""
 	}
-	return stripOpenCodePrefix(reqObj.Model, "muse")
+	return stripOpenCodePrefix(reqObj.Model, "muse", "mse")
 }
 
 // museBaseURL resolves the https://api.meta.ai/v1 prefix of the request's base

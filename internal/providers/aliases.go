@@ -80,6 +80,7 @@ var ProviderAliasMap = map[string]string{
 	"meta-model-api":    "muse",
 	"muse-code":         "muse",
 	"muse-subscription": "muse",
+	"mse":               "muse",
 	"systemone":         "v1m",
 	// Upstream publishes `jev` as a v1m alias, but jev-1.13-free already
 	// belongs to opencode and jev-1.13 to opencode-zen. Registering it here
