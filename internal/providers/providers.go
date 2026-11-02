@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 // ProviderConfig describes how to reach an upstream provider.
@@ -79,6 +80,9 @@ type ProviderConfig struct {
 	// relay fronts the request; everything else needs no provider-specific code,
 	// which is the point.
 	RelayURL string
+
+	// StallTimeoutMs is the optional per-provider stall timeout in milliseconds.
+	StallTimeoutMs int `json:"stallTimeoutMs,omitempty"`
 }
 
 // Bedrock protocol constants. Region is substituted per request by the executor, so the
@@ -771,6 +775,14 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
+	// zcode: ZCode start-plan lane. Auth is the plan JWT stored on each
+	// connection (device-flow login), never a shared key — the same shape as
+	// kimi and muse. Format=claude: the plan endpoint speaks Anthropic Messages,
+	// so the dispatcher converts OpenAI bodies and flags the reply lane.
+	"zcode": {
+		BaseURL: "https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages",
+		Format:  FormatClaude,
+	},
 	"kimchi": {
 		BaseURL:    "https://llm.kimchi.dev/openai/v1/chat/completions",
 		AuthHeader: "Authorization",
@@ -1450,4 +1462,14 @@ func IsLocalByDesign(provider string) bool {
 		return cfg.LocalByDesign
 	}
 	return false
+}
+
+// ResolveStallTimeout returns the stall timeout for this provider config.
+// If c != nil && c.StallTimeoutMs > 0, returns time.Duration(c.StallTimeoutMs) * time.Millisecond.
+// Otherwise returns defaultTimeout.
+func (c *ProviderConfig) ResolveStallTimeout(defaultTimeout time.Duration) time.Duration {
+	if c != nil && c.StallTimeoutMs > 0 {
+		return time.Duration(c.StallTimeoutMs) * time.Millisecond
+	}
+	return defaultTimeout
 }

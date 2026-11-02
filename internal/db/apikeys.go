@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -32,11 +33,115 @@ const apiKeyColumns = `SELECT id, key, name, machineId, isActive, createdAt,
 	rateLimitRPM, rateLimitTPM, rateLimitConcurrency,
 	tokenQuota, queueTimeoutMs,
 	keyHash, lookupHash, keyDisplay,
+	expiresAt, lastUsedAt, usedCount, metadata, planId, maxConcurrent, allowedProviders,
+	limitMicros, limitTokens, budgetPeriod, alertPct, hardCutoff`
+
+// apiKeyColumnsLegacy is the pre-F-2 read: everything above except the five
+// budget columns.
+const apiKeyColumnsLegacy = `SELECT id, key, name, machineId, isActive, createdAt,
+	rateLimitRPM, rateLimitTPM, rateLimitConcurrency,
+	tokenQuota, queueTimeoutMs,
+	keyHash, lookupHash, keyDisplay,
 	expiresAt, lastUsedAt, usedCount, metadata, planId, maxConcurrent, allowedProviders`
 
-// apiKeyScan returns the Scan destinations for apiKeyColumns plus an applier
+// apiKeyColumnsBase is the read for a table that predates every optional
+// column above it. The base body duplicates the tail of apiKeyColumnsLegacy on
+// purpose: one entry has to carry the raw columns, because a database from
+// before the rate-limit columns (F-1) has neither those nor the budget set.
+const apiKeyColumnsBase = `SELECT id, key, name, machineId, isActive, createdAt,
+	keyHash, lookupHash, keyDisplay,
+	expiresAt, lastUsedAt, usedCount, metadata, planId`
+
+// apiKeyColumnSets lists the key reads from newest to oldest. Each set names
+// the newest column it introduces; the probe picks the first set whose marker
+// exists, and every set below it selects the same columns minus its own.
+//
+// The chain matters because the columns arrived in two independent waves and
+// both are probed additively: a database restored from before F-1 has no
+// rateLimitRPM *and* no budget columns, so answering the budget question alone
+// would hand a 30-column query to a 14-column table.
+var apiKeyColumnSets = []struct{ marker, columns string }{
+	{"limitMicros", apiKeyColumns},
+	{"maxConcurrent", apiKeyColumnsLegacy},
+	{"", apiKeyColumnsBase},
+}
+
+// apiKeyColumnsFor returns the key read for the schema in hand: the full read
+// when every governance column exists, the oldest matching read when some do
+// not. A legacy database reads every key with its missing axes at zero rather
+// than failing the whole listing — the same degradation quotaResetId already
+// gets.
+func (r *Repo) apiKeyColumnsFor() string {
+	return r.apiKeyColumnSet().columns
+}
+
+// apiKeyColumnSet resolves and caches the column set once per process. The
+// answer is a property of the schema, which does not change while the process
+// runs, and the probe sits on the dashboard's boot path.
+func (r *Repo) apiKeyColumnSet() *struct{ marker, columns string } {
+	if r == nil || r.db == nil {
+		return &apiKeyColumnSets[len(apiKeyColumnSets)-1]
+	}
+	r.budgetColsOnce.Do(func() {
+		r.apiKeyCols = detectApiKeyColumnSet(r.db)
+	})
+	if r.apiKeyCols < 0 || r.apiKeyCols >= len(apiKeyColumnSets) {
+		return &apiKeyColumnSets[len(apiKeyColumnSets)-1]
+	}
+	return &apiKeyColumnSets[r.apiKeyCols]
+}
+
+// detectApiKeyColumnSet returns the index in apiKeyColumnSets that matches the
+// apiKeys table, or 0 when the probe fails: assuming the full read is the
+// option that cannot silently drop a column a caller depends on.
+func detectApiKeyColumnSet(sqlDB *sql.DB) int {
+	present, err := apiKeysColumns(sqlDB)
+	if err != nil {
+		return 0
+	}
+	for i, set := range apiKeyColumnSets {
+		if set.marker == "" || present[set.marker] {
+			return i
+		}
+	}
+	return len(apiKeyColumnSets) - 1
+}
+
+// apiKeysColumns reports the column names on the apiKeys table.
+func apiKeysColumns(sqlDB *sql.DB) (map[string]bool, error) {
+	rows, err := sqlDB.QueryContext(context.Background(), `PRAGMA table_info(apiKeys)`)
+	if err != nil {
+		return nil, fmt.Errorf("probe apiKeys columns: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	present := make(map[string]bool)
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return nil, fmt.Errorf("scan apiKeys columns: %w", err)
+		}
+		present[name] = true
+	}
+	// A mid-iteration failure would otherwise report a half-read column set,
+	// which degrades every key read to the legacy query.
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate apiKeys columns: %w", err)
+	}
+	return present, nil
+}
+
+// apiKeyScan returns the Scan destinations for the key read plus an applier
 // that must run after Scan has filled the nullable columns.
-func apiKeyScan(k *models.APIKey) (dest []any, apply func()) {
+//
+// columns is the set apiKeyColumnsFor resolved, so the destination count always
+// matches the column count of the query that produced the row. Passing the
+// full 30 destinations against a 14-column row is a scan error, not a zero —
+// which is how the legacy-schema tests caught this.
+func apiKeyScan(k *models.APIKey, columns string) (dest []any, apply func()) {
+	withRateLimit := columns != apiKeyColumnsBase
+	withBudget := columns == apiKeyColumns
 	var nameVal, machineVal sql.NullString
 	var rateRPM, rateTPM, rateConc sql.NullInt64
 	var tokenQuota, queueTimeout sql.NullInt64
@@ -46,10 +151,24 @@ func apiKeyScan(k *models.APIKey) (dest []any, apply func()) {
 	var maxConcurrent sql.NullInt64
 	var allowedProviders sql.NullString
 	var planID sql.NullString
-	dest = []any{&k.ID, &k.Key, &nameVal, &machineVal, &k.IsActive, &k.CreatedAt,
-		&rateRPM, &rateTPM, &rateConc, &tokenQuota, &queueTimeout, &keyHash, &lookupHash, &keyDisplay,
-		&expiresAt, &lastUsedAt, &usedCount, &metadata, &planID,
-		&maxConcurrent, &allowedProviders}
+	// F-2 per-period budget. limitMicros and limitTokens are plain int64 on
+	// the model rather than pointers: 0 is the meaningful "not set" value, so
+	// there is no NULL to preserve.
+	var limitMicros, limitTokens int64
+	var budgetPeriod string
+	var alertPct, hardCutoff int
+	dest = []any{&k.ID, &k.Key, &nameVal, &machineVal, &k.IsActive, &k.CreatedAt}
+	if withRateLimit {
+		dest = append(dest, &rateRPM, &rateTPM, &rateConc, &tokenQuota, &queueTimeout)
+	}
+	dest = append(dest, &keyHash, &lookupHash, &keyDisplay,
+		&expiresAt, &lastUsedAt, &usedCount, &metadata, &planID)
+	if withRateLimit {
+		dest = append(dest, &maxConcurrent, &allowedProviders)
+	}
+	if withBudget {
+		dest = append(dest, &limitMicros, &limitTokens, &budgetPeriod, &alertPct, &hardCutoff)
+	}
 	apply = func() {
 		applyApiKeyNulls(k, nameVal, machineVal, rateRPM, rateTPM, rateConc, tokenQuota, queueTimeout, usedCount,
 			keyHash, lookupHash, keyDisplay, expiresAt, lastUsedAt, metadata, planID)
@@ -59,6 +178,13 @@ func apiKeyScan(k *models.APIKey) (dest []any, apply func()) {
 		}
 		if allowedProviders.Valid {
 			k.AllowedProviders = &allowedProviders.String
+		}
+		if withBudget {
+			k.LimitMicros = limitMicros
+			k.LimitTokens = limitTokens
+			k.BudgetPeriod = budgetPeriod
+			k.AlertPct = alertPct
+			k.HardCutoff = hardCutoff != 0
 		}
 	}
 	return dest, apply
@@ -142,8 +268,9 @@ func (r *Repo) FindApiKeyByLookup(lookupHash string) (*models.APIKey, error) {
 // queryApiKey runs a single-row apiKeys read and maps the scanned columns.
 func (r *Repo) queryApiKey(whereClause string, arg string) (*models.APIKey, error) {
 	var apiKey models.APIKey
-	dest, apply := apiKeyScan(&apiKey)
-	err := r.db.QueryRow(apiKeyColumns+" "+whereClause, arg).Scan(dest...)
+	columns := r.apiKeyColumnsFor()
+	dest, apply := apiKeyScan(&apiKey, columns)
+	err := r.db.QueryRowContext(context.Background(), r.apiKeyColumnsFor()+" "+whereClause, arg).Scan(dest...)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -163,6 +290,7 @@ func (r *Repo) UpdateApiKeyAllowedProviders(id string, allowedProviders string) 
 	apikeycache.Invalidate()
 	return nil
 }
+
 // hashedKeyPrefix marks a `key` column as a hashed row standing in for the
 // original secret. `apiKeys.key` is TEXT UNIQUE NOT NULL, so every row cannot
 // simply be blanked to the same value — the second hashed key would collide

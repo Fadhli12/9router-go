@@ -41,6 +41,12 @@ type Repo struct {
 	// reader that already captured a *Repo. A nil value means "no vault", which
 	// is every install that never set ROUTER_MASTER_KEY.
 	vault atomic.Value // *vault.Vault
+	// budgetColsOnce/apiKeyCols cache which apiKeyColumnSets entry the
+	// apiKeys table matches. The answer is a property of the schema, which
+	// does not change while the process runs, and the probe sits on the
+	// dashboard's boot path — so it runs once, like settingsCache.
+	budgetColsOnce sync.Once
+	apiKeyCols     int
 }
 
 // cachedSettings is one parsed settings row and the row content it was

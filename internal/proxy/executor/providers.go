@@ -613,7 +613,8 @@ func ForwardCommandcode(w http.ResponseWriter, req *Request) error {
 		log.Warn("executor", "commandcode unmarshal body", "error", err)
 	}
 
-	reqBody, err := buildCommandcodeBodyForSession(req.Body, oreq.Model, req.SessionID)
+	body := InjectReasoningContent(req.Body, "commandcode")
+	reqBody, err := buildCommandcodeBodyForSession(body, oreq.Model, req.SessionID)
 	if err != nil {
 		return fmt.Errorf("marshal commandcode body: %w", err)
 	}
@@ -764,7 +765,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		}
 
 		if req.IsStream {
-			stallReader := proxy.NewStallReaderWithContext(ctx, resp.Body, 0, "opencode-responses")
+			stallReader := proxy.NewStallReaderWithContext(ctx, resp.Body, cfg.ResolveStallTimeout(proxy.ResolveDefaultStallTimeout()), "opencode-responses")
 			defer stallReader.Close()
 			return handleCodexStream(w, req, stallReader)
 		}
@@ -1070,6 +1071,7 @@ func ensureMessagesFor(body []byte, provider, model string) []byte {
 	delete(reqMap, "stream_options")
 	delete(reqMap, "store")
 	delete(reqMap, "reasoning_effort")
+	delete(reqMap, "n")
 
 	updated, err := marshalStable(reqMap)
 	if err != nil {
@@ -1905,7 +1907,7 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 		}
 
 		if req.IsStream {
-			stallReader := proxy.NewStallReaderWithContext(ctx, resp.Body, 0, "opencode-go-responses")
+			stallReader := proxy.NewStallReaderWithContext(ctx, resp.Body, cfg.ResolveStallTimeout(proxy.ResolveDefaultStallTimeout()), "opencode-go-responses")
 			defer stallReader.Close()
 			return handleCodexStream(w, req, stallReader)
 		}

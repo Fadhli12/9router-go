@@ -154,7 +154,7 @@ func (h *ChatHandler) forwardGeminiNativeRequest(
 			}
 			return h.handleGeminiNonStreamAsSSE(ctx, w, bytes.NewReader(unwrapped), translateResponse, metrics)
 		}
-		stallReader := proxy.NewStallReaderWithContext(ctx, resp.Body, 0, provider)
+		stallReader := proxy.NewStallReaderWithContext(ctx, resp.Body, cfg.ResolveStallTimeout(proxy.ResolveDefaultStallTimeout()), provider)
 		bodyCloser = stallReader
 		return h.handleGeminiStream(ctx, w, stallReader, translateResponse, metrics)
 	}

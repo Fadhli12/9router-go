@@ -224,16 +224,17 @@ func (r *Repo) DeleteCombo(id string) error {
 // governance column is added in exactly one place; a hand-copied SELECT here
 // is how a column silently stops being returned to the dashboard.
 func (r *Repo) GetApiKeys() ([]*models.APIKey, error) {
-	rows, err := r.db.Query(apiKeyColumns + ` FROM apiKeys ORDER BY createdAt DESC`)
+	rows, err := r.db.QueryContext(context.Background(), r.apiKeyColumnsFor()+` FROM apiKeys ORDER BY createdAt DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("get api keys: %w", err)
 	}
 	defer rows.Close()
 
+	columns := r.apiKeyColumnsFor()
 	keys := make([]*models.APIKey, 0)
 	for rows.Next() {
 		var k models.APIKey
-		dest, apply := apiKeyScan(&k)
+		dest, apply := apiKeyScan(&k, columns)
 		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("scan api key: %w", err)
 		}
@@ -261,11 +262,16 @@ func (r *Repo) CreateApiKeyWithOptions(id, key, name, machineID string, maxConcu
 	if machineID != "" {
 		machineVal = machineID
 	}
-	_, err := r.db.Exec(
-		`INSERT INTO apiKeys (id, key, name, machineId, isActive, createdAt, maxConcurrent, allowedProviders) VALUES (?, ?, ?, ?, 1, ?, ?, ?)`,
-		id, key, nameVal, machineVal, now, maxConcurrent, allowedProviders,
-	)
-	if err != nil {
+	// The insert names maxConcurrent/allowedProviders, so it degrades for the
+	// same reason the read does: a database restored from before F-1 has
+	// neither column, and naming one there fails the insert outright.
+	query := `INSERT INTO apiKeys (id, key, name, machineId, isActive, createdAt) VALUES (?, ?, ?, ?, 1, ?)`
+	args := []any{id, key, nameVal, machineVal, now}
+	if r.apiKeyColumnsFor() != apiKeyColumnsBase {
+		query = `INSERT INTO apiKeys (id, key, name, machineId, isActive, createdAt, maxConcurrent, allowedProviders) VALUES (?, ?, ?, ?, 1, ?, ?, ?)`
+		args = append(args, maxConcurrent, allowedProviders)
+	}
+	if _, err := r.db.Exec(query, args...); err != nil {
 		return fmt.Errorf("create api key %s: %w", id, err)
 	}
 	apikeycache.Invalidate()
@@ -363,6 +369,24 @@ func (r *Repo) SetApiKeyBudget(keyID string, tokenQuota, queueTimeoutMs int) err
 	)
 	if err != nil {
 		return fmt.Errorf("set api key budget %s: %w", keyID, err)
+	}
+	return nil
+}
+
+// SetApiKeyPeriodBudget updates the per-period spend ceiling for an API key
+// (F-2): the cost and token limits, the window they are measured over, the
+// alert percentage and whether the ceiling refuses with 402 when reached.
+//
+// 0 and "" mean "not set" on every column, which leaves the key's plan (or no
+// budget) in charge — the same convention rateLimitRPM uses, so a dashboard
+// dialog that blanks a field disables that axis rather than setting it to zero.
+func (r *Repo) SetApiKeyPeriodBudget(keyID string, limitMicros, limitTokens int64, period string, alertPct int, hardCutoff bool) error {
+	_, err := r.db.ExecContext(context.Background(),
+		`UPDATE apiKeys SET limitMicros = ?, limitTokens = ?, budgetPeriod = ?, alertPct = ?, hardCutoff = ? WHERE id = ?`,
+		limitMicros, limitTokens, period, alertPct, boolToInt(hardCutoff), keyID,
+	)
+	if err != nil {
+		return fmt.Errorf("set api key period budget %s: %w", keyID, err)
 	}
 	return nil
 }

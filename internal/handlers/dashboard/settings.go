@@ -653,7 +653,9 @@ func (h *DashboardHandler) exportDatabase(ctx context.Context) (*databaseExport,
 	if out.APIKeys, err = selectRows(tx,
 		`SELECT id, key, name, machineId, isActive, createdAt,
 		        rateLimitRPM, rateLimitTPM, rateLimitConcurrency, tokenQuota, queueTimeoutMs,
-		        maxConcurrent, allowedProviders FROM apiKeys`); err != nil {
+		        maxConcurrent, allowedProviders,
+		        limitMicros, limitTokens, budgetPeriod, alertPct, hardCutoff
+		   FROM apiKeys`); err != nil {
 		return nil, err
 	}
 	// The per-key model allowlist is a separate table, so selecting apiKeys
@@ -878,21 +880,28 @@ func (h *DashboardHandler) importDatabase(ctx context.Context, payload map[strin
 			allowedProviders = ap
 		}
 		if _, err := tx.Exec(
-		`INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, createdAt,
+			`INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, createdAt,
 		        rateLimitRPM, rateLimitTPM, rateLimitConcurrency, tokenQuota, queueTimeoutMs,
-		        maxConcurrent, allowedProviders)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		k["id"], k["key"], stringDefault(k["name"], nil), stringDefault(k["machineId"], nil),
-		boolToInt(k["isActive"]), stringDefault(k["createdAt"], nowISO()),
-		// A restored key must come back with the limits it had: a backup
-		// that silently lifted every rate limit and token quota would turn
-		// disaster recovery into an accidental opening of the throttle.
-		// Missing columns coerce to 0 (unlimited), which is the same
-		// meaning an absent column has on the live row.
-		intDefault(k["rateLimitRPM"], 0), intDefault(k["rateLimitTPM"], 0),
-		intDefault(k["rateLimitConcurrency"], 0), intDefault(k["tokenQuota"], 0),
-		intDefault(k["queueTimeoutMs"], 0),
-		maxConc, allowedProviders,
+		        maxConcurrent, allowedProviders,
+		        limitMicros, limitTokens, budgetPeriod, alertPct, hardCutoff)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			k["id"], k["key"], stringDefault(k["name"], nil), stringDefault(k["machineId"], nil),
+			boolToInt(k["isActive"]), stringDefault(k["createdAt"], nowISO()),
+			// A restored key must come back with the limits it had: a backup
+			// that silently lifted every rate limit and token quota would turn
+			// disaster recovery into an accidental opening of the throttle.
+			// Missing columns coerce to 0 (unlimited), which is the same
+			// meaning an absent column has on the live row.
+			intDefault(k["rateLimitRPM"], 0), intDefault(k["rateLimitTPM"], 0),
+			intDefault(k["rateLimitConcurrency"], 0), intDefault(k["tokenQuota"], 0),
+			intDefault(k["queueTimeoutMs"], 0),
+			maxConc, allowedProviders,
+			// The per-period budget travels for the same reason: a restore that
+			// dropped it would leave the key spending against a ceiling the
+			// dashboard still shows as set.
+			intDefault(k["limitMicros"], 0), intDefault(k["limitTokens"], 0),
+			stringDefault(k["budgetPeriod"], ""), intDefault(k["alertPct"], 0),
+			boolToInt(k["hardCutoff"]),
 		); err != nil {
 			return nil, err
 		}
