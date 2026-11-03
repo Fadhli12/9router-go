@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Play, Plus, Search, Server } from 'lucide-svelte'
+  import { Download, Play, Plus, Search, Server } from 'lucide-svelte'
   import type { ProviderConnection, ProviderNode } from '../../api/client'
   import Button from '../../lib/ui/Button.svelte'
   import { PROVIDER_CATALOG, isChatProvider } from '../../lib/providers'
@@ -13,6 +13,8 @@
     onToggleAll: (id: string, active: boolean) => void
     onAddAnthropic: () => void
     onAddOpenAI: () => void
+    /** Opens the import surface. Optional so existing callers keep working. */
+    onImport?: () => void
   }
 
   let {
@@ -22,6 +24,7 @@
     onToggleAll,
     onAddAnthropic,
     onAddOpenAI,
+    onImport,
   }: Props = $props()
 
   let searchQuery = $state('')
@@ -106,6 +109,11 @@
         <Button size="sm" variant="secondary" onclick={onAddOpenAI} class="w-full sm:w-auto !bg-white !text-black hover:!bg-gray-100 border border-border shadow-xs">
           <Plus class="w-4 h-4 mr-1" /> Add OpenAI Compatible
         </Button>
+        {#if onImport}
+          <Button size="sm" variant="secondary" onclick={onImport} class="w-full sm:w-auto">
+            <Download class="w-4 h-4 mr-1" /> Import
+          </Button>
+        {/if}
       </div>
     </div>
 
