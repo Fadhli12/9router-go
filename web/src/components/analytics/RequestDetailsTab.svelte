@@ -266,7 +266,12 @@
                 </div>
               </td>
               <td class="py-3 px-4 font-mono text-[11px] text-text-muted">
-                <span class="truncate block max-w-[120px]" title={item.model}>{item.model}</span>
+                <div class="flex items-center gap-1 max-w-[140px] truncate" title={item.loopWarning ? `⚠️ ${item.loopWarning} · ${item.model}` : item.model}>
+                  {#if item.loopWarning || (item.anomalies && item.anomalies.length > 0)}
+                    <span class="text-amber-500 text-[12px] shrink-0" title={item.loopWarning || 'Possible loop detected'}>⚠️</span>
+                  {/if}
+                  <span class="truncate block">{item.model}</span>
+                </div>
               </td>
               <td class="py-3 px-4 text-right">
                 {#if item.latency?.ttft != null}
@@ -474,6 +479,38 @@
             <div class="flex items-center justify-between text-[11px] font-code text-text-muted mt-1.5">
               <span class="text-brand-500 font-semibold">{selectedDetail.latency?.ttft}ms ({Math.round(ttftRatioPct(selectedDetail.latency?.ttft, selectedDetail.latency?.total) ?? 0)}%)</span>
               <span>{(selectedDetail.latency?.total ?? 0) - (selectedDetail.latency?.ttft ?? 0)}ms ({100 - Math.round(ttftRatioPct(selectedDetail.latency?.ttft, selectedDetail.latency?.total) ?? 0)}%)</span>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Loop & Anomaly Detection (when loop or anomalies detected) -->
+        {#if selectedDetail.anomalies && selectedDetail.anomalies.length > 0}
+          <div class="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-2">
+            <div class="text-[10px] text-amber-600 dark:text-amber-400 uppercase font-bold tracking-wider flex items-center justify-between">
+              <span class="flex items-center gap-1.5">
+                <span class="material-symbols-outlined text-[16px]">warning</span>
+                Anomaly Detected: Possible Loop ({selectedDetail.anomalies.length})
+              </span>
+            </div>
+            <div class="space-y-1.5 font-code text-xs">
+              {#each selectedDetail.anomalies as anomaly}
+                <div class="flex items-start gap-2 bg-surface/50 p-2 rounded-lg border border-amber-500/20">
+                  <Badge variant={anomaly.severity === 'critical' ? 'danger' : 'warning'} size="sm">
+                    {anomaly.rule}
+                  </Badge>
+                  <span class="text-text-main flex-1">{anomaly.message}</span>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {:else if selectedDetail.loopWarning}
+          <div class="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-1.5">
+            <div class="text-[10px] text-amber-600 dark:text-amber-400 uppercase font-bold tracking-wider flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-[16px]">warning</span>
+              Anomaly Detected: Possible Loop
+            </div>
+            <div class="font-code text-xs text-amber-600 dark:text-amber-300">
+              {selectedDetail.loopWarning}
             </div>
           </div>
         {/if}

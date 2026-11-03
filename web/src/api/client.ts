@@ -680,6 +680,7 @@ export interface UsageLifetime {
   longestStreak: number
   topModel: UsageTopModel | null
   cacheHitRate: number | null
+  successRate: number | null
 }
 export interface UsageNodeHealth {
   name?: string
