@@ -80,6 +80,17 @@ type ProviderConfig struct {
 	// which is the point.
 	RelayURL string
 
+	// ProxyPoolID is the proxy pool this connection routed through, or "" when
+	// the request leaves directly. It is the gateway's own identity for the
+	// egress, not a request header: the breaker and the semaphore key on
+	// provider+pool so one dead pool opens its own gate instead of taking every
+	// other egress for that provider with it (internal/handlers/chat
+	// resilienceProxyKey).
+	//
+	// It is deliberately NOT written into HeaderOverrides: that map is applied
+	// to the outbound request (internal/proxy/openai.go ApplyHeaderOverrides),
+	// so an internal key there would be sent to every upstream provider.
+	ProxyPoolID string
 	// StallTimeoutMs is the optional per-provider stall timeout in milliseconds.
 	StallTimeoutMs int `json:"stallTimeoutMs,omitempty"`
 }
@@ -413,6 +424,19 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader:   "Authorization",
 		AuthScheme:   "bearer",
 		SystemoneURL: "https://v1m.ir/v1/systemone",
+	},
+	// Nace Drex — decision models on the System One protocol, the same lane
+	// shape as v1m: a state plus typed questions (noul / choice / score) in,
+	// calibrated probabilities out. The lane forwards the body and the JSON
+	// reply untouched, so a score answer's `legend` array and every
+	// `confidence` reach the client as Drex returns them. drex-max also reads
+	// a top-level `images` array; the text-only drex-v2.0 answers 422 when it
+	// is non-empty, so nothing rewrites images here (upstream v0.5.112,
+	// f7f6f5e; catalog verified live against console.nace.ai/v1/models).
+	"nace": {
+		AuthHeader:   "Authorization",
+		AuthScheme:   "bearer",
+		SystemoneURL: "https://console.nace.ai/v1/systemone",
 	},
 	"anthropic": {
 		BaseURL:    "https://api.anthropic.com/v1/messages",

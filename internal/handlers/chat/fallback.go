@@ -19,6 +19,7 @@ import (
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -601,6 +602,25 @@ func resolveExecutor(
 	return nil
 }
 
+// streamNoteWriter wraps an io.Writer and stamps each non-empty write with the
+// current time via note, so every streamed chunk is timed for gap/rate metrics.
+// A nil note is a no-op.
+type streamNoteWriter struct {
+	w    io.Writer
+	note func(time.Time)
+}
+
+func (s *streamNoteWriter) Write(p []byte) (int, error) {
+	if s == nil || s.w == nil {
+		return 0, nil
+	}
+	n, err := s.w.Write(p)
+	if n > 0 && s.note != nil {
+		s.note(time.Now())
+	}
+	return n, err
+}
+
 func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	startTime := time.Now()
 	ctx, w := f.Ctx, f.W
@@ -1093,6 +1113,10 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	// before any executor or forwarding function writes headers to w.
 	injectRouteHeaders(w, provider, model, f.ComboName, f.Attempts)
 
+	// The context budget of the request that is about to be served, so a client
+	// can see how much of the window this turn used.
+	injectContextHeaders(w, resolveContextBudget(ctx, provider, model, pipedBody))
+
 	if exec := resolveExecutor(provider, wireModel, providerCfg, claudeNative, upstreamClaude); exec != nil {
 		execReq := &executor.Request{
 			Ctx:            ctx,
@@ -1108,7 +1132,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			SessionID:      sessionID,
 			ToolNameMap:    claudeToolMap,
 			UpstreamClaude: upstreamClaude && !claudeNative,
-			ResponseBuf:    &metrics.ResponseBuf,
+			ResponseBuf:    &streamNoteWriter{w: &metrics.ResponseBuf, note: metrics.NoteOutput},
 			StartTime:      start,
 			TTFT:           &metrics.TTFT,
 		}
@@ -1156,7 +1180,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 					SessionID:      sessionID,
 					ToolNameMap:    claudeToolMap,
 					UpstreamClaude: upstreamClaude && !claudeNative,
-					ResponseBuf:    &metrics.ResponseBuf,
+					ResponseBuf:    &streamNoteWriter{w: &metrics.ResponseBuf, note: metrics.NoteOutput},
 					StartTime:      start,
 					TTFT:           &metrics.TTFT,
 				}

@@ -14,6 +14,7 @@ import (
 	json "9router/proxy/internal/fastjson"
 	"9router/proxy/internal/guardrails"
 	"9router/proxy/internal/handlerutil"
+	"9router/proxy/internal/jsonfence"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/providers"
 	internalproxy "9router/proxy/internal/proxy"
@@ -230,6 +231,7 @@ func (h *ChatHandler) handleClaudeUpstreamStream(ctx context.Context, w http.Res
 			metrics.TTFT = time.Since(startTime).Milliseconds()
 		}
 		_, _ = metrics.ResponseBuf.Write(out)
+		metrics.NoteOutput(time.Now())
 		if _, werr := hw.Write(out); werr != nil {
 			return
 		}
@@ -304,6 +306,7 @@ func (h *ChatHandler) handleStreamResponse(ctx context.Context, w http.ResponseW
 			frame := append([]byte("data: "), payload...)
 			frame = append(frame, '\n', '\n')
 			metrics.ResponseBuf.Write(frame)
+			metrics.NoteOutput(time.Now())
 			_, _ = hw.Write(frame)
 			if flusher != nil {
 				flusher.Flush()
@@ -355,6 +358,7 @@ func (h *ChatHandler) handleStreamResponse(ctx context.Context, w http.ResponseW
 			metrics.TTFT = time.Since(startTime).Milliseconds()
 		}
 		metrics.ResponseBuf.Write(translated)
+		metrics.NoteOutput(time.Now())
 		hw.Write(translated)
 		if flusher != nil {
 			flusher.Flush()
@@ -577,6 +581,13 @@ func (h *ChatHandler) handleJSONResponse(ctx context.Context, w http.ResponseWri
 		return guardrailBlockedError()
 	}
 	body = filtered
+	// A model asked for machine-readable JSON may still answer with a ```json
+	// fence. Unwrap it here — after the guardrail has seen the model's own
+	// words, before either write path hands bytes to the client — so the
+	// unwrapped body is what the cache stores and what both the OpenAI and
+	// Claude write paths send. Only a body whose contents parse as JSON is
+	// unwrapped, and only for a request that asked for JSON.
+	body = jsonfence.ApplyContents(ctx, body)
 
 	// A /v1/responses client on a Chat Completions upstream needs the answer in
 	// the Responses shape; translate marks a Claude client, which it is not.
@@ -643,6 +654,17 @@ func (h *ChatHandler) respondAsResponses(ctx context.Context, w http.ResponseWri
 		if aggregated, ok := sseToClaudeJSON(body); ok {
 			body = aggregated
 		}
+	}
+	// The aggregated body is itself the error when the stream carried one:
+	// sseToClaudeJSON folds a failing SSE frame into {"error":{...}}. That
+	// envelope must not reach ChatResponseToResponses, which reads the absent
+	// choices as an empty turn and answers status:"completed" with an empty
+	// output — a 200 for what was a 429 or a 502 (upstream v0.5.112, 56dbf46).
+	//
+	// handleJSONResponse already guards the Chat Completions path via
+	// EmptyUpstreamError; this bridge wrote 200 directly and had no such gate.
+	if err := internalproxy.EmptyUpstreamError(body); err != nil {
+		return err
 	}
 	converted, err := translator.ChatResponseToResponses(body)
 	if err == nil {

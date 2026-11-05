@@ -31,7 +31,7 @@ func (r *Repo) ValidateApiKey(key string) (bool, error) {
 
 const apiKeyColumns = `SELECT id, key, name, machineId, isActive, createdAt,
 	rateLimitRPM, rateLimitTPM, rateLimitConcurrency,
-	tokenQuota, queueTimeoutMs,
+	tokenQuota, queueTimeoutMs, contextLimit,
 	keyHash, lookupHash, keyDisplay,
 	expiresAt, lastUsedAt, usedCount, metadata, planId, maxConcurrent, allowedProviders,
 	limitMicros, limitTokens, budgetPeriod, alertPct, hardCutoff`
@@ -59,7 +59,11 @@ const apiKeyColumnsBase = `SELECT id, key, name, machineId, isActive, createdAt,
 // The chain matters because the columns arrived in two independent waves and
 // both are probed additively: a database restored from before F-1 has no
 // rateLimitRPM *and* no budget columns, so answering the budget question alone
-// would hand a 30-column query to a 14-column table.
+// would hand a 27-column query to a 14-column table.
+//
+// limitMicros is the marker for the newest set even though that set also
+// selects contextLimit: both are written by the same EnsureAdditiveColumns
+// pass, so a database carrying one carries the other.
 var apiKeyColumnSets = []struct{ marker, columns string }{
 	{"limitMicros", apiKeyColumns},
 	{"maxConcurrent", apiKeyColumnsLegacy},
@@ -137,14 +141,14 @@ func apiKeysColumns(sqlDB *sql.DB) (map[string]bool, error) {
 //
 // columns is the set apiKeyColumnsFor resolved, so the destination count always
 // matches the column count of the query that produced the row. Passing the
-// full 30 destinations against a 14-column row is a scan error, not a zero —
+// full 27 destinations against a 14-column row is a scan error, not a zero —
 // which is how the legacy-schema tests caught this.
 func apiKeyScan(k *models.APIKey, columns string) (dest []any, apply func()) {
 	withRateLimit := columns != apiKeyColumnsBase
 	withBudget := columns == apiKeyColumns
 	var nameVal, machineVal sql.NullString
 	var rateRPM, rateTPM, rateConc sql.NullInt64
-	var tokenQuota, queueTimeout sql.NullInt64
+	var tokenQuota, queueTimeout, contextLimit sql.NullInt64
 	var keyHash, lookupHash, keyDisplay sql.NullString
 	var expiresAt, lastUsedAt, metadata sql.NullString
 	var usedCount sql.NullInt64
@@ -160,6 +164,12 @@ func apiKeyScan(k *models.APIKey, columns string) (dest []any, apply func()) {
 	dest = []any{&k.ID, &k.Key, &nameVal, &machineVal, &k.IsActive, &k.CreatedAt}
 	if withRateLimit {
 		dest = append(dest, &rateRPM, &rateTPM, &rateConc, &tokenQuota, &queueTimeout)
+	}
+	// contextLimit sits between queueTimeoutMs and keyHash in apiKeyColumns,
+	// and only that set selects it, so it is gated on withBudget rather than
+	// on withRateLimit.
+	if withBudget {
+		dest = append(dest, &contextLimit)
 	}
 	dest = append(dest, &keyHash, &lookupHash, &keyDisplay,
 		&expiresAt, &lastUsedAt, &usedCount, &metadata, &planID)
@@ -180,6 +190,10 @@ func apiKeyScan(k *models.APIKey, columns string) (dest []any, apply func()) {
 			k.AllowedProviders = &allowedProviders.String
 		}
 		if withBudget {
+			if contextLimit.Valid {
+				v := int(contextLimit.Int64)
+				k.ContextLimit = &v
+			}
 			k.LimitMicros = limitMicros
 			k.LimitTokens = limitTokens
 			k.BudgetPeriod = budgetPeriod
@@ -270,7 +284,7 @@ func (r *Repo) queryApiKey(whereClause string, arg string) (*models.APIKey, erro
 	var apiKey models.APIKey
 	columns := r.apiKeyColumnsFor()
 	dest, apply := apiKeyScan(&apiKey, columns)
-	err := r.db.QueryRowContext(context.Background(), r.apiKeyColumnsFor()+" "+whereClause, arg).Scan(dest...)
+	err := r.db.QueryRowContext(context.Background(), columns+" "+whereClause, arg).Scan(dest...)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

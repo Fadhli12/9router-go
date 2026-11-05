@@ -15,6 +15,7 @@ import (
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/middleware"
 	"9router/proxy/internal/observ"
+	"9router/proxy/internal/usagetracker"
 	"9router/proxy/web"
 	json "encoding/json/v2"
 	"github.com/go-chi/chi/v5"
@@ -60,6 +61,28 @@ func SetupRoutes(r interface {
 		// instance so its panel reports the layer a request was judged
 		// against, not a second one that can disagree with it.
 		dashH.Resilience = chatH.Resilience
+		// The same instance feeds the usage SSE stream, so an operator watching
+		// the request flow sees an egress's breaker go OPEN beside the requests
+		// that stopped being served. The tracker takes a closure rather than
+		// the controller because it must not import the resilience package
+		// (see usagetracker.StreamPayload.Breakers).
+		usagetracker.GetTracker().SetBreakerStatus(func() []usagetracker.BreakerSnapshot {
+			if chatH.Resilience == nil {
+				return nil
+			}
+			breakers, _ := chatH.Resilience.Statuses()
+			out := make([]usagetracker.BreakerSnapshot, 0, len(breakers))
+			for _, b := range breakers {
+				out = append(out, usagetracker.BreakerSnapshot{
+					Name:         b.Name,
+					State:        string(b.State),
+					FailureCount: b.FailureCount,
+					SuccessCount: b.SuccessCount,
+					RetryAfterMs: b.RetryAfterMs,
+				})
+			}
+			return out
+		})
 	}
 	// Chat & Models Domain (no version here: the four version GETs are
 	// public in SetupServerRouter, upstream PUBLIC_API_PATHS parity).
@@ -163,6 +186,10 @@ func SetupRoutes(r interface {
 	r.Get("/api/usage/export", HandleUsageExport(repo))
 	r.Get("/api/usage/request-details/{id}", HandleRequestDetail(repo))
 	r.Get("/api/usage/providers", dashH.HandleGetUsageProviders)
+	// Usage per client API key. Registered before the {connectionId} route:
+	// chi matches in order, so a route added after it would be read as a
+	// connection id.
+	r.Get("/api/usage/api-keys", dashH.HandleGetUsageByAPIKey)
 	r.Get("/api/usage/{connectionId}", dashH.HandleGetConnectionUsage)
 	r.Get("/api/usage/{connectionId}/reset-credits", dashH.HandleListCodexResetCredits)
 	r.Post("/api/usage/{connectionId}/reset-credits/consume", dashH.HandleConsumeCodexResetCredit)
@@ -232,6 +259,10 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	r.Get("/api/usage/export", HandleUsageExport(repo))
 	r.Get("/api/usage/request-details/{id}", HandleRequestDetail(repo))
 	r.Get("/api/usage/providers", dashH.HandleGetUsageProviders)
+	// Usage per client API key. Registered before the {connectionId} route:
+	// chi matches in order, so a route added after it would be read as a
+	// connection id.
+	r.Get("/api/usage/api-keys", dashH.HandleGetUsageByAPIKey)
 	r.Get("/api/usage/{connectionId}", dashH.HandleGetConnectionUsage)
 
 	r.Get("/api/usage/{connectionId}/reset-credits", dashH.HandleListCodexResetCredits)
@@ -453,6 +484,10 @@ func mountOAuthRoutes(r interface {
 	Post(pattern string, handlerFn http.HandlerFunc)
 }, oauthH *oauth.OAuthHandler) {
 	r.Post("/api/oauth/{provider}/import", oauthH.HandleOAuthImport)
+	// MiniMax Code lease auth: probe the desktop broker, then create a
+	// connection that borrows the desktop app's sign-in.
+	r.Get("/api/oauth/{provider}/lease-status", oauthH.HandleLeaseStatus)
+	r.Post("/api/oauth/{provider}/lease-connect", oauthH.HandleLeaseConnect)
 	r.Get("/api/oauth/kiro/social-authorize", oauthH.HandleOAuthKiroSocialAuthorize)
 	r.Post("/api/oauth/kiro/social-exchange", oauthH.HandleOAuthKiroSocialExchange)
 	r.Post("/api/oauth/kiro/import", oauthH.HandleKiroImport)

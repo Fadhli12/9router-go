@@ -247,6 +247,90 @@ func (r *Repo) GetApiKeys() ([]*models.APIKey, error) {
 	return keys, nil
 }
 
+// CreateApiKeyParams holds the initial values for a new client API key.
+type CreateApiKeyParams struct {
+	ID               string
+	Key              string
+	Name             string
+	MachineID        string
+	KeyDisplay       string
+	MaxConcurrent    int
+	AllowedProviders string
+	TokenQuota       int
+	ContextLimit     int
+}
+
+// CreateApiKeyWithLimits inserts a new client API key and writes its initial
+// ceilings atomically inside a single transaction.
+//
+// Writing the key and its ceilings in one transaction guarantees that a failure
+// while applying the limits never leaves behind an unbounded key in the database.
+func (r *Repo) CreateApiKeyWithLimits(ctx context.Context, p CreateApiKeyParams) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	var nameVal, machineVal any
+	if p.Name != "" {
+		nameVal = p.Name
+	}
+	if p.MachineID != "" {
+		machineVal = p.MachineID
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin create api key %s: %w", p.ID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// The insert names maxConcurrent/allowedProviders, so it degrades for the
+	// same reason the read does: a database restored from before F-1 has
+	// neither column, and naming one there fails the insert outright.
+	query := `INSERT INTO apiKeys (id, key, name, machineId, isActive, createdAt) VALUES (?, ?, ?, ?, 1, ?)`
+	args := []any{p.ID, p.Key, nameVal, machineVal, now}
+	if r.apiKeyColumnsFor() != apiKeyColumnsBase {
+		query = `INSERT INTO apiKeys (id, key, name, machineId, isActive, createdAt, maxConcurrent, allowedProviders) VALUES (?, ?, ?, ?, 1, ?, ?, ?)`
+		args = append(args, p.MaxConcurrent, p.AllowedProviders)
+	}
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("insert api key %s: %w", p.ID, err)
+	}
+
+	if p.TokenQuota > 0 {
+		_, err = tx.ExecContext(ctx,
+			`UPDATE apiKeys SET tokenQuota = ?, queueTimeoutMs = 0 WHERE id = ?`,
+			p.TokenQuota, p.ID,
+		)
+		if err != nil {
+			return fmt.Errorf("set api key quota %s: %w", p.ID, err)
+		}
+	}
+
+	if p.ContextLimit > 0 {
+		_, err = tx.ExecContext(ctx,
+			`UPDATE apiKeys SET contextLimit = ? WHERE id = ?`,
+			p.ContextLimit, p.ID,
+		)
+		if err != nil {
+			return fmt.Errorf("set api key context limit %s: %w", p.ID, err)
+		}
+	}
+
+	if p.KeyDisplay != "" {
+		_, err = tx.ExecContext(ctx,
+			`UPDATE apiKeys SET keyDisplay = ? WHERE id = ?`,
+			p.KeyDisplay, p.ID,
+		)
+		if err != nil {
+			return fmt.Errorf("set api key display %s: %w", p.ID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit create api key %s: %w", p.ID, err)
+	}
+	apikeycache.Invalidate()
+	return nil
+}
+
 // CreateApiKeyWithLimit inserts a new client API key with isActive set to 1 and specified maxConcurrent limit.
 func (r *Repo) CreateApiKeyWithLimit(id, key, name, machineID string, maxConcurrent int) error {
 	return r.CreateApiKeyWithOptions(id, key, name, machineID, maxConcurrent, "")
@@ -254,28 +338,14 @@ func (r *Repo) CreateApiKeyWithLimit(id, key, name, machineID string, maxConcurr
 
 // CreateApiKeyWithOptions inserts a new client API key with all configurable fields.
 func (r *Repo) CreateApiKeyWithOptions(id, key, name, machineID string, maxConcurrent int, allowedProviders string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	var nameVal, machineVal any
-	if name != "" {
-		nameVal = name
-	}
-	if machineID != "" {
-		machineVal = machineID
-	}
-	// The insert names maxConcurrent/allowedProviders, so it degrades for the
-	// same reason the read does: a database restored from before F-1 has
-	// neither column, and naming one there fails the insert outright.
-	query := `INSERT INTO apiKeys (id, key, name, machineId, isActive, createdAt) VALUES (?, ?, ?, ?, 1, ?)`
-	args := []any{id, key, nameVal, machineVal, now}
-	if r.apiKeyColumnsFor() != apiKeyColumnsBase {
-		query = `INSERT INTO apiKeys (id, key, name, machineId, isActive, createdAt, maxConcurrent, allowedProviders) VALUES (?, ?, ?, ?, 1, ?, ?, ?)`
-		args = append(args, maxConcurrent, allowedProviders)
-	}
-	if _, err := r.db.Exec(query, args...); err != nil {
-		return fmt.Errorf("create api key %s: %w", id, err)
-	}
-	apikeycache.Invalidate()
-	return nil
+	return r.CreateApiKeyWithLimits(context.Background(), CreateApiKeyParams{
+		ID:               id,
+		Key:              key,
+		Name:             name,
+		MachineID:        machineID,
+		MaxConcurrent:    maxConcurrent,
+		AllowedProviders: allowedProviders,
+	})
 }
 
 // CreateApiKey inserts a new client API key with isActive set to 1.
@@ -387,6 +457,24 @@ func (r *Repo) SetApiKeyPeriodBudget(keyID string, limitMicros, limitTokens int6
 	)
 	if err != nil {
 		return fmt.Errorf("set api key period budget %s: %w", keyID, err)
+	}
+	return nil
+}
+
+// SetApiKeyContextLimit sets the largest context window one request from an
+// API key may use, in tokens.
+//
+// It is a whole non-negative count where 0 means "unset": the model's own
+// declared window applies. It bounds one request, where tokenQuota bounds what
+// the key may spend over its whole life — the two are separate axes and an
+// operator may want either without the other.
+func (r *Repo) SetApiKeyContextLimit(ctx context.Context, keyID string, contextLimit int) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE apiKeys SET contextLimit = ? WHERE id = ?`,
+		contextLimit, keyID,
+	)
+	if err != nil {
+		return fmt.Errorf("set api key context limit %s: %w", keyID, err)
 	}
 	return nil
 }
