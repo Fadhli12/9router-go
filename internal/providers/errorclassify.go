@@ -295,6 +295,27 @@ var accountSuspensionPatterns = []string{
 	"permanently disabled",
 	"permanently suspended",
 	"consumer_suspended",
+	// Observed on a real Antigravity ban (2026-11-06):
+	//
+	//	This service has been disabled in this account for violation of Terms
+	//	of Service. Please submit an appeal to continue using this product.
+	//
+	// None of the patterns above matched it: they look for "account disabled",
+	// and the upstream puts the subject on the service — "disabled in this
+	// account".
+	//
+	// The ToS wording from that message is deliberately NOT a pattern. A
+	// content-moderation refusal says the same thing about one request ("your
+	// request was blocked for violation of Terms of Service", "if you believe
+	// this is an error, submit an appeal"), so matching it would let a single
+	// blocked prompt halt the whole provider. Only wording that scopes the
+	// verdict to the account belongs here.
+	"disabled in this account",
+	"disabled for this account",
+	"suspended in this account",
+	"suspended for this account",
+	"banned in this account",
+	"terminated in this account",
 }
 
 // suspensionNegationPatterns are the phrasings that mention a suspension in

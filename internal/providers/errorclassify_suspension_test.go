@@ -182,3 +182,75 @@ func TestLooksLikeAccountSuspension_NarrowerThanPermanentFailure(t *testing.T) {
 		})
 	}
 }
+
+// realAntigravityBanBody is the message an operator's Antigravity accounts
+// actually came back with on 2026-11-06. It is pinned verbatim because the
+// pattern list was written from guessed wording and missed it: every entry
+// looked for "account disabled", while the upstream scopes the subject to the
+// service — "disabled in this account".
+const realAntigravityBanBody = "This service has been disabled in this account for violation of Terms of Service. Please submit an appeal to continue using this product."
+
+func TestRealAntigravityBanIsDetected(t *testing.T) {
+	for _, status := range []int{
+		http.StatusForbidden,
+		http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusPaymentRequired,
+	} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			if !LooksLikeAccountSuspension(status, realAntigravityBanBody) {
+				t.Errorf("the live Antigravity ban message was not detected at status %d", status)
+			}
+		})
+	}
+
+	// Still a throttle at 429, whatever the body says.
+	if LooksLikeAccountSuspension(http.StatusTooManyRequests, realAntigravityBanBody) {
+		t.Error("429 carrying the ban wording was treated as a verdict")
+	}
+	// A JSON envelope is the shape the executor actually passes.
+	wrapped := `{"error":{"code":403,"message":"` + realAntigravityBanBody + `","status":"PERMISSION_DENIED"}}`
+	if !LooksLikeAccountSuspension(http.StatusForbidden, wrapped) {
+		t.Error("the ban message inside a JSON envelope was not detected")
+	}
+}
+
+// A content-moderation refusal uses the same Terms-of-Service vocabulary as the
+// ban, but it is a verdict on ONE REQUEST. Matching it would let a single
+// blocked prompt halt the provider and take every healthy account with it,
+// which is why the ToS phrasing itself is not a pattern.
+func TestModerationRefusalDoesNotHaltTheProvider(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+	}{
+		{
+			name: "request blocked for ToS violation",
+			text: "Your request was blocked for violation of Terms of Service.",
+		},
+		{
+			name: "content violates ToS",
+			text: "This content violates the Terms of Service and cannot be processed.",
+		},
+		{
+			name: "safety filter cites ToS",
+			text: "Prompt blocked: violation of terms of service (safety filter).",
+		},
+		{
+			name: "rejection invites an appeal",
+			text: "Request rejected. If you believe this is an error, submit an appeal.",
+		},
+		{
+			name: "service disabled without naming the account",
+			text: "This service has been disabled. Try again later.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if LooksLikeAccountSuspension(http.StatusForbidden, tt.text) {
+				t.Errorf("per-request refusal halted the provider: %q", tt.text)
+			}
+		})
+	}
+}
