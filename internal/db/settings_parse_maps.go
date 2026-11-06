@@ -121,6 +121,12 @@ func applyProviderStrategies(s *SettingsData, raw map[string]any) {
 		if sma, ok := vm["strictModelAssignment"].(bool); ok {
 			strat.StrictModelAssignment = sma
 		}
+		// A negative cap is dropped rather than clamped to zero: zero already
+		// means unlimited, so clamping would turn a typo into "expose every
+		// account" instead of leaving the setting unset.
+		if mx, ok := vm["maxActiveAccounts"].(float64); ok && mx > 0 {
+			strat.MaxActiveAccounts = int(mx)
+		}
 		s.ProviderStrategies[k] = strat
 	}
 }

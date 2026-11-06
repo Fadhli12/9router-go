@@ -760,6 +760,7 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 		if a {
 			chat.ClearCodexQuotaBlock(id)
 		}
+		releaseProviderHaltOnEnable(existing, a)
 		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": id, "isActive": a})
 		return
 	}
@@ -877,6 +878,9 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 	}
 	if hasIsActive && a {
 		chat.ClearCodexQuotaBlock(id)
+	}
+	if hasIsActive {
+		releaseProviderHaltOnEnable(existing, a)
 	}
 
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": id})

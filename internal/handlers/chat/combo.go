@@ -1011,6 +1011,16 @@ func (h *ChatHandler) handleComboFallbackWithVisited(ctx context.Context, cw *co
 							lastErr = ue
 							break
 						}
+						// A suspension halts the provider instead of rotating:
+						// break leaves this provider's remaining accounts
+						// unspent while a combo member on a DIFFERENT provider
+						// can still serve the turn.
+						if providers.LooksLikeAccountSuspension(ue.StatusCode, extractErrorText(ue.Body)) {
+							h.haltProviderOnSuspension(modelInfo.Provider, modelInfo.Model, picked, ue)
+							retry.note(ue)
+							lastErr = ue
+							break
+						}
 						if providers.RetryableStatusCodes[ue.StatusCode] {
 							h.comboLockRetryable(ctx, &excludeIDs, connID, modelInfo.Provider, modelInfo.Model, ue)
 						}
@@ -1400,6 +1410,16 @@ func (h *ChatHandler) handleMessagesComboFallbackWithVisited(ctx context.Context
 						if providers.IsModelFitError(ue.StatusCode, ue.Body) {
 							log.Info("combo", "model too small for request, next member",
 								"provider", modelInfo.Provider, "model", modelInfo.Model)
+							retry.note(ue)
+							lastErr = ue
+							break
+						}
+						// A suspension halts the provider instead of rotating:
+						// break leaves this provider's remaining accounts
+						// unspent while a combo member on a DIFFERENT provider
+						// can still serve the turn.
+						if providers.LooksLikeAccountSuspension(ue.StatusCode, extractErrorText(ue.Body)) {
+							h.haltProviderOnSuspension(modelInfo.Provider, modelInfo.Model, picked, ue)
 							retry.note(ue)
 							lastErr = ue
 							break

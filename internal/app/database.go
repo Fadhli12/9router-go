@@ -11,6 +11,7 @@ import (
 	"9router/proxy/internal/config"
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/log"
+	"9router/proxy/internal/resilience"
 	"9router/proxy/internal/translator"
 	"9router/proxy/internal/vault"
 )
@@ -25,6 +26,7 @@ var DatabaseModule = fx.Module("database",
 	// startup side effect. As a Provide it would be rejected for returning
 	// only an error.
 	fx.Invoke(MigrateVault),
+	fx.Invoke(RestoreProviderSuspensions),
 )
 
 // ProvideDatabase initializes the global SQLite database and registers an OnStop lifecycle hook to close it cleanly.
@@ -121,6 +123,41 @@ func MigrateVault(repo *db.Repo, cfg *config.Config) error {
 	}
 	if result.Sealed > 0 || len(result.Skipped) > 0 {
 		log.Info("vault", "credential migration complete", "sealed", result.Sealed, "skipped", len(result.Skipped))
+	}
+	return nil
+}
+
+// RestoreProviderSuspensions installs the latch store and replays the halts it
+// holds, before the server accepts traffic.
+//
+// Without this the latch is process-local: a gateway restarted while a provider
+// was halted would resume rotating through the pool and spend the remaining
+// accounts on the verdict that halted it.
+//
+// Failure is not fatal — a gateway that refuses to start is worse than one
+// whose halts are only in memory — but it is logged at error level, because the
+// operator has lost the restart guarantee until it is fixed.
+func RestoreProviderSuspensions(repo *db.Repo) error {
+	// The threshold is applied before the replay, not after: the replayed
+	// records are judged against it, so reading it second would report the
+	// restored halts using the default instead of the operator's setting.
+	//
+	// A settings row that cannot be read leaves the default of one account in
+	// place, which is the safe direction — it halts sooner, never later.
+	if settings, err := repo.GetSettings(); err == nil && settings != nil {
+		resilience.SetSuspensionThreshold(settings.SuspensionThreshold)
+	} else if err != nil {
+		log.Warn("resilience", "suspension threshold unreadable, keeping the one-account default", "error", err)
+	}
+	if err := resilience.SetSuspensionStore(db.NewSuspensionStore(repo)); err != nil {
+		log.Error("resilience", "provider suspension latches could not be restored; halts will not survive a restart", "error", err)
+		return nil
+	}
+	if halted := resilience.AllSuspensions(); len(halted) > 0 {
+		for _, rec := range halted {
+			log.Warn("resilience", "provider is halted by an account suspension; clear it after appealing",
+				"provider", rec.Provider, "accounts", rec.Accounts, "since", rec.FirstSeenAt, "upstream", rec.Reason)
+		}
 	}
 	return nil
 }

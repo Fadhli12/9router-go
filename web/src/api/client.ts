@@ -235,6 +235,14 @@ export interface ProviderStrategyConfig {
   proxyPoolId?: string
   rotateStrategy?: string
   strictModelAssignment?: boolean
+  fallbackStrategy?: string
+  stickyRoundRobinLimit?: number
+  /**
+   * Caps how many of the provider's accounts may be dialled at all; the rest
+   * stay standby and are promoted only as active slots become unusable.
+   * Absent or 0 means unlimited (internal/db/settings.go MaxActiveAccounts).
+   */
+  maxActiveAccounts?: number
   [key: string]: unknown
 }
 

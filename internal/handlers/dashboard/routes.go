@@ -264,6 +264,7 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		// Cache Analytics & Management
 		r.Get("/resilience", h.HandleGetResilience)
 		r.Post("/resilience/reset", h.HandleResetResilience)
+		r.Post("/resilience/suspensions/clear", h.HandleClearSuspension)
 		r.Get("/cache", h.HandleGetCache)
 		r.Delete("/cache", h.HandleDeleteCache)
 		r.Get("/cache/entries", h.HandleGetCacheEntries)

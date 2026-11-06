@@ -8,6 +8,7 @@ import (
 	"net/url"
 
 	"9router/proxy/internal/providers"
+	"9router/proxy/internal/resilience"
 )
 
 // Provider-level admission control helpers.
@@ -34,6 +35,14 @@ import (
 // client as a 503, which is what the caller would have received from the
 // failing provider anyway — the breaker only saves the round trip.
 func (h *ChatHandler) resilienceAdmit(ctx context.Context, provider string, cfg *providers.ProviderConfig) (func(), bool) {
+	// The suspension latch is consulted before the nil check because it is
+	// package state rather than controller state: a handler built without a
+	// resilience controller must still honour a halt, or the one path that
+	// skips admission control would keep spending accounts on a verdict the
+	// gateway has already recorded.
+	if resilience.IsProviderSuspended(providers.ResolveAlias(provider)) {
+		return nil, false
+	}
 	if h.Resilience == nil {
 		return func() {}, true
 	}

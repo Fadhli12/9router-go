@@ -21,6 +21,7 @@ import (
 	"9router/proxy/internal/providers"
 	internalproxy "9router/proxy/internal/proxy"
 	"9router/proxy/internal/proxy/oauth"
+	"9router/proxy/internal/resilience"
 	"9router/proxy/internal/translator"
 	"9router/proxy/internal/updater"
 )
@@ -243,6 +244,20 @@ func (h *ChatHandler) getBestConnectionWithContext(ctx context.Context, provider
 	var err error
 	isProbe := handlerutil.IsProbeContext(ctx)
 
+	// The halt is enforced at this resolver rather than only in the chat
+	// failover paths, because it is the single door every lane shares: the
+	// media handlers (image, search, STT) rotate accounts with their own
+	// excludeIDs loops and never touch handleAccountFallback, so a gate placed
+	// only there left ten call sites still spending accounts on a verdict the
+	// gateway had already recorded.
+	//
+	// A probe is let through on purpose: it is the operator checking one named
+	// account to see whether an appeal worked, and it is one request rather
+	// than a rotation.
+	if !isProbe && resilience.IsProviderSuspended(providers.ResolveAlias(provider)) {
+		return nil, nil, errProviderSuspended(provider)
+	}
+
 	if connectionID != "" {
 		conn, err = h.Repo.GetProviderConnectionByID(connectionID)
 		if err != nil {
@@ -351,6 +366,12 @@ func (h *ChatHandler) getBestConnectionWithContext(ctx context.Context, provider
 				"provider", provider, "model", model, "axis", refusal.Axis)
 			return nil, nil, h.providerLimitError(ctx, provider, refusal)
 		}
+
+		// The exposure cap runs after the model filters and before the rotation
+		// strategy: a standby must never enter the rotation at all, and the
+		// filters above decide which accounts could serve this model in the
+		// first place.
+		connections = capConnectionsToActivePool(h, connections, provider, model, settings, isProbe)
 
 		excludeSet := make(map[string]bool, len(excludeIDs))
 		for _, id := range excludeIDs {

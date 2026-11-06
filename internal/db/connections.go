@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	json "encoding/json/v2"
 	"fmt"
+	"time"
 
 	"9router/proxy/internal/models"
 )
@@ -278,4 +279,33 @@ func (r *Repo) listProviderConnections(query string, args []any) ([]*models.Prov
 		return nil, err
 	}
 	return connections, nil
+}
+
+// DeactivateProviderConnections switches every connection of one provider off,
+// reporting how many rows changed.
+//
+// This is what makes a suspension halt visible where an operator already looks:
+// the dashboard's per-provider toggle reads isActive, so a halt that only lived
+// in memory left the toggle showing "on" while every request was refused.
+//
+// One statement rather than a SetConnectionStatus call per row: a 40-account
+// provider would otherwise cost 40 UPDATEs on the §4.G hardware, which §4.A
+// forbids. Rows already off are included in the WHERE so the write stays
+// idempotent and the count reflects only the accounts this call switched.
+func (r *Repo) DeactivateProviderConnections(provider string) (int64, error) {
+	if r == nil || r.db == nil || provider == "" {
+		return 0, nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := r.db.ExecContext(context.Background(),
+		`UPDATE providerConnections SET isActive = 0, updatedAt = ? WHERE provider = ? AND isActive = 1`,
+		now, provider)
+	if err != nil {
+		return 0, fmt.Errorf("deactivate provider connections %s: %w", provider, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, nil
+	}
+	return affected, nil
 }

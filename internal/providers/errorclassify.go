@@ -261,6 +261,105 @@ func LooksLikePermanentFailure(errorText string) bool {
 	return false
 }
 
+// accountSuspensionPatterns name an upstream verdict that the account itself
+// was punished. Deliberately narrower than permanentFailurePatterns: that list
+// answers "is this credential dead?", while a match here halts the whole
+// provider, so a false positive costs every healthy account in the pool.
+//
+// Rate limits, quota, and token/grant failures are excluded on purpose — each
+// is a per-account fact with a per-account remedy.
+var accountSuspensionPatterns = []string{
+	"account suspended",
+	"account is suspended",
+	"account has been suspended",
+	"account was suspended",
+	"account disabled",
+	"account is disabled",
+	"account has been disabled",
+	"account terminated",
+	"account is terminated",
+	"account has been terminated",
+	"account banned",
+	"account is banned",
+	"account has been banned",
+	"account_suspended",
+	"account_disabled",
+	"account_terminated",
+	"account_banned",
+	"suspended_account",
+	"user suspended",
+	"user is suspended",
+	"user has been suspended",
+	"user has been banned",
+	"permanently banned",
+	"permanently disabled",
+	"permanently suspended",
+	"consumer_suspended",
+}
+
+// suspensionNegationPatterns are the phrasings that mention a suspension in
+// order to rule it out or advise about it. An upstream that answers 401 with
+// "check that your account is not suspended" is naming a possible cause, not
+// delivering a verdict, and treating that hint as one would halt the provider
+// over a plain auth failure.
+var suspensionNegationPatterns = []string{
+	"not suspended",
+	"not been suspended",
+	"not disabled",
+	"not been disabled",
+	"not banned",
+	"not been banned",
+	"not terminated",
+	"not been terminated",
+	"no longer suspended",
+	"no longer disabled",
+	"no longer banned",
+	"unsuspended",
+	"un-suspended",
+	"isn't suspended",
+	"is not currently suspended",
+}
+
+// LooksLikeAccountSuspension reports whether an upstream refusal is a verdict
+// on the account's standing rather than on its credential, budget, or rate.
+//
+// The text carries the signal; the status only rejects bodies that cannot be a
+// verdict. 429 is a throttle whatever words accompany it, and a 5xx that echoes
+// "banned" in an error template is a provider fault, not a decision.
+//
+// Callers halt the provider on a match, because a suspension usually reflects
+// something the whole pool shares — one fingerprint, one payment instrument,
+// one IP range — so the next account would be spent on the same verdict.
+func LooksLikeAccountSuspension(statusCode int, errorText string) bool {
+	if errorText == "" {
+		return false
+	}
+	if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+		return false
+	}
+	lower := strings.ToLower(errorText)
+	if mentionsSuspensionNegation(lower) {
+		return false
+	}
+	for _, pat := range accountSuspensionPatterns {
+		if strings.Contains(lower, pat) {
+			return true
+		}
+	}
+	return false
+}
+
+// mentionsSuspensionNegation reports whether the body talks about a suspension
+// only to deny or advise about one.
+func mentionsSuspensionNegation(lowerText string) bool {
+	for _, pat := range suspensionNegationPatterns {
+		if strings.Contains(lowerText, pat) {
+			return true
+		}
+	}
+	return false
+}
+
 // throttleWindowPatterns name an explicit short window (per minute, per second,
 // rpm/tpm). These are throttles no matter what other words they carry: "quota
 // exceeded per minute" is a rate limit, not a spent balance, and telling the

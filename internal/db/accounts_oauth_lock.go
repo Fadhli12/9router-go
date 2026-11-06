@@ -216,3 +216,26 @@ func (r *Repo) ClearConnectionOAuthLock(connID string) error {
 	}
 	return nil
 }
+
+// ConnectionModelLockedFrom reports whether the account carries an unexpired
+// per-model lock, reading the row's own JSON instead of fetching it.
+//
+// IsConnectionModelLocked answers the same question with a SELECT. That is fine
+// for one account and wrong for a page: a caller judging a 40-account pool paid
+// 40 statements (80 when the canonical lock key differs from the requested
+// model) for data it was already holding, which AGENTS.md §4.A forbids and the
+// 1 vCPU target in §4.G cannot absorb.
+//
+// Malformed data reads as unlocked, matching IsConnectionModelLocked: a corrupt
+// row must cost the account its lock, never its routing.
+func ConnectionModelLockedFrom(rawData, model string) bool {
+	if model == "" {
+		return false
+	}
+	raw, ok := parseConnData(rawData)
+	if !ok {
+		return false
+	}
+	until, found := readTimestampField(raw, modelLockPrefix+model)
+	return found && time.Now().UTC().Before(until)
+}

@@ -30,12 +30,24 @@ func parseSettings(rawData string) (*SettingsData, bool) {
 	applyCapacityAdapters(s, raw)
 	applyProviderOverrides(s, raw)
 	applySeatAttemptBudget(s, raw)
+	applySuspensionThreshold(s, raw)
 	return s, true
 }
 
 func applySeatAttemptBudget(s *SettingsData, raw map[string]any) {
 	if sab, ok := raw["seatAttemptBudgetMs"].(float64); ok && sab >= 0 {
 		s.SeatAttemptBudgetMs = int(sab)
+	}
+}
+
+// applySuspensionThreshold reads the account-suspension halt threshold.
+//
+// Values below 1 are dropped rather than stored: a threshold of zero would halt
+// a provider no account had been refused on, which is the opposite of what the
+// setting is for.
+func applySuspensionThreshold(s *SettingsData, raw map[string]any) {
+	if v, ok := raw["suspensionThreshold"].(float64); ok && v >= 1 {
+		s.SuspensionThreshold = int(v)
 	}
 }
 

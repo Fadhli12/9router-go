@@ -100,6 +100,13 @@ type ProviderStrategy struct {
 	StrictModelAssignment bool   `json:"strictModelAssignment,omitempty"`
 	ProxyRotateStrategy   string `json:"proxyRotateStrategy,omitempty"`
 	ConnRotateStrategy    string `json:"connRotateStrategy,omitempty"`
+	// MaxActiveAccounts caps how many of the provider's accounts may be dialled
+	// at all. The rest stay standby and are promoted only as active slots
+	// become unusable, so an upstream that punishes a shared trait reaches a
+	// bounded number of accounts rather than the whole pool.
+	//
+	// Zero means unlimited, which is what every existing install reads.
+	MaxActiveAccounts int `json:"maxActiveAccounts,omitempty"`
 }
 
 // CapacityAdapterEntry defines settings for an input-modality capability adapter pool.
@@ -184,6 +191,14 @@ type SettingsData struct {
 	UptimeKumaEnabled  bool   `json:"uptimeKumaEnabled,omitempty"`
 	UptimeKumaPushURL  string `json:"uptimeKumaPushUrl,omitempty"`
 	UptimeKumaInterval int    `json:"uptimeKumaInterval,omitempty"`
+	// SuspensionThreshold is how many distinct accounts an upstream must
+	// suspend before the provider is halted. Absent or 0 reads as 1: one
+	// punished account already means the next one is about to be punished too.
+	//
+	// Raising it trades accounts for protection against a false positive — at 2
+	// a single suspension no longer halts a healthy pool, but two accounts are
+	// spent before the halt engages.
+	SuspensionThreshold int `json:"suspensionThreshold,omitempty"`
 }
 
 // ProviderThinking is one provider's operator reasoning override, mirroring

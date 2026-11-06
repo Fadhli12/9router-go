@@ -95,6 +95,11 @@ func (h *ChatHandler) forwardRequest(
 	// goes through, so no lane can quietly bypass them.
 	release, allowed := h.resilienceAdmit(ctx, provider, cfg)
 	if !allowed {
+		// A halted provider is not "temporarily unavailable": nothing clears it
+		// but an operator, so a client told to retry would retry forever.
+		if ue := suspendedProviderError(provider); ue != nil {
+			return ue
+		}
 		return &upstreamError{
 			StatusCode: http.StatusServiceUnavailable,
 			Body:       []byte(`{"error":{"message":"provider temporarily unavailable","type":"server_error"}}`),

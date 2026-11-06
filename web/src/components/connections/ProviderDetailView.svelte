@@ -452,6 +452,7 @@
   let settings = $state<Settings | null>(null)
   let isRoundRobin = $state(false)
   let stickyLimit = $state('1')
+  let maxActiveAccounts = $state('')
   let thinkingLevel = $state('auto')
 
   // Proxy Pools
@@ -948,6 +949,9 @@
       const strategy = settingsData?.providerStrategies?.[providerId]
       isRoundRobin = strategy?.fallbackStrategy === 'round-robin'
       stickyLimit = String(strategy?.stickyRoundRobinLimit ?? 1)
+      // Empty rather than '0' when unset: the field means "no cap", and showing
+      // a 0 reads as a cap of zero accounts.
+      maxActiveAccounts = strategy?.maxActiveAccounts ? String(strategy.maxActiveAccounts) : ''
 
       // Extract Thinking Level
       const thinking = (settingsData as any)?.providerThinking?.[providerId]
@@ -1143,12 +1147,50 @@
           stickyRoundRobinLimit: Number(sticky) || 3
         }
       } else {
-        delete updated[providerId]
+        // Turning round-robin off drops the rotation keys but must keep the
+        // rest of the entry: deleting it outright also discarded the account
+        // cap and the proxy binding, so a toggle silently uncapped the pool.
+        const rest = { ...(updated[providerId] || {}) }
+        delete rest.fallbackStrategy
+        delete rest.stickyRoundRobinLimit
+        if (Object.keys(rest).length === 0) {
+          delete updated[providerId]
+        } else {
+          updated[providerId] = rest
+        }
       }
       if (settings) settings.providerStrategies = updated
       await api.updateSettings({ providerStrategies: updated })
     } catch (err) {
       console.error('Error saving provider strategy:', err)
+    }
+  }
+
+  // The cap is stored beside the rotation keys, so it is merged into the
+  // existing entry rather than written over it.
+  async function handleMaxActiveAccountsChange() {
+    try {
+      const parsed = Number(maxActiveAccounts)
+      const cap = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0
+      maxActiveAccounts = cap > 0 ? String(cap) : ''
+
+      const current = settings?.providerStrategies || {}
+      const updated = { ...current }
+      const entry = { ...(updated[providerId] || {}) }
+      if (cap > 0) {
+        entry.maxActiveAccounts = cap
+      } else {
+        delete entry.maxActiveAccounts
+      }
+      if (Object.keys(entry).length === 0) {
+        delete updated[providerId]
+      } else {
+        updated[providerId] = entry
+      }
+      if (settings) settings.providerStrategies = updated
+      await api.updateSettings({ providerStrategies: updated })
+    } catch (err) {
+      console.error('Error saving account cap:', err)
     }
   }
 
@@ -3647,6 +3689,32 @@
                 placeholder="1"
                 class="w-14 px-2 py-1 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
               />
+            </div>
+          {/if}
+
+          {#if providerConnections.length > 1}
+            <div class="flex items-center gap-1.5">
+              <span
+                class="text-xs text-text-muted"
+                title="Cap how many accounts may be used at all. The rest stay standby and take over only as active accounts are exhausted, so an upstream suspension reaches a bounded number of accounts instead of the whole pool. Empty means no cap."
+              >
+                Max active:
+              </span>
+              <input
+                type="number"
+                min="1"
+                max={providerConnections.length}
+                bind:value={maxActiveAccounts}
+                onchange={handleMaxActiveAccountsChange}
+                placeholder="all"
+                aria-label="Maximum active accounts"
+                class="w-16 px-2 py-1 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
+              />
+              {#if Number(maxActiveAccounts) > 0}
+                <span class="text-[11px] text-text-subtle">
+                  of {providerConnections.length}
+                </span>
+              {/if}
             </div>
           {/if}
 

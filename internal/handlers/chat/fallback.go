@@ -73,6 +73,20 @@ func (h *ChatHandler) handleAccountFallback(
 	if FallbackAttemptRecorderFrom(ctx) == nil {
 		ctx = WithFallbackAttemptRecorder(ctx, NewFallbackAttemptRecorder())
 	}
+	// The halt is enforced at the entry of the rotation rather than only at the
+	// shared forward helper: executor-backed providers dispatch through their
+	// own lane and never reach that helper, so a gate placed only there leaves
+	// most of the catalog spending accounts on a verdict already recorded.
+	//
+	// A probe is let through deliberately — it is the operator's own way to
+	// check whether an appeal worked, and it is one request, not a rotation.
+	if !handlerutil.IsProbeContext(ctx) {
+		if ue := suspendedProviderError(provider); ue != nil {
+			log.Warn("fallback", "provider halted by an account suspension; refusing before any dial",
+				"provider", provider, "model", model)
+			return ue
+		}
+	}
 	body = repairToolCallIDsInJSON(body)
 	prefixHash := computePrefixHash(body)
 
@@ -278,6 +292,17 @@ func (h *ChatHandler) handleAccountFallback(
 			excludeIDs = append(excludeIDs, connObj.ID)
 			lastErr = ue
 			continue
+		}
+		// An account the upstream suspended is the one refusal that must NOT
+		// rotate. The cause is usually something the whole pool shares — one
+		// pinned client fingerprint, one payment instrument, one IP range — so
+		// trying the next account spends it on the same verdict, and an
+		// operator ends up appealing every account one by one. The provider is
+		// latched instead, and the latch has no timer: only an operator clears
+		// it, after the appeal.
+		if errors.As(lastErr, &ue) && providers.LooksLikeAccountSuspension(ue.StatusCode, extractErrorText(ue.Body)) {
+			h.haltProviderOnSuspension(provider, model, connObj, ue)
+			return lastErr
 		}
 		if errors.As(lastErr, &ue) && providers.RetryableStatusCodes[ue.StatusCode] {
 			if handlerutil.IsProbeContext(ctx) {
