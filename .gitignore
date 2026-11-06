@@ -92,3 +92,8 @@ stitch-screenshots/
 # resolving without a second copy entering history. Add one here if you want it
 # kept; docs/screenshots/ is for the ones the site and README reference.
 /pr-*.png
+
+# Operator worksheets generated from the live database (the Antigravity appeal
+# tracker, for one). They carry real account emails, so they must never reach a
+# commit — the directory is local scratch, not project content.
+/.9router-notes/
