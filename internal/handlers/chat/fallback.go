@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -33,18 +32,6 @@ import (
 
 // StatusClientClosedRequest is the canonical HTTP status for client connection aborts (nginx 499).
 const StatusClientClosedRequest = 499
-
-func isLoopbackBaseURL(rawURL string) bool {
-	if rawURL == "" {
-		return false
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	h := u.Hostname()
-	return h == "127.0.0.1" || h == "localhost" || h == "::1" || strings.HasPrefix(h, "127.")
-}
 
 // clientClosedBody is the JSON body that travels with StatusClientClosedRequest.
 // Single-sourced so the combo and account-fallback paths cannot drift apart.
@@ -1031,8 +1018,14 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	if connData != nil && (connData.ProxyPoolID != "" || connData.ConnectionProxyEnabled || connData.StrictProxy) {
 		ctx = internalproxy.WithStrictProxy(ctx, true)
 	}
-	if providers.IsLocalByDesign(provider) || (providerCfg != nil && isLoopbackBaseURL(providerCfg.BaseURL)) {
+	if providers.IsLocalByDesign(provider) {
 		ctx = internalproxy.WithAllowLoopback(ctx)
+	}
+	// Per-connection opt-in for private-network dials (issue #840): a connection
+	// pointed at a local gateway or LAN peer carries allowPrivateNetworking.
+	// The flag rides on ctx so the dial guard honors it for this request only.
+	if connData != nil && connData.AllowPrivateNetworking {
+		ctx = internalproxy.WithAllowPrivateNetworking(ctx)
 	}
 	sessionID := handlerutil.GetSessionID(ctx)
 
@@ -1449,6 +1442,12 @@ func isClientCanceled(ctx context.Context, err error) bool {
 // a role:"system" message is rejected by the Anthropic API.
 // false from compress/inject means nothing changed (or unparseable) — keep original, not a failure.
 func (h *ChatHandler) applyTokenSavers(ctx context.Context, body []byte, claudeNative bool) ([]byte, int, int, int) {
+	// X-9Router-Token-Saver: off|0|false|bypass opts the whole request out of
+	// every token saver — RTK, Caveman, Ponytail, ADHD, Headroom, system prompt
+	// prefix/suffix — and the body is forwarded untouched with 0 tokens saved.
+	if TokenSaverBypassEnabled(ctx) {
+		return body, 0, 0, 0
+	}
 	if h.TokenSaver == nil {
 		return body, 0, 0, 0
 	}
@@ -1547,6 +1546,36 @@ func (h *ChatHandler) applyTokenSavers(ctx context.Context, body []byte, claudeN
 		}
 	}
 	return out, origTokens, savedTokens, savedPct
+}
+
+// tokenSaverBypassKey carries the X-9Router-Token-Saver opt-out on the context.
+type tokenSaverBypassKey struct{}
+
+// WithTokenSaverBypass marks ctx as a token-saver bypass: no compression or
+// prompt injection may run on this request.
+func WithTokenSaverBypass(ctx context.Context) context.Context {
+	return context.WithValue(ctx, tokenSaverBypassKey{}, true)
+}
+
+// TokenSaverBypassEnabled reports whether the request opted out of token saving.
+func TokenSaverBypassEnabled(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, ok := ctx.Value(tokenSaverBypassKey{}).(bool)
+	return ok && v
+}
+
+// isTokenSaverBypassValue reports whether an X-9Router-Token-Saver header value
+// opts the request out of every token saver (false, 0, off, bypass,
+// case-insensitive).
+func isTokenSaverBypassValue(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "false", "0", "off", "bypass":
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveProtocol(endpoint string) string {
