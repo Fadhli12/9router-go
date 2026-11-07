@@ -303,6 +303,7 @@ func TranslateOpenAIToGeminiWithSession(openaiBody []byte, sessionID string) ([]
 				if ts == "" {
 					ts = GetGeminiThoughtSignature(tc.ID, sessionID, oreq.Model)
 				}
+				ts = NormalizeGeminiThoughtSignature(ts)
 				if ts == "" && !firstFunctionCallSeen {
 					ts = DefaultThinkingSignature
 				}
@@ -544,7 +545,7 @@ func moveFunctionResponsesLast(parts []GeminiPart) []GeminiPart {
 func extractThoughtSig(id string) string {
 	const sep = "__ts__"
 	if _, after, ok := strings.CutLast(id, sep); ok && after != "" {
-		return after
+		return NormalizeGeminiThoughtSignature(after)
 	}
 	return ""
 }
