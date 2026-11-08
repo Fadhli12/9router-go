@@ -317,8 +317,9 @@
     } finally {
       banCheckCurrentId = null
       if (pid === providerId) banCheckRunning = false
-      // The verdict is persisted against the connection, so the rows have to be
-      // re-read for the operator to see it beside each account.
+      // A banned/lifted verdict is written onto the connection row
+      // (persistBanCheckResult), so the rows are re-read for the persisted
+      // status to replace the stale one beside each account.
       onRefresh()
     }
   }
@@ -4182,6 +4183,40 @@
                           <span class="size-1.5 rounded-full {proxyBadge.variant === 'success' ? 'bg-green-500' : 'bg-red-500'}"></span>
                           Proxy
                         </span>
+                      {/if}
+                      <!-- Ban check: this run's verdict for THIS account.
+                           The summary counts say how many are banned; an
+                           operator needs to know WHICH, so the verdict is shown
+                           on the row it belongs to. It is the live result of the
+                           current sweep — the persisted testStatus/lastError
+                           above carries it across a reload. -->
+                      {#if banCheckCurrentId === conn.id}
+                        <span class="inline-flex items-center gap-1 rounded-full bg-surface-3 px-2 py-0.5 text-[10px] font-semibold text-text-muted">
+                          <span class="material-symbols-outlined text-[12px] animate-spin">progress_activity</span>
+                          Checking
+                        </span>
+                      {:else if banCheckResults[conn.id]}
+                        {@const banCheck = banCheckResults[conn.id]}
+                        <button
+                          type="button"
+                          class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold {banCheck.state === 'lifted'
+                            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                            : banCheck.state === 'banned'
+                              ? 'bg-red-500/10 text-red-600 dark:text-red-400'
+                              : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'}"
+                          title={banCheck.message || banCheck.state}
+                          onclick={() => {
+                            if (banCheck.message) {
+                              errorModalText = banCheck.message
+                              showErrorModal = true
+                            }
+                          }}
+                        >
+                          <span class="material-symbols-outlined text-[12px]">
+                            {banCheck.state === 'lifted' ? 'lock_open' : banCheck.state === 'banned' ? 'block' : 'help'}
+                          </span>
+                          {banCheck.state === 'lifted' ? 'Lifted' : banCheck.state === 'banned' ? 'Still banned' : 'Check failed'}
+                        </button>
                       {/if}
                       <!-- Last error tooltip -->
                       {#if lastErr && lastErr !== 'Provider test not supported'}

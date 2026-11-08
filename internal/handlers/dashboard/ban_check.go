@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"9router/proxy/internal/models"
+
 	"9router/proxy/internal/handlers/chat"
 
 	"9router/proxy/internal/handlerutil"
@@ -135,12 +137,61 @@ func (h *DashboardHandler) HandleBanCheck(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	state := banCheckStateFor(verdict)
+	h.persistBanCheckResult(conn, state, verdict)
+
 	handlerutil.WriteJSON(w, http.StatusOK, BanCheckResponse{
-		State:   banCheckStateFor(verdict),
+		State:   state,
 		Status:  verdict.Status,
 		Message: verdict.Message,
 		Model:   model,
 	})
+}
+
+// persistBanCheckResult writes the verdict onto the connection row.
+//
+// Without this the answer lives only in the HTTP response: the operator reads
+// it once, and the row still shows whatever the last real request left behind.
+// The point of the check is to learn that an appeal was granted, so the verdict
+// has to outlive the click.
+//
+// It writes the same two fields the existing connection probe does
+// (persistProbeResult), because the dashboard already renders those beside each
+// account — a third shape would need its own UI for the same fact.
+//
+// An "error" verdict is deliberately not written. It says nothing about the
+// account, only that this attempt did not land, and overwriting a known ban
+// with a transport fault would lose the one fact the operator has.
+func (h *DashboardHandler) persistBanCheckResult(conn *models.ProviderConnection, state string, verdict chat.BanCheckVerdict) {
+	if conn == nil || h.Repo == nil {
+		return
+	}
+	raw, _ := decodeConnectionData(conn.Data)
+	if raw == nil {
+		raw = map[string]any{}
+	}
+
+	switch state {
+	case banCheckStateLifted:
+		// The appeal was granted, or the account was never banned: the row has
+		// to stop carrying a ban message it no longer earns, or the operator
+		// cannot tell the two apart.
+		raw["testStatus"] = "active"
+		raw["lastError"] = nil
+		raw["lastErrorAt"] = nil
+	case banCheckStateBanned:
+		raw["testStatus"] = "error"
+		raw["lastError"] = verdict.Message
+		raw["lastErrorAt"] = time.Now().UTC().Format(time.RFC3339)
+	default:
+		return
+	}
+
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return
+	}
+	_ = h.Repo.UpdateConnectionData(conn.ID, string(encoded))
 }
 
 // banCheckStateFor maps one upstream outcome to the state the operator reads.
