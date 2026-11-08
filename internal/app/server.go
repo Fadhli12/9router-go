@@ -117,6 +117,11 @@ func ProvideServer(p ServerParams) *http.Server {
 			// account reaching the models it pays for. Without this loop the
 			// credential has to be pasted again every few minutes.
 			executor.StartGeminiWebRotation(shutdown.Context(), p.Repo)
+			// Google ships Antigravity client releases on its own schedule, and
+			// every pooled account presents this build's pinned fingerprint. A
+			// stale one is what the accounts pay for, so the provider is halted
+			// on the release rather than on the first ban.
+			startAntigravityDriftWatch(shutdown.Context())
 			startAutoPingScheduler(shutdown.Context(), p.Repo, p.ChatHandler)
 			startModelHealthScheduler(shutdown.Context(), p.Repo, p.ChatHandler)
 			startUptimeHeartbeat(shutdown.Context(), p.Repo)
