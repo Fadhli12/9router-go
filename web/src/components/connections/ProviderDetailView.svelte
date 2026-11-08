@@ -255,6 +255,73 @@
   // verbatim (providers/[id]/page.js:158) with custom models appended after the
   // catalog, so the rows read in the same sequence on both dashboards.
   let visibleModels = $derived(allAvailableModels.filter((m) => !disabledModelIds.includes(m.id)))
+
+  // ── Ban check ──
+  // A suspended Google account still refreshes its OAuth token, so "Test
+  // connection" reports success on an account that cannot serve a request. The
+  // only way to learn whether an appeal was granted is to send one real request
+  // on that one credential, which is what this does — one account at a time,
+  // on a model the operator picks, because the request is billable.
+  let banCheckModel = $state('')
+  let banCheckRunning = $state(false)
+  let banCheckCurrentId = $state<string | null>(null)
+  let banCheckResults = $state<Record<string, { state: string; message?: string; status?: number }>>({})
+  let banCheckDrift = $state<{ released: string; pinned: string } | null>(null)
+  // Only this provider's own chat models: a ban check on a model the account
+  // cannot serve fails for the wrong reason, and that failure reads as a ban.
+  let banCheckModelOptions = $derived(allAvailableModels.map((m) => m.id))
+  let banCheckSummary = $derived.by(() => {
+    const vals = Object.values(banCheckResults)
+    return {
+      banned: vals.filter((v) => v.state === 'banned').length,
+      lifted: vals.filter((v) => v.state === 'lifted').length,
+      failed: vals.filter((v) => v.state === 'error').length,
+      done: vals.length,
+    }
+  })
+
+  $effect(() => {
+    if (!banCheckModel && banCheckModelOptions.length > 0) banCheckModel = banCheckModelOptions[0]
+  })
+
+  async function runBanCheck() {
+    if (banCheckRunning || !banCheckModel) return
+    const pid = providerId
+    const targets = providerConnections.map((c) => c.id)
+    if (targets.length === 0) return
+    banCheckRunning = true
+    banCheckResults = {}
+    banCheckDrift = null
+    try {
+      for (const id of targets) {
+        if (pid !== providerId) break
+        banCheckCurrentId = id
+        try {
+          const res = await api.banCheckConnection(id, banCheckModel)
+          // A refusal is about the gateway, not the account: the fingerprint
+          // this build sends is stale, so the check would be a real request on
+          // the very identity that earns the ban. Stop the sweep rather than
+          // repeat it 40 times.
+          if (res.state === 'refused') {
+            banCheckDrift = res.drift ?? null
+            break
+          }
+          banCheckResults[id] = { state: res.state, message: res.message, status: res.status }
+        } catch (err) {
+          banCheckResults[id] = {
+            state: 'error',
+            message: err instanceof Error ? err.message : 'ban check failed',
+          }
+        }
+      }
+    } finally {
+      banCheckCurrentId = null
+      if (pid === providerId) banCheckRunning = false
+      // The verdict is persisted against the connection, so the rows have to be
+      // re-read for the operator to see it beside each account.
+      onRefresh()
+    }
+  }
   // ── Model list toolbar state (search / filter / batch selection) ──
   // One filter object drives both lists below: the registered-provider grid
   // and the compatible-node list. Selection is id-based so it survives a
@@ -3750,6 +3817,70 @@
         </div>
       </div>
     </div>
+
+    <!-- Ban check: one real request per account, because a token-only probe
+         cannot answer it. A suspended Google account still refreshes its OAuth
+         token, so "Test connection" reports success on an account that cannot
+         serve anything. -->
+    {#if providerConnections.length > 0}
+      <div class="mb-4 rounded-lg border border-border-subtle bg-surface px-3 py-2.5">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="material-symbols-outlined text-[18px] text-text-muted" aria-hidden="true">gavel</span>
+          <span class="text-xs font-medium text-text-main">Ban check</span>
+
+          <select
+            bind:value={banCheckModel}
+            disabled={banCheckRunning || banCheckModelOptions.length === 0}
+            class="h-7 rounded-[8px] border border-border-subtle bg-surface-2 px-2 text-xs text-text-main disabled:opacity-50"
+            title="Pick a cheap model: a ban check is a real, billable request"
+          >
+            {#each banCheckModelOptions as id (id)}
+              <option value={id}>{id}</option>
+            {/each}
+          </select>
+
+          <button
+            type="button"
+            onclick={runBanCheck}
+            disabled={banCheckRunning || !banCheckModel}
+            class="inline-flex h-7 items-center gap-1.5 rounded-[8px] bg-primary px-3 text-xs font-medium text-white transition-colors hover:bg-primary-hover disabled:opacity-50"
+          >
+            <span class="material-symbols-outlined text-[16px]" aria-hidden="true">
+              {banCheckRunning ? 'hourglass_top' : 'play_arrow'}
+            </span>
+            {banCheckRunning ? 'Checking...' : 'Check all accounts'}
+          </button>
+
+          {#if banCheckRunning && banCheckCurrentId}
+            <span class="text-xs text-text-muted">
+              {formatEmailLabel(providerConnections.find((c) => c.id === banCheckCurrentId)?.name || banCheckCurrentId, $emailPrivacy)}
+            </span>
+          {/if}
+
+          {#if banCheckSummary.done > 0}
+            <span class="ml-auto flex items-center gap-2 text-xs">
+              <span class="text-emerald-600 dark:text-emerald-400">Lifted: {banCheckSummary.lifted}</span>
+              <span class="text-red-600 dark:text-red-400">Banned: {banCheckSummary.banned}</span>
+              {#if banCheckSummary.failed > 0}
+                <span class="text-text-muted">Failed: {banCheckSummary.failed}</span>
+              {/if}
+            </span>
+          {/if}
+        </div>
+
+        <!-- A refusal is about this build, not the account: the identity it
+             sends is stale, so the check would be a real request on the very
+             fingerprint that earns the ban. -->
+        {#if banCheckDrift}
+          <div class="mt-2 rounded-[8px] border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-700 dark:text-amber-300">
+            Refused: Antigravity released <strong>{banCheckDrift.released}</strong>, this build sends
+            <strong>{banCheckDrift.pinned}</strong>. A ban check is a real request on that fingerprint, so it
+            is held back until the pinned identity is patched — an account with its one appeal already spent
+            would not survive a second verdict.
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     <!-- One-by-One summary (upstream parity) -->
     {#if oneByOneSummary}

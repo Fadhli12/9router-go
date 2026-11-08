@@ -2004,6 +2004,29 @@ return conns.map(normalizeConnection)
    * answers on /v1/systemone, and a chat probe on it returns 500. Omit `kind`
    * for a plain LLM model.
    */
+  /**
+   * Ask one named account whether its ban is still in force.
+   *
+   * A real request on that one credential, because a token-only probe cannot
+   * answer it: a suspended Google account still refreshes its OAuth token, so
+   * "Test connection" reports success on an account that cannot serve anything.
+   *
+   * Answers 409 with state "refused" while the gateway's pinned client identity
+   * is stale — the check would then be a real request on the same fingerprint
+   * that earns the ban.
+   */
+  banCheckConnection: (connectionId: string, model: string) =>
+    request<{
+      state: 'banned' | 'lifted' | 'error' | 'refused'
+      status?: number
+      message?: string
+      model?: string
+      drift?: { released: string; pinned: string }
+    }>(`/api/connections/${encodeURIComponent(connectionId)}/ban-check`, {
+      method: 'POST',
+      body: JSON.stringify({ model }),
+    }),
+
   testModel: (model: string, kind?: string) =>
     request<{ ok: boolean; error?: string; note?: string; latencyMs?: number; status?: number; blocked?: boolean; resetAt?: string }>('/api/models/test', {
       method: 'POST',

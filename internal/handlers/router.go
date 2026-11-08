@@ -234,6 +234,10 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 		// Same instance as the resilience panel reads: the data plane owns the
 		// layer it consults on every request.
 		dashH.Resilience = chatH.Resilience
+		// The ban check runs through the real chat lane: a token-only probe
+		// cannot answer it, because a suspended Google account still refreshes
+		// its OAuth token.
+		dashH.ChatProbe = chatH
 	}
 	ssoH := sso.NewHandler(repo)
 
@@ -257,6 +261,7 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	r.Delete("/api/connections/{id}", dashH.HandleDeleteConnection)
 	r.Delete("/api/providers/{id}", dashH.HandleDeleteConnection)
 	r.Post("/api/connections/{id}/test", dashH.HandleTestConnection)
+	r.Post("/api/connections/{id}/ban-check", dashH.HandleBanCheck)
 	r.Post("/api/connections/{id}/reorder", dashH.HandleReorderConnection)
 	r.Post("/api/providers/{id}/reorder", dashH.HandleReorderConnection)
 	r.Post("/api/providers/{id}/test", dashH.HandleTestConnection)
