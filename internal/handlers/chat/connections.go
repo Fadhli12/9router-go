@@ -287,6 +287,19 @@ func (h *ChatHandler) getBestConnectionWithContext(ctx context.Context, provider
 				ineligible = false
 			}
 		}
+		if ineligible && reason == "disabled" && handlerutil.IsBanCheckContext(ctx) {
+			// The operator's ban check is the one caller that must reach a
+			// disabled account. A banned account is left switched off, so
+			// asking "has the appeal been granted?" is a question only about
+			// rows in exactly that state — refusing them would leave the
+			// operator toggling each account on, sending a real request, and
+			// toggling it back, which is the workflow this check replaces.
+			//
+			// It stays pinned: the answer is about this credential, so being
+			// redirected to another account would report the wrong one's
+			// verdict.
+			ineligible = false
+		}
 		if ineligible && isProbe && reason == "disabled" {
 			// A probe is pinned to ONE account on purpose: a scheduled ping exists
 			// to start that account's quota window. Dropping the pin let the

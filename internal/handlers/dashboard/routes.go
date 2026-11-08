@@ -53,6 +53,11 @@ type DashboardHandler struct {
 	// captured the loop at construction would hold nil in production and
 	// record nothing.
 	ModelHealth *modelhealth.Loop
+	// ChatProbe runs the per-account ban check through the real chat lane.
+	// Optional for the same reason the fields above are: a handler built
+	// outside a boot has none, and the endpoint answers 503 rather than
+	// pretending it probed.
+	ChatProbe ChatBanProber
 }
 
 // NewDashboardHandler initializes a DashboardHandler with the provided Repo.
@@ -100,6 +105,7 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Delete("/connections/{id}", h.HandleDeleteConnection)
 		r.Delete("/providers/{id}", h.HandleDeleteConnection)
 		r.Post("/connections/{id}/test", h.HandleTestConnection)
+		r.Post("/connections/{id}/ban-check", h.HandleBanCheck)
 		r.Post("/providers/{id}/test", h.HandleTestConnection)
 		r.Get("/providers/{id}/models", h.HandleGetConnectionModels)
 		r.Get("/providers/{id}/export-keys", h.HandleExportProviderKeys)
