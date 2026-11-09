@@ -3825,7 +3825,9 @@
          serve anything. -->
     {#if providerConnections.length > 0}
       <div class="mb-4 rounded-lg border border-border-subtle bg-surface px-3 py-2.5">
-        <div class="flex flex-wrap items-center gap-2">
+        <!-- Right-aligned to sit on the same edge as Custom headers above and
+             Sensor Email below; left-aligned it lined up with nothing. -->
+        <div class="flex flex-wrap items-center justify-end gap-2">
           <span class="material-symbols-outlined text-[18px] text-text-muted" aria-hidden="true">gavel</span>
           <span class="text-xs font-medium text-text-main">Ban check</span>
 
@@ -3859,7 +3861,7 @@
           {/if}
 
           {#if banCheckSummary.done > 0}
-            <span class="ml-auto flex items-center gap-2 text-xs">
+            <span class="flex items-center gap-2 text-xs">
               <span class="text-emerald-600 dark:text-emerald-400">Lifted: {banCheckSummary.lifted}</span>
               <span class="text-red-600 dark:text-red-400">Banned: {banCheckSummary.banned}</span>
               {#if banCheckSummary.failed > 0}
