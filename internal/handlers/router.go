@@ -251,6 +251,15 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	// only: a route added there alone is reachable in a unit test and 404s on the
 	// real server.
 	r.Get("/api/providers/catalog", dashH.HandleGetProviderCatalog)
+	// The resilience surface. Registered here as well as in
+	// dashboard.RegisterRoutes because that table is mounted by tests only: all
+	// three lived there alone, so the provider halt could fire but never be
+	// released — its own refusal message tells an operator to clear the halt
+	// through a path that answered 404 on the real server, and the latch is
+	// persisted, so a restart did not release it either.
+	r.Get("/api/resilience", dashH.HandleGetResilience)
+	r.Post("/api/resilience/reset", dashH.HandleResetResilience)
+	r.Post("/api/resilience/suspensions/clear", dashH.HandleClearSuspension)
 	r.Post("/api/providers/gemini-web/browser-login", dashH.HandleGeminiWebBrowserLogin)
 	r.Post("/api/providers/gemini-web/import-chrome", dashH.HandleGeminiWebImportChrome)
 	r.Post("/api/providers/deepseek-web/browser-login", dashH.HandleDeepSeekWebBrowserLogin)
