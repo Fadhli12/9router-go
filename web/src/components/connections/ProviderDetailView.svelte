@@ -267,6 +267,9 @@
   let banCheckCurrentId = $state<string | null>(null)
   let banCheckResults = $state<Record<string, { state: string; message?: string; status?: number }>>({})
   let banCheckDrift = $state<{ released: string; pinned: string } | null>(null)
+  // Accounts this sweep switched off, counted for the summary so the operator
+  // sees that the check acted rather than only reported.
+  let banCheckDisabled = $state<string[]>([])
   // Only this provider's own chat models: a ban check on a model the account
   // cannot serve fails for the wrong reason, and that failure reads as a ban.
   let banCheckModelOptions = $derived(allAvailableModels.map((m) => m.id))
@@ -292,6 +295,7 @@
     banCheckRunning = true
     banCheckResults = {}
     banCheckDrift = null
+    banCheckDisabled = []
     try {
       for (const id of targets) {
         if (pid !== providerId) break
@@ -307,6 +311,20 @@
             break
           }
           banCheckResults[id] = { state: res.state, message: res.message, status: res.status }
+          // A still-banned account is switched off straight away. Leaving it
+          // enabled means the rotation reaches it again and spends a request on
+          // a credential already known to be refused — and the verdict is
+          // strict: only an upstream suspension refusal reads as "banned", so a
+          // transient fault lands in "error" and is left alone.
+          if (res.state === 'banned') {
+            try {
+              await api.updateConnection(id, { isActive: 0 })
+              banCheckDisabled = [...banCheckDisabled, id]
+            } catch {
+              // The verdict still stands even if the toggle write failed; the
+              // row keeps its banned badge so the operator can switch it off.
+            }
+          }
         } catch (err) {
           banCheckResults[id] = {
             state: 'error',
@@ -1317,6 +1335,31 @@
       selectedConnIds = []
     } else {
       selectedConnIds = providerConnections.map((c) => c.id)
+    }
+  }
+
+  // Switch every ticked connection on or off in one action.
+  //
+  // handleToggleProvider already does this for the whole provider; this is the
+  // same write scoped to the checkbox selection, which is what an operator
+  // wants when only some accounts should be live — enabling 40 banned accounts
+  // to reach the three that work is the opposite of useful.
+  let isTogglingSelected = $state(false)
+
+  async function handleToggleSelected(targetActive: boolean) {
+    if (selectedConnIds.length === 0 || isTogglingSelected) return
+    isTogglingSelected = true
+    try {
+      const results = await Promise.allSettled(
+        selectedConnIds.map((id) => api.updateConnection(id, { isActive: targetActive ? 1 : 0 }))
+      )
+      const failed = results.filter((r) => r.status === 'rejected').length
+      if (failed > 0) {
+        alert(`${failed} of ${selectedConnIds.length} connection(s) could not be updated.`)
+      }
+      onRefresh()
+    } finally {
+      isTogglingSelected = false
     }
   }
 
@@ -3718,6 +3761,28 @@
             <span class="material-symbols-outlined text-[18px]">delete</span>
             Delete Selected ({selectedConnIds.length})
           </button>
+
+          <button
+            type="button"
+            onclick={() => handleToggleSelected(true)}
+            disabled={isTogglingSelected}
+            title="Switch the selected connections on"
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 h-7 px-3 text-xs rounded-[8px]"
+          >
+            <span class="material-symbols-outlined text-[18px]">toggle_on</span>
+            Enable ({selectedConnIds.length})
+          </button>
+
+          <button
+            type="button"
+            onclick={() => handleToggleSelected(false)}
+            disabled={isTogglingSelected}
+            title="Switch the selected connections off"
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed bg-surface-2 hover:bg-surface-3 text-text-muted border border-border h-7 px-3 text-xs rounded-[8px]"
+          >
+            <span class="material-symbols-outlined text-[18px]">toggle_off</span>
+            Disable ({selectedConnIds.length})
+          </button>
         {/if}
 
         {#if providerConnections.length > 0 && proxyPools.length > 0}
@@ -3867,6 +3932,9 @@
             <span class="flex items-center gap-2 text-xs">
               <span class="text-emerald-600 dark:text-emerald-400">Lifted: {banCheckSummary.lifted}</span>
               <span class="text-red-600 dark:text-red-400">Banned: {banCheckSummary.banned}</span>
+              {#if banCheckDisabled.length > 0}
+                <span class="text-text-muted">({banCheckDisabled.length} switched off)</span>
+              {/if}
               {#if banCheckSummary.failed > 0}
                 <span class="text-text-muted">Failed: {banCheckSummary.failed}</span>
               {/if}
