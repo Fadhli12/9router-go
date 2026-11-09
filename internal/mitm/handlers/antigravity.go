@@ -4,6 +4,9 @@ import (
 	json "encoding/json/v2"
 	"net/http"
 	"strings"
+
+	"9router/proxy/internal/log"
+	"9router/proxy/internal/providers"
 )
 
 const antigravityIDEVersion = "2.23.0"
@@ -22,6 +25,16 @@ func HandleAntigravity(w http.ResponseWriter, r *http.Request, body []byte) {
 		SendError(w, http.StatusBadRequest, "invalid Antigravity request body")
 		return
 	}
+
+	// Recorded before the override below replaces it. `cl` comes from the
+	// client's runtime config rather than its binary, so this interception is
+	// the only place the genuine fingerprint is observable — and the gateway's
+	// pinned identity can only be bumped from such a capture.
+	//
+	// Outside the isGeneration branch on purpose: the catalog lane keeps the
+	// client's own identity, so it carries the same fingerprint and is the
+	// cheaper request to capture from.
+	logAntigravityClientIdentity(r, reqBody)
 
 	// Apply IDE version override only for generation endpoints
 	if isGeneration {
@@ -64,4 +77,47 @@ func HandleAntigravity(w http.ResponseWriter, r *http.Request, body []byte) {
 	} else {
 		PipeJSON(upstream, w)
 	}
+}
+
+// logAntigravityClientIdentity records the genuine client fingerprint from an
+// intercepted request.
+//
+// Logged at warn level so it survives a default log configuration: a capture
+// session is rare and deliberate, and an operator who ran one must not have to
+// discover afterwards that the line was filtered out.
+//
+// The User-Agent and the body's ideVersion are logged separately because they
+// disagree in practice — the CLI sends the aidev_client shape with the cl token
+// while the IDE sends a bare version — and the gateway pins both.
+func logAntigravityClientIdentity(r *http.Request, reqBody map[string]any) {
+	ua := r.Header.Get("User-Agent")
+	ideVersion := antigravityBodyIDEVersion(reqBody)
+	if ua == "" && ideVersion == "" {
+		return
+	}
+	log.Warn("mitm", "antigravity client identity observed",
+		"user_agent", ua,
+		"body_ide_version", ideVersion,
+		"url", r.URL.String(),
+		"pinned_cli", providers.AntigravityCLIVersion,
+		"pinned_ide", providers.AntigravityIDEVersion,
+	)
+}
+
+// antigravityBodyIDEVersion reads metadata.ideVersion from either payload shape
+// the clients send: top level, or nested under "request".
+func antigravityBodyIDEVersion(reqBody map[string]any) string {
+	if meta, ok := reqBody["metadata"].(map[string]any); ok {
+		if v, ok := meta["ideVersion"].(string); ok && v != "" {
+			return v
+		}
+	}
+	if req, ok := reqBody["request"].(map[string]any); ok {
+		if meta, ok := req["metadata"].(map[string]any); ok {
+			if v, ok := meta["ideVersion"].(string); ok && v != "" {
+				return v
+			}
+		}
+	}
+	return ""
 }
