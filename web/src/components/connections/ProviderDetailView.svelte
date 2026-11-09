@@ -3823,7 +3823,10 @@
          cannot answer it. A suspended Google account still refreshes its OAuth
          token, so "Test connection" reports success on an account that cannot
          serve anything. -->
-    {#if providerConnections.length > 0}
+    <!-- Antigravity only: the drift guard that makes this safe to click
+         (antigravityDriftFor) returns nil for every other provider, so the row
+         would render there with no guard behind it at all. -->
+    {#if providerId === 'antigravity' && providerConnections.length > 0}
       <div class="mb-4 rounded-lg border border-border-subtle bg-surface px-3 py-2.5">
         <!-- Right-aligned to sit on the same edge as Custom headers above and
              Sensor Email below; left-aligned it lined up with nothing. -->
