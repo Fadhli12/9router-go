@@ -20,7 +20,7 @@ func TestHaltAntigravityOnDrift(t *testing.T) {
 		resilience.ResetSuspensions()
 		t.Cleanup(resilience.ResetSuspensions)
 
-		haltAntigravityOnDrift(
+		haltAntigravityOnDrift(nil,
 			providers.AntigravityDrift{Observed: "1.5.3", Pinned: "1.5.1", Newer: true},
 			providers.AntigravityRelease{Version: "1.5.3", RolloutPercent: 100},
 		)
@@ -52,7 +52,7 @@ func TestHaltAntigravityOnDrift(t *testing.T) {
 		const banReason = "This service has been disabled in this account for violation of Terms of Service."
 		resilience.RecordAccountSuspension(canonical, "conn-42", 403, banReason)
 
-		haltAntigravityOnDrift(
+		haltAntigravityOnDrift(nil,
 			providers.AntigravityDrift{Observed: "9.9.9", Pinned: "1.5.1", Newer: true},
 			providers.AntigravityRelease{Version: "9.9.9", RolloutPercent: 100},
 		)

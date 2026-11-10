@@ -263,14 +263,17 @@
   }
 
   async function handleToggleProvider(targetActive: boolean) {
-    try {
-      await Promise.allSettled(
-        providerConnections.map((c) => api.updateConnection(c.id, { isActive: targetActive ? 1 : 0 }))
-      )
-      onRefresh()
-    } catch (err) {
-      alert(`Toggle provider failed: ${err instanceof Error ? err.message : String(err)}`)
+    const results = await Promise.allSettled(
+      providerConnections.map((c) => api.updateConnection(c.id, { isActive: targetActive ? 1 : 0 }))
+    )
+    if (targetActive) {
+      const refused = results.find((r) => r.status === 'rejected')
+      if (refused) {
+        const err = (refused as PromiseRejectedResult).reason
+        alert(err instanceof Error ? err.message : String(err))
+      }
     }
+    onRefresh()
   }
   // Upstream parity: compatible-node detection drives the details card,
   // bottom Add button, models section, and edit-node modal.

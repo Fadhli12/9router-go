@@ -121,7 +121,7 @@ func ProvideServer(p ServerParams) *http.Server {
 			// every pooled account presents this build's pinned fingerprint. A
 			// stale one is what the accounts pay for, so the provider is halted
 			// on the release rather than on the first ban.
-			startAntigravityDriftWatch(shutdown.Context())
+			startAntigravityDriftWatch(shutdown.Context(), p.Repo)
 			startAutoPingScheduler(shutdown.Context(), p.Repo, p.ChatHandler)
 			startModelHealthScheduler(shutdown.Context(), p.Repo, p.ChatHandler)
 			startUptimeHeartbeat(shutdown.Context(), p.Repo)

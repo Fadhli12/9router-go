@@ -6,6 +6,7 @@ import (
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/models"
 	"9router/proxy/internal/providers"
+	"9router/proxy/internal/resilience"
 	"9router/proxy/internal/updater"
 	"context"
 	json "encoding/json/v2"
@@ -728,6 +729,23 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 	}
 	hasAPIKey := newAPIKey != ""
 	a, hasIsActive := rawBody["isActive"].(bool)
+
+	// Enabling into a drift halt is refused: the toggle would look like the
+	// release the halt needs, but a drift halt is only released by patching
+	// the pinned identity — the accounts it would spend are exactly what the
+	// halt protects. 409, because the request is valid and the state is the
+	// problem: the message tells the operator what to patch instead.
+	if hasIsActive && a {
+		if rec, halted := resilience.SuspensionFor(providers.ResolveAlias(existing.Provider)); halted && resilience.IsDriftHalt(rec) {
+			handlerutil.WriteJSON(w, http.StatusConflict, map[string]any{
+				"error": map[string]any{
+					"code":    "provider_halted_on_version_drift",
+					"message": rec.Reason,
+				},
+			})
+			return
+		}
+	}
 
 	// Upstream normalizeProxyPoolUpdate: null/""/"__none__" unbinds, anything
 	// else must reference an existing pool.

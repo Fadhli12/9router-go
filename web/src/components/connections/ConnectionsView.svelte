@@ -31,9 +31,16 @@
 
   async function handleToggleAll(providerId: string, newActive: boolean) {
     const conns = connections.filter((c) => c.provider === providerId)
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       conns.map((c) => api.updateConnection(c.id, { isActive: newActive ? 1 : 0 }))
     )
+    if (newActive) {
+      const refused = results.find((r) => r.status === 'rejected')
+      if (refused) {
+        const err = (refused as PromiseRejectedResult).reason
+        alert(err instanceof Error ? err.message : String(err))
+      }
+    }
     onRefresh()
   }
 

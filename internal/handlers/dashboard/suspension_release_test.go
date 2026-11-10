@@ -119,3 +119,43 @@ func TestEnablingOneProviderDoesNotClearAnothersHalt(t *testing.T) {
 		t.Error("opencode's halt was released by an unrelated provider's toggle")
 	}
 }
+
+// A drift halt is not an account suspension: its exit is patching the pinned
+// identity, not appealing a credential. Enabling an account into it is refused
+// with the drift reason, so the toggle cannot be mistaken for the release.
+func TestEnablingIntoADriftHaltIsRefused(t *testing.T) {
+	resilience.ResetSuspensions()
+	defer resilience.ResetSuspensions()
+
+	repo, cleanup := setupTestDB(t)
+	defer cleanup()
+	router := setupTestRouter(repo)
+
+	connID := "conn-drifted"
+	if err := repo.CreateProviderConnection(connID, "antigravity", "apikey", "Drifted", "sk-1"); err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+	reason := resilience.DriftHaltReasonPrefix + "Antigravity released 1.5.4, this gateway sends 1.5.3"
+	resilience.RecordAccountSuspension("antigravity", "(no account: client version drift)", 0, reason)
+	if _, err := repo.DeactivateProviderConnections("antigravity"); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+	if !resilience.IsProviderSuspended("antigravity") {
+		t.Fatal("provider is not halted, so this test proves nothing")
+	}
+
+	rec := putConnectionActive(t, router, connID, true)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("enable into a drift halt returned %d: %s", rec.Code, rec.Body.String())
+	}
+	if !resilience.IsProviderSuspended("antigravity") {
+		t.Error("the drift halt was released by a connection enable; only patching the identity may do that")
+	}
+	conn, err := repo.GetProviderConnectionByID(connID)
+	if err != nil || conn == nil {
+		t.Fatalf("reload connection: %v", err)
+	}
+	if conn.IsActive != 0 {
+		t.Errorf("isActive = %d, want 0: the refused enable must not flip the row", conn.IsActive)
+	}
+}

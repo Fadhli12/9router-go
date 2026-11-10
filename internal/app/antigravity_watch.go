@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 
+	"9router/proxy/internal/db"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/providers"
 	"9router/proxy/internal/resilience"
@@ -29,13 +30,15 @@ const antigravityDriftAccountKey = "(no account: client version drift)"
 // across restarts, and clears only through
 // POST /api/resilience/suspensions/clear. An operator patches the pinned
 // version, then clears it.
-func startAntigravityDriftWatch(ctx context.Context) {
-	providers.StartAntigravityReleaseWatch(ctx, nil, haltAntigravityOnDrift)
+func startAntigravityDriftWatch(ctx context.Context, repo *db.Repo) {
+	providers.StartAntigravityReleaseWatch(ctx, nil, func(d providers.AntigravityDrift, rel providers.AntigravityRelease) {
+		haltAntigravityOnDrift(repo, d, rel)
+	})
 }
 
 // haltAntigravityOnDrift is the watch's decision, named so it is testable
 // without a 30-second boot delay and a live request to Google.
-func haltAntigravityOnDrift(d providers.AntigravityDrift, rel providers.AntigravityRelease) {
+func haltAntigravityOnDrift(repo *db.Repo, d providers.AntigravityDrift, rel providers.AntigravityRelease) {
 	canonical := providers.ResolveAlias("antigravity")
 	if resilience.IsProviderSuspended(canonical) {
 		// Already halted, for this or any other reason. Re-recording would
@@ -45,6 +48,23 @@ func haltAntigravityOnDrift(d providers.AntigravityDrift, rel providers.Antigrav
 	}
 	reason := providers.AntigravityDriftReason(d, rel)
 	resilience.RecordAccountSuspension(canonical, antigravityDriftAccountKey, 0, reason)
+
+	// The halt must be visible where the operator already looks: the provider
+	// list's toggle reads isActive, so a latch that only lived in memory left
+	// the provider looking enabled while every request was refused. Same
+	// write the chat-path halt performs (suspension_halt.go), one bulk UPDATE.
+	deactivated := int64(0)
+	if repo != nil {
+		var err error
+		if deactivated, err = repo.DeactivateProviderConnections(canonical); err != nil {
+			// The latch already refuses every request, so a failed write
+			// costs visibility, not protection.
+			log.Warn("antigravity_watch", "could not switch the drifted provider off in the dashboard",
+				"provider", canonical, "error", err)
+		}
+	}
+
 	log.Warn("antigravity_watch", "provider halted on client version drift",
-		"provider", canonical, "released", d.Observed, "pinned", d.Pinned, "reason", reason)
+		"provider", canonical, "released", d.Observed, "pinned", d.Pinned,
+		"accountsDisabled", deactivated, "reason", reason)
 }

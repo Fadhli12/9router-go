@@ -2,6 +2,7 @@ package resilience
 
 import (
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -173,6 +174,20 @@ func IsProviderSuspended(provider string) bool {
 	}
 	return len(rec.Accounts) >= suspensionThreshold
 }
+
+// DriftHaltReasonPrefix is what a version-drift halt records as its reason.
+// Exported so the dashboard can tell a drift halt (released by patching the
+// pinned identity) from an account-suspension halt (released by appealing and
+// re-enabling): the two have different exits, and offering the wrong one sends
+// an operator to appeal an account Google never refused.
+const DriftHaltReasonPrefix = "client version drift: "
+
+// IsDriftHalt reports whether a suspension record was latched by the
+// version-drift watch rather than by an upstream account suspension.
+func IsDriftHalt(rec SuspensionRecord) bool {
+	return strings.HasPrefix(rec.Reason, DriftHaltReasonPrefix)
+}
+
 
 // SuspensionFor returns the provider's latch record, or false when it is not
 // halted.

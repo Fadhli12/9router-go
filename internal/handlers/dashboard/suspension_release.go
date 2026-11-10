@@ -18,12 +18,21 @@ import (
 //
 // Only an enable clears it. A disable must leave the latch alone — an operator
 // turning accounts off is not asserting the appeal succeeded.
+//
+// A drift halt is exempt: its exit is patching the pinned identity, not
+// appealing an account, so no toggle may release it. The connection enable
+// itself is refused upstream of this call (handleUpdateConnection); this guard
+// keeps the latch safe if any other path re-enables a connection.
 func releaseProviderHaltOnEnable(conn *models.ProviderConnection, enabled bool) {
 	if !enabled || conn == nil || conn.Provider == "" {
 		return
 	}
 	canonical := providers.ResolveAlias(conn.Provider)
-	if _, halted := resilience.SuspensionFor(canonical); !halted {
+	rec, halted := resilience.SuspensionFor(canonical)
+	if !halted {
+		return
+	}
+	if resilience.IsDriftHalt(rec) {
 		return
 	}
 	if err := resilience.ClearSuspension(canonical); err != nil {
