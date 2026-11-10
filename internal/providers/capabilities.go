@@ -343,6 +343,7 @@ var modelCapabilities = map[string]Capabilities{
 	"glm-4.6v":                     {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "zai"},
 	"glm-4.5v":                     {Vision: true, VideoInput: true, Reasoning: true, Tools: true, ThinkingFormat: "zai"},
 	"deepseek-v4-flash-vision-exp": {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "deepseek"},
+	"sensenova-6.8-flash":          {Vision: true, Reasoning: true, ThinkingFormat: "openai", ContextWindow: 1000000, MaxOutput: 131072},
 	"sensenova-6.8-flash-lite":     {Vision: true, Reasoning: true, ThinkingFormat: "openai", ContextWindow: 1000000, MaxOutput: 131072},
 	"deepseek-v4-vision":           {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "deepseek", ThinkingEffortSupported: true},
 	"deepseek-v4.1-flash":          {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "deepseek"},
@@ -547,6 +548,7 @@ var providerCapabilities = map[string]map[string]Capabilities{
 		"Qwen3-Embedding-8B":       {},
 		"Qwen3.8-27B":              {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 200000, MaxOutput: 65536},
 		"Qwen3.8-Flash-Next":       {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 262144, MaxOutput: 65536},
+		"sensenova-6.8-flash":      {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai"},
 		"sensenova-6.8-flash-lite": {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai"},
 		"sensenova-u1.5-lite":      {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai"},
 		"step-5-preview":           {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "openai", ContextWindow: 1000000, MaxOutput: 64000},
@@ -1350,7 +1352,8 @@ type CapabilitiesDetail struct {
 // (aggregateComboCapabilities). It is deliberately a different type: the union
 // drops thinkingEffortSupported, booleans fold with `some` — except tools, which
 // requires *every* leaf to support it — the thinking fields come from the first
-// leaf, the context window is the narrowest leaf and maxOutput the widest.
+// leaf, the context window is the narrowest leaf and maxOutput the narrowest
+// positive leaf (zero/unbounded never wins unless every leaf is unbounded).
 type ComboCapabilities struct {
 	Vision             bool    `json:"vision"`
 	PDF                bool    `json:"pdf"`
@@ -1393,10 +1396,10 @@ func AggregateComboCapabilities(leaves []CapabilitiesDetail) (ComboCapabilities,
 		merged.AudioOutput = merged.AudioOutput || leaf.AudioOutput
 		merged.Search = merged.Search || leaf.Search
 		merged.Tools = merged.Tools && leaf.Tools
-		if leaf.ContextWindow < merged.ContextWindow {
+		if leaf.ContextWindow > 0 && (merged.ContextWindow == 0 || leaf.ContextWindow < merged.ContextWindow) {
 			merged.ContextWindow = leaf.ContextWindow
 		}
-		if leaf.MaxOutput > merged.MaxOutput {
+		if leaf.MaxOutput > 0 && (merged.MaxOutput == 0 || leaf.MaxOutput < merged.MaxOutput) {
 			merged.MaxOutput = leaf.MaxOutput
 		}
 	}

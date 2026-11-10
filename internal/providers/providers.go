@@ -690,7 +690,7 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthScheme: "bearer",
 	},
 	"opencode-go": {
-		BaseURL:    "https://opencode.ai/zen/go/v1/chat/completions",
+		BaseURL:    "https://opencode.ai/inference/go/openai/v1/chat/completions",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
@@ -1489,6 +1489,7 @@ func PreservesCacheControl(provider string) bool {
 	}
 	return false
 }
+
 // StrictReasoningRemoving reports whether a provider rejects unknown
 // assistant-message reasoning fields echoed on history (upstream
 // paramSupport dropMessageFields): groq, mistral, and cerebras answer 400

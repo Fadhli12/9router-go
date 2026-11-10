@@ -20,7 +20,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"9router/proxy/internal/customjson"
 	"9router/proxy/internal/db"
+	"9router/proxy/internal/handlers/chat"
 	"9router/proxy/internal/handlers/media"
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/models"
@@ -165,6 +167,10 @@ func (h *DashboardHandler) HandleValidateProvider(w http.ResponseWriter, r *http
 		Provider             string         `json:"provider"`
 		APIKey               string         `json:"apiKey"`
 		ProviderSpecificData map[string]any `json:"providerSpecificData"`
+		// ValidateOnly and ModelID only apply to custom JSON nodes: saving a
+		// connection checks configuration, a test request names its model.
+		ValidateOnly bool   `json:"validateOnly"`
+		ModelID      string `json:"modelId"`
 	}
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &req); err != nil {
@@ -182,6 +188,10 @@ func (h *DashboardHandler) HandleValidateProvider(w http.ResponseWriter, r *http
 	// Custom provider nodes (OpenAI-compatible, Anthropic-compatible, Custom Embedding)
 	if h.Repo != nil {
 		if node, nodeData, err := h.Repo.GetProviderNodeByID(provider); err == nil && node != nil {
+			if nodeData != nil && nodeData.APIType == customjson.APIType {
+				handlerutil.WriteJSON(w, http.StatusOK, validateCustomJSONConnection(r.Context(), nodeData, req.APIKey, strings.TrimSpace(req.ModelID), req.ValidateOnly))
+				return
+			}
 			h.validateProviderNodeConnection(w, r, node, nodeData, req.APIKey, req.ProviderSpecificData)
 			return
 		}
@@ -351,7 +361,7 @@ func (h *DashboardHandler) validateProviderNodeConnection(
 
 	// 3. OpenAI Compatible (Default)
 	base := strings.TrimSuffix(baseURL, "/")
-	status, body, err := validateProbeDo(ctx, http.MethodGet, base+"/models", map[string]string{
+	status, body, err := validateProbeDo(ctx, http.MethodGet, chat.CompatibleNodeModelsURL(base), map[string]string{
 		"Authorization": "Bearer " + apiKey,
 	}, nil)
 	if err != nil {
@@ -394,7 +404,7 @@ func (h *DashboardHandler) validateProviderNodeConnection(
 		"max_tokens": 1,
 		"messages":   []map[string]string{{"role": "user", "content": probeMessageContent}},
 	})
-	chatStatus, _, chatErr := validateProbeDo(ctx, http.MethodPost, base+"/chat/completions", map[string]string{
+	chatStatus, _, chatErr := validateProbeDo(ctx, http.MethodPost, chat.ChatCompletionsURL(base), map[string]string{
 		"Authorization": "Bearer " + apiKey,
 		"Content-Type":  "application/json",
 	}, chatPayload)

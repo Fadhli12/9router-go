@@ -22,4 +22,3 @@ func executablePath(pid int) (string, error) {
 	}
 	return trimNUL(buf), nil
 }
-

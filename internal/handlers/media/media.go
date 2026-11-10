@@ -1044,6 +1044,9 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 			}
 
 			finalBody := handlerutil.UpdateModelInBody(body, subInfo.Model)
+			if isVideoCreateEndpoint(endpoint) && isXAIVideoProvider(subInfo.Provider) {
+				finalBody = formatXAIVideoPayload(finalBody)
+			}
 			// Cloudflare AI's flux-1-schnell schema rejects width/height — handled
 			// by the cloudflare image lane, not here.
 
@@ -1345,6 +1348,9 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 			log.Warn("media", "multipart model rewrite skipped", "endpoint", endpoint, "error", err)
 		}
 	}
+	if isVideoCreateEndpoint(endpoint) && isXAIVideoProvider(modelInfo.Provider) && !isMultipartRequest(r) {
+		finalBody = formatXAIVideoPayload(finalBody)
+	}
 	client, clientErr := h.ChatH.GetClientForConnection(connData)
 	if clientErr != nil {
 		handlerutil.WriteJSONError(w, http.StatusBadGateway, clientErr.Error())
@@ -1423,6 +1429,7 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 			method = http.MethodPost
 		}
 	}
+	var fetchFmt string
 	if endpoint == "/v1/web/fetch" && providerCfg.FetchURL != "" {
 		targetURL = providerCfg.FetchURL
 		if providerCfg.FetchMethod != "" {
@@ -1430,14 +1437,49 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 		} else {
 			method = "POST"
 		}
-		if modelInfo.Provider == "ollama" {
-			var tmp struct {
-				URL string `json:"url"`
-			}
-			if err := json.Unmarshal(body, &tmp); err == nil && tmp.URL != "" {
-				if b, err := json.Marshal(map[string]string{"url": tmp.URL}); err == nil {
+		var fReq struct {
+			URL    string `json:"url"`
+			Format string `json:"format"`
+		}
+		_ = json.Unmarshal(body, &fReq)
+		fetchFmt = strings.ToLower(strings.TrimSpace(fReq.Format))
+		if fetchFmt == "" {
+			fetchFmt = "markdown"
+		}
+
+		switch modelInfo.Provider {
+		case "ollama":
+			if fReq.URL != "" {
+				if b, err := json.Marshal(map[string]string{"url": fReq.URL}); err == nil {
 					finalBody = b
 				}
+			}
+		case "jina-reader", "jina":
+			if fetchFmt != "markdown" && fetchFmt != "text" && fetchFmt != "html" {
+				handlerutil.WriteJSON(w, http.StatusBadRequest, map[string]any{
+					"error": fmt.Sprintf("Unsupported format for %s. Supported: markdown, text, html", modelInfo.Provider),
+				})
+				return
+			}
+			if fReq.URL != "" {
+				if b, err := json.Marshal(map[string]string{"url": fReq.URL}); err == nil {
+					finalBody = b
+				}
+			}
+		case "tavily":
+			if fetchFmt != "markdown" && fetchFmt != "text" {
+				handlerutil.WriteJSON(w, http.StatusBadRequest, map[string]any{
+					"error": "Unsupported format for tavily. Supported: markdown, text",
+				})
+				return
+			}
+			tBody := map[string]any{
+				"urls":          []string{fReq.URL},
+				"extract_depth": "basic",
+				"format":        fetchFmt,
+			}
+			if b, err := json.Marshal(tBody); err == nil {
+				finalBody = b
 			}
 		}
 	}
@@ -1455,6 +1497,9 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 	req.Header.Del("Content-Length")
 	for k, v := range providerCfg.StaticHeaders {
 		req.Header.Set(k, v)
+	}
+	if fetchFmt != "" && (modelInfo.Provider == "jina-reader" || modelInfo.Provider == "jina") {
+		req.Header.Set("x-respond-with", fetchFmt)
 	}
 	handlerutil.SetAuthHeader(req, apiKey, providerCfg.AuthHeader, providerCfg.AuthScheme)
 	connIDStr := ""
@@ -1658,6 +1703,53 @@ func wrapCopilotEmbeddingInput(body []byte) []byte {
 		return body
 	}
 	payload["input"] = []any{input}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// isXAIVideoProvider reports whether the resolved provider is xAI or grok-cli.
+func isXAIVideoProvider(provider string) bool {
+	canon := providers.ResolveAlias(provider)
+	return canon == "xai" || canon == "grok-cli"
+}
+
+// formatXAIVideoPayload ensures the start frame is formatted as { "url": ... }
+// for xAI video generation and edits, and forwards reference_images when present.
+// xAI API fails with HTTP 422 if image is a bare string.
+func formatXAIVideoPayload(body []byte) []byte {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
+		return body
+	}
+
+	modified := false
+	if img, ok := payload["image"]; ok {
+		switch v := img.(type) {
+		case string:
+			payload["image"] = map[string]any{"url": v}
+			modified = true
+		case map[string]any:
+			// Already an object (e.g. {"url": ...} or {"file_id": ...}), keep untouched
+		default:
+			// If invalid type like number/boolean, delete it so xAI doesn't error on type
+			delete(payload, "image")
+			modified = true
+		}
+	}
+
+	if refImgs, ok := payload["reference_images"]; ok {
+		if _, isSlice := refImgs.([]any); !isSlice {
+			delete(payload, "reference_images")
+			modified = true
+		}
+	}
+
+	if !modified {
+		return body
+	}
 	out, err := json.Marshal(payload)
 	if err != nil {
 		return body
