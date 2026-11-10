@@ -86,15 +86,15 @@ func TestAntigravityReleaseDrift(t *testing.T) {
 	t.Run("a newer release is drift", func(t *testing.T) {
 		d := AntigravityReleaseDrift(AntigravityRelease{Version: "99.0.0", RolloutPercent: 100})
 		if !d.Newer {
-			t.Errorf("Newer = false for 99.0.0 against the pinned %s", AntigravityCLIVersion)
+			t.Errorf("Newer = false for 99.0.0 against the pinned %s", AntigravityHubVersion)
 		}
-		if d.Observed != "99.0.0" || d.Pinned != AntigravityCLIVersion {
+		if d.Observed != "99.0.0" || d.Pinned != AntigravityHubVersion {
 			t.Errorf("drift = %+v", d)
 		}
 	})
 
 	t.Run("the pinned version is not drift", func(t *testing.T) {
-		if AntigravityReleaseDrift(AntigravityRelease{Version: AntigravityCLIVersion}).Newer {
+		if AntigravityReleaseDrift(AntigravityRelease{Version: AntigravityHubVersion}).Newer {
 			t.Error("Newer = true for the pinned version")
 		}
 	})

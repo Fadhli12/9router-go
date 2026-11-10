@@ -16,7 +16,7 @@ import (
 // Antigravity release polling.
 //
 // The gateway presents a pinned Antigravity fingerprint upstream
-// (AntigravityCLIVersion). When Google ships a release this build does not
+// (AntigravityHubVersion). When Google ships a release this build does not
 // match, the pooled accounts pay for it — the operator's pool was spent on
 // exactly that event before the suspension latch existed.
 //
@@ -145,12 +145,12 @@ func fetchAntigravityReleaseFrom(ctx context.Context, client *http.Client, url s
 // one is the healthy state, and an unreadable one is not drift — see
 // ParseAntigravityRelease.
 func AntigravityReleaseDrift(rel AntigravityRelease) AntigravityDrift {
-	d := AntigravityDrift{Pinned: AntigravityCLIVersion}
+	d := AntigravityDrift{Pinned: AntigravityHubVersion}
 	if rel.Version == "" {
 		return d
 	}
 	d.Observed = rel.Version
-	d.Newer = CompareVersions(rel.Version, AntigravityCLIVersion) > 0
+	d.Newer = CompareVersions(rel.Version, AntigravityHubVersion) > 0
 	return d
 }
 

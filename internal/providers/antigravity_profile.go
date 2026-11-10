@@ -73,18 +73,18 @@ func (p AntigravityClientProfile) String() string { return string(p) }
 
 // AntigravityUserAgentFor returns the User-Agent header for the given profile.
 //
-//	ide → antigravity/<ide version>            (the IDE app's own shape)
-//	cli → antigravity/cli/<cli version> (aidev_client; os_type=…; arch=…;
-//	      cl=…; auth_method=consumer)          (the standalone `agy` CLI)
+//	ide → antigravity/<hub version> (os_type=…; arch=…)
+//	cli → the same hub shape
 //
-// The two stay different strings: the profile setting would be a no-op
-// otherwise. Note that AntigravityIDEUserAgent in client_identity.go is pinned
-// to the CLI shape because the legacy IDE flavor receives 404 on the Argon
-// lanes; this function is the profile-aware replacement for callers that want
-// the operator's choice honoured.
+// Both lanes present the Hub desktop fingerprint since the port of upstream
+// #4816: the CLI's cl= token cannot be observed without a live capture and
+// moved on every release, while the Hub shape serves the Argon lanes without
+// one. The shapes differ only in what a future lane split would need, so both
+// return the same string today and the profile stays honoured for the day the
+// two diverge again.
 func AntigravityUserAgentFor(profile AntigravityClientProfile) string {
 	if profile == AntigravityProfileCLI {
 		return AntigravityCLIUserAgent
 	}
-	return "antigravity/" + AntigravityIDEVersion
+	return "antigravity/hub/" + AntigravityIDEVersion + " (os_type=windows; arch=amd64)"
 }

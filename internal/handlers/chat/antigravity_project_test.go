@@ -213,11 +213,11 @@ func mustReadAll(r io.Reader) []byte {
 // discovered as the CLI rather than as the IDE — and a caller with no
 // connection data still gets the CLI shape rather than nothing.
 func TestAntigravityProjectUserAgent(t *testing.T) {
+	// Both lanes present the Hub fingerprint since the port of upstream #4816,
+	// so identical strings are expected; the assertions below stay per-profile
+	// for the day the lanes diverge again.
 	ideUA := providers.AntigravityUserAgentFor(providers.AntigravityProfileIDE)
 	cliUA := providers.AntigravityUserAgentFor(providers.AntigravityProfileCLI)
-	if ideUA == cliUA {
-		t.Fatal("IDE and CLI user agents are identical; the profile setting would be a no-op")
-	}
 
 	tests := []struct {
 		name string

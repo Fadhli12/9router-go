@@ -19,7 +19,7 @@ const antigravityDriftAccountKey = "(no account: client version drift)"
 // startAntigravityDriftWatch halts the Antigravity provider when Google ships a
 // client release newer than the fingerprint this build sends.
 //
-// The pinned identity (providers.AntigravityCLIVersion) is what every pooled
+// The pinned identity (providers.AntigravityHubVersion) is what every pooled
 // account presents. When it goes stale the accounts are what pay for it: the
 // operator's pool was spent on exactly that event before the suspension latch
 // existed. Halting on the release — rather than on the first ban — is the

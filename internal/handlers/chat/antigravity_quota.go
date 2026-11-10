@@ -315,7 +315,7 @@ func RefreshAntigravityQuota(ctx context.Context, client *http.Client, connectio
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", providers.AntigravityCLIUserAgent)
 	req.Header.Set("X-Client-Name", "antigravity")
-	req.Header.Set("X-Client-Version", providers.AntigravityCLIVersion)
+	req.Header.Set("X-Client-Version", providers.AntigravityHubVersion)
 
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
@@ -707,7 +707,7 @@ func FetchAntigravityWeeklyQuota(ctx context.Context, client *http.Client, acces
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", providers.AntigravityCLIUserAgent)
 	req.Header.Set("X-Client-Name", "antigravity")
-	req.Header.Set("X-Client-Version", providers.AntigravityCLIVersion)
+	req.Header.Set("X-Client-Version", providers.AntigravityHubVersion)
 
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}

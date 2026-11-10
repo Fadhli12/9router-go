@@ -20,6 +20,11 @@ func TestParseAntigravityClientVersion(t *testing.T) {
 			want:      "1.5.1",
 		},
 		{
+			name:      "hub shape, the pinned identity",
+			userAgent: "antigravity/hub/2.24.0 (os_type=windows; arch=amd64)",
+			want:      "2.24.0",
+		},
+		{
 			name:      "ide shape",
 			userAgent: "antigravity/2.23.0",
 			want:      "2.23.0",
@@ -113,13 +118,13 @@ func TestObserveAntigravityClientVersionDirection(t *testing.T) {
 
 		d := ObserveAntigravityClientVersion("antigravity/cli/99.0.0 (aidev_client)")
 		if !d.Newer {
-			t.Errorf("Newer = false for a client ahead of the pinned %s", AntigravityCLIVersion)
+			t.Errorf("Newer = false for a client ahead of the pinned %s", AntigravityHubVersion)
 		}
 		if d.Observed != "99.0.0" {
 			t.Errorf("Observed = %q, want 99.0.0", d.Observed)
 		}
-		if d.Pinned != AntigravityCLIVersion {
-			t.Errorf("Pinned = %q, want %q", d.Pinned, AntigravityCLIVersion)
+		if d.Pinned != AntigravityHubVersion {
+			t.Errorf("Pinned = %q, want %q", d.Pinned, AntigravityHubVersion)
 		}
 	})
 
@@ -127,7 +132,7 @@ func TestObserveAntigravityClientVersionDirection(t *testing.T) {
 		ResetObservedAntigravityVersion()
 		t.Cleanup(ResetObservedAntigravityVersion)
 
-		if ObserveAntigravityClientVersion("antigravity/cli/" + AntigravityCLIVersion).Newer {
+		if ObserveAntigravityClientVersion("antigravity/cli/" + AntigravityHubVersion).Newer {
 			t.Error("Newer = true for a client matching the pinned identity")
 		}
 	})
@@ -194,7 +199,7 @@ func TestObserveAntigravityClientVersionSilentByDefault(t *testing.T) {
 // and reports equal on a field it cannot read.
 func TestPinnedAntigravityVersionsAreComparable(t *testing.T) {
 	for name, v := range map[string]string{
-		"AntigravityCLIVersion": AntigravityCLIVersion,
+		"AntigravityHubVersion": AntigravityHubVersion,
 		"AntigravityIDEVersion": AntigravityIDEVersion,
 	} {
 		if v == "" {

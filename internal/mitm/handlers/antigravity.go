@@ -99,7 +99,7 @@ func logAntigravityClientIdentity(r *http.Request, reqBody map[string]any) {
 		"user_agent", ua,
 		"body_ide_version", ideVersion,
 		"url", r.URL.String(),
-		"pinned_cli", providers.AntigravityCLIVersion,
+		"pinned_cli", providers.AntigravityHubVersion,
 		"pinned_ide", providers.AntigravityIDEVersion,
 	)
 }

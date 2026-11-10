@@ -45,18 +45,16 @@ func TestIsAntigravityClientProfile(t *testing.T) {
 
 func TestAntigravityUserAgentFor(t *testing.T) {
 	ide := AntigravityUserAgentFor(AntigravityProfileIDE)
-	if ide != "antigravity/"+AntigravityIDEVersion {
-		t.Errorf("IDE user agent = %q, want %q", ide, "antigravity/"+AntigravityIDEVersion)
+	if ide != "antigravity/hub/"+AntigravityIDEVersion+" (os_type=windows; arch=amd64)" {
+		t.Errorf("IDE user agent = %q, want the pinned hub shape", ide)
 	}
 	cli := AntigravityUserAgentFor(AntigravityProfileCLI)
 	if cli != AntigravityCLIUserAgent {
 		t.Errorf("CLI user agent = %q, want %q", cli, AntigravityCLIUserAgent)
 	}
-	// The two profiles must not produce the same string, or the setting is a
-	// no-op.
-	if ide == cli {
-		t.Error("IDE and CLI user agents are identical; the profile setting has no effect")
-	}
+	// Both lanes present the Hub fingerprint since the port of upstream #4816,
+	// so identical strings are the expected state today — the profile stays
+	// honoured for the day the lanes diverge again.
 	// An unknown profile falls back to IDE through Normalize, and the
 	// function itself must behave the same way.
 	if got := AntigravityUserAgentFor("bogus"); got != ide {

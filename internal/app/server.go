@@ -117,11 +117,12 @@ func ProvideServer(p ServerParams) *http.Server {
 			// account reaching the models it pays for. Without this loop the
 			// credential has to be pasted again every few minutes.
 			executor.StartGeminiWebRotation(shutdown.Context(), p.Repo)
-			// Google ships Antigravity client releases on its own schedule, and
-			// every pooled account presents this build's pinned fingerprint. A
-			// stale one is what the accounts pay for, so the provider is halted
-			// on the release rather than on the first ban.
-			startAntigravityDriftWatch(shutdown.Context(), p.Repo)
+			// The Antigravity drift watch is not started on the hub lane: its
+			// only signal is the `agy` CLI auto-updater service, whose 1.x
+			// releases no longer say anything about the 2.x Hub fingerprint
+			// this build pins (upstream decolua/9router #4816). A CLI release
+			// must not halt the provider. startAntigravityDriftWatch stays
+			// compiled and tested for the day a Hub release feed exists.
 			startAutoPingScheduler(shutdown.Context(), p.Repo, p.ChatHandler)
 			startModelHealthScheduler(shutdown.Context(), p.Repo, p.ChatHandler)
 			startUptimeHeartbeat(shutdown.Context(), p.Repo)

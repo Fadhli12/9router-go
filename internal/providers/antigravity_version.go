@@ -10,7 +10,7 @@ import (
 // Antigravity client-version drift detection.
 //
 // The gateway presents a pinned Antigravity fingerprint to Google
-// (AntigravityCLIVersion / AntigravityIDEVersion in client_identity.go). When
+// (AntigravityHubVersion / AntigravityIDEVersion in client_identity.go). When
 // Google ships a new Antigravity release and this gateway has not been patched
 // yet, every pooled account keeps sending the stale identity — and the accounts
 // are what pay for it: the operator's pool was spent on exactly that event
@@ -31,15 +31,16 @@ import (
 // land before that happens. What it buys is that the first upgraded client ends
 // the rotation instead of the fortieth account.
 
-// antigravityUAVersion matches the version in the two User-Agent shapes the
+// antigravityUAVersion matches the version in the User-Agent shapes the
 // Antigravity clients send (antigravity_profile.go):
 //
 //	antigravity/cli/1.5.1 (aidev_client; os_type=…; arch=…)
+//	antigravity/hub/2.24.0 …
 //	antigravity/2.23.0
 //
-// The `cli/` segment is optional so both forms resolve, and the version is
-// captured without the trailing metadata.
-var antigravityUAVersion = regexp.MustCompile(`(?i)\bantigravity/(?:cli/)?v?(\d+(?:\.\d+)*)`)
+// The `cli/` and `hub/` segments are optional so every form resolves, and the
+// version is captured without the trailing metadata.
+var antigravityUAVersion = regexp.MustCompile(`(?i)\bantigravity/(?:cli/|hub/)?v?(\d+(?:\.\d+)*)`)
 
 // ParseAntigravityClientVersion returns the version an Antigravity client
 // reports in its User-Agent, or "" when the header is not an Antigravity one.
@@ -123,7 +124,7 @@ var (
 // for a machine that simply has not updated. Equal is the healthy state.
 func ObserveAntigravityClientVersion(userAgent string) AntigravityDrift {
 	observed := ParseAntigravityClientVersion(userAgent)
-	pinned := AntigravityCLIVersion
+	pinned := AntigravityHubVersion
 	if observed == "" {
 		return AntigravityDrift{Pinned: pinned}
 	}
