@@ -77,6 +77,13 @@ func ForwardCodex(w http.ResponseWriter, req *Request) error {
 	if err != nil {
 		return fmt.Errorf("transform body: %w", err)
 	}
+	responsesLite := false
+	if req.Provider != "perplexity-agent" {
+		transformedBody, responsesLite, err = shapeCodexResponsesBody(transformedBody, codexLiteRequested(req.Ctx))
+		if err != nil {
+			return fmt.Errorf("shape Codex body: %w", err)
+		}
+	}
 
 	// Resolve conversation-stable session_id for Codex prompt caching
 	sessionID := req.SessionID
@@ -95,8 +102,6 @@ func ForwardCodex(w http.ResponseWriter, req *Request) error {
 
 	// Inject prompt_cache_key for stable Codex prompt caching if not already set
 	transformedBody = injectCodexPromptCacheKey(transformedBody, sessionID)
-
-	responsesLite := codexResponsesLiteBody(transformedBody)
 
 	// The ChatGPT Codex backend rejects unsupported parameters and requires the allowlist
 	transformedBody = stripCodexUnsupportedTokenParams(transformedBody, responsesLite)
@@ -269,16 +274,12 @@ func ForwardKiro(w http.ResponseWriter, req *Request) error {
 	return handleKiroNonStream(w, req, resp.Body)
 }
 
-// kiroDefaultProfileArn is the shared gateway profile Kiro requests
-// fall back to when the connection data carries none. Translated
-// requests without it fail upstream with "profileArn is required
-// for this request".
-const kiroDefaultProfileArn = "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK"
-
-// kiroProfileArn extracts the profile ARN for a Kiro request. Upstream parity:
-// only OAuth/social tokens accept a shared fallback profile — an account-bound
-// token (api_key, idc, external_idp) presenting a shared ARN from another
-// account fails, so those send the resolved ARN or none at all.
+// kiroProfileArn extracts the connection's own profile ARN, or "" when it
+// carries none. The shared-default fallback is NOT applied here: the caller
+// routes the answer through KiroEffectiveProfileARN, which resolves the
+// default per auth method (Builder ID versus social) — duplicating that
+// decision here would pin one default for every method and shadow the
+// per-method one (upstream #1046).
 func kiroProfileArn(psd map[string]any) string {
 	if s, ok := psd["profileArn"].(string); ok {
 		if trimmed := strings.TrimSpace(s); trimmed != "" {
@@ -292,12 +293,7 @@ func kiroProfileArn(psd map[string]any) string {
 			}
 		}
 	}
-	switch authMethod, _ := psd["authMethod"].(string); authMethod {
-	case "api_key", "idc", "external_idp":
-		return ""
-	default:
-		return kiroDefaultProfileArn
-	}
+	return ""
 }
 
 // kiroUpstreamBody translates an OpenAI chat body into the Kiro envelope,
@@ -335,11 +331,16 @@ func kiroUpstreamBody(req *Request) ([]byte, error) {
 	// plane; fold them onto the dotted upstream alias.
 	model = normalizeKiroUpstreamModelId(model)
 
-	profileArn := kiroProfileArn(req.ConnData)
+	psd := req.ConnData
+	if psd == nil {
+		psd = map[string]any{}
+	}
+	profileArn := kiroProfileArn(psd)
+	authMethod, _ := psd["authMethod"].(string)
 
 	out, err := translator.OpenAIToKiro(req.Body, translator.KiroTranslateOptions{
 		Model:      model,
-		ProfileArn: profileArn,
+		ProfileArn: providers.KiroEffectiveProfileARN(authMethod, profileArn),
 	})
 	if err != nil {
 		log.Error("executor", "kiro translation failed", "model", model, "error", err)
@@ -778,7 +779,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 
 		if resp.StatusCode != http.StatusOK {
 			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
-			return &proxy.UpstreamError{StatusCode: resp.StatusCode, Body: errBody}
+			return &proxy.UpstreamError{StatusCode: resp.StatusCode, Body: errBody, Header: resp.Header}
 		}
 
 		if req.IsStream {
@@ -817,6 +818,11 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		if cleanModel != "" {
 			reqMap["model"] = cleanModel
 		}
+		// A reasoning model spends the same output ceiling on its thinking as on
+		// the answer, so a small client budget returns empty content with
+		// finish_reason "length" — see output_budget.go for the measurements.
+		clampOpenCodeOutputBudget(reqMap, "opencode", cleanModel)
+		includeStreamUsage(reqMap)
 		// The free backend validates reasoning_effort against the plain
 		// OpenAI enum and answers 400 "Invalid option" for "auto", which
 		// adaptive thinking (Claude Code's thinking:{type:"adaptive"})
@@ -858,7 +864,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 
 	if resp.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
-		return &proxy.UpstreamError{StatusCode: resp.StatusCode, Body: errBody}
+		return &proxy.UpstreamError{StatusCode: resp.StatusCode, Body: errBody, Header: resp.Header}
 	}
 
 	if req.IsStream {
@@ -1549,44 +1555,25 @@ func deriveOpencodeSession(rawSession, clientTool, connID string) string {
 	return proxy.TranslateOpenCodeSessionID(raw, clientTool)
 }
 
-// museSparkMinOutputTokens is the output-budget floor for Muse Spark. These
-// models spend 570-1320 hidden reasoning tokens before emitting any completion
-// text, so a caller-set budget below the floor is consumed entirely by
-// reasoning: the upstream answers 200 with an empty message, or stalls the
-// stream until the gateway's watchdog reports a 502, and the caller sees a
-// failure that names neither the model nor the budget.
-//
-// 512 is upstream's measured boundary (max_tokens 64/100 → empty content,
-// 256/512/1024 → content present), not a round number picked here. Port of
-// OmniRoute MUSE_SPARK_MIN_OUTPUT_TOKENS
-// (open-sse/executors/opencodeMuseSpark.ts).
-const museSparkMinOutputTokens = 512
-
 // museSparkOutputBudgetFields are the three spellings an OpenAI-shaped request
 // may use for its output cap: Chat Completions' max_tokens, Responses'
-// max_output_tokens, and the OpenAI-compatible max_completion_tokens. A Muse
-// Spark request may arrive on either lane, so all three are clamped.
+// max_output_tokens, and the OpenAI-compatible max_completion_tokens. A request
+// may arrive on either lane, so all three are clamped.
 var museSparkOutputBudgetFields = []string{"max_tokens", "max_output_tokens", "max_completion_tokens"}
 
-// clampMuseSparkOutputBudget raises a caller-set output budget to the floor and
-// returns the fields it changed. It only ever raises: an explicit larger budget
-// and a request that set no budget at all stay byte-identical, because
-// synthesizing a cap the caller never asked for would silently shorten real
-// answers.
+// clampMuseSparkOutputBudget raises a caller-set output budget to the floor for
+// the muse-spark responses lane. The floor and the measurement behind it live
+// in output_budget.go; this wrapper only supplies the lane's scope.
+//
+// Muse Spark spends 570-1320 hidden reasoning tokens before emitting any
+// completion text, so a budget below the floor is consumed entirely by
+// reasoning: the upstream answers 200 with an empty message, or stalls the
+// stream until the gateway's watchdog reports a 502.
 func clampMuseSparkOutputBudget(m map[string]any, cleanModel string) []string {
 	if m == nil || !isOpencodeResponsesModel(cleanModel) {
 		return nil
 	}
-	var raised []string
-	for _, field := range museSparkOutputBudgetFields {
-		budget, ok := outputBudgetOf(m[field])
-		if !ok || budget >= museSparkMinOutputTokens {
-			continue
-		}
-		m[field] = museSparkMinOutputTokens
-		raised = append(raised, field)
-	}
-	return raised
+	return clampOutputBudget(m, true, providers.GetCapabilitiesForModel("opencode", cleanModel).MaxOutput)
 }
 
 // outputBudgetOf reads the numeric shape an output cap decodes to. A JSON
@@ -1767,6 +1754,10 @@ func forwardOpencodeGoFree(w http.ResponseWriter, req *Request, cleanModel strin
 		if cleanModel != "" {
 			reqMap["model"] = cleanModel
 		}
+		// Same reasoning-budget floor as the free chat lane: this lane reaches
+		// the same keyless gate, so the same empty-answer failure applies.
+		clampOpenCodeOutputBudget(reqMap, "opencode-go", cleanModel)
+		includeStreamUsage(reqMap)
 		if b, err := marshalStable(reqMap); err == nil {
 			body = b
 		}
@@ -1953,7 +1944,7 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 
 		if resp.StatusCode != http.StatusOK {
 			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
-			return &proxy.UpstreamError{StatusCode: resp.StatusCode, Body: errBody}
+			return &proxy.UpstreamError{StatusCode: resp.StatusCode, Body: errBody, Header: resp.Header}
 		}
 
 		if req.IsStream {

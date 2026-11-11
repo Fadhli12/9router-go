@@ -205,6 +205,7 @@ func (h *ChatHandler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 // translation when the source format already equals the target format.
 func (h *ChatHandler) newResponsesContext(r *http.Request, requestedModel string, modelInfo *ModelInfo, body *[]byte) context.Context {
 	ctx := handlerutil.WithSessionID(r.Context(), handlerutil.ExtractSessionID(r))
+	ctx = executor.WithCodexLiteHeader(ctx, r.Header.Get(executor.CodexResponsesLiteHeader))
 	// Provider-scope limit state, installed where the request's context is built
 	// so every candidate this request tries shares one memory of which providers
 	// were full (docs/provider-limits-plan.md D7).
@@ -276,6 +277,15 @@ func (h *ChatHandler) handleResponsesSingleModel(ctx context.Context, w http.Res
 					return
 				}
 			}
+		}
+		// Forward only Retry-After, for the same reason /v1/chat/completions
+		// does: it is the one header a caller needs to know when to come back
+		// after a temporary condition. Copying ue.Header wholesale would carry
+		// the failed upstream's framing headers (Content-Length,
+		// Transfer-Encoding) and make the reply advertise a body length that
+		// does not match what is written.
+		if ra := ue.Header.Get("Retry-After"); ra != "" {
+			cw.Header().Set("Retry-After", ra)
 		}
 		cw.Header().Set("Content-Type", "application/json")
 		cw.WriteHeader(ue.StatusCode)

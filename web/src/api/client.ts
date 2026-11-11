@@ -36,7 +36,16 @@ export interface ProviderConnection {
   lastErrorSource?: 'chat' | null
   displayName?: string | null
   assignedModel?: string | null
-  providerSpecificData?: { assignedModel?: string | null; [key: string]: unknown }
+  mediaEnabled?: boolean
+  isMediaActive?: boolean
+  disabledKinds?: string[]
+  providerSpecificData?: {
+    assignedModel?: string | null
+    disabledKinds?: string[]
+    mediaEnabled?: boolean
+    isMediaActive?: boolean
+    [key: string]: unknown
+  }
 }
 
 export interface Combo {
@@ -160,6 +169,16 @@ export interface APIKey {
   metadata?: string
   /** Plan template this key inherits from. Empty means no plan. */
   planId?: string
+  /** Per-period cost budget, in integer USD micros (1e-6 of a dollar). 0 means no cost limit. */
+  limitMicros?: number
+  /** Per-period token budget. 0 means no token limit. */
+  limitTokens?: number
+  /** Window the budget resets on. Empty means monthly — the engine's default. */
+  budgetPeriod?: PlanPeriod
+  /** Warn at this percentage of the period budget, 0-100. 0 means no warning. */
+  alertPct?: number
+  /** True when exhausted requests are refused with 402; false when they only carry a warning header. */
+  hardCutoff?: boolean
 }
 
 export interface APIKeyPolicy {
@@ -178,8 +197,55 @@ export interface APIKeyPolicy {
   name?: string
   /** Plan template to inherit. An empty string detaches the key. */
   planId?: string
+  /**
+   * Per-period cost budget, in integer USD micros (1e-6 of a dollar). Always send
+   * a number: the server treats an omitted field as "keep stored value" and an
+   * explicit 0 as "disable", so 0 is how the operator clears a cost limit.
+   */
+  limitMicros?: number
+  /** Per-period token budget. 0 means no token limit. */
+  limitTokens?: number
+  /** Window the budget resets on: "daily" | "weekly" | "monthly" | "total". Always sent; empty means monthly. */
+  budgetPeriod?: string
+  /** Warn at this percentage of the period budget, 0-100. 0 means no warning. */
+  alertPct?: number
+  /** True when exhausted requests are refused with 402; false when they only carry a warning header. */
+  hardCutoff?: boolean
 }
 
+/**
+ * A key's period budget as the budget engine sees it: the ceiling, what has
+ * already been spent against it in the open window, and where the two stand
+ * relative to each other.
+ */
+export interface ApiKeyBudget {
+  id: string
+  /** Cost ceiling for the open window, integer USD micros. 0 means no cost limit. */
+  limitMicros: number
+  /** Token ceiling for the open window. 0 means no token limit. */
+  limitTokens: number
+  /** Window the numbers reset on. */
+  period: PlanPeriod
+  /** Warning threshold, 0-100. 0 means no warning. */
+  alertPct: number
+  /** True when exhausted requests are refused with 402; false when they only carry a warning header. */
+  hardCutoff: boolean
+  /** A budget is armed when at least one axis has a nonzero ceiling. */
+  armed: boolean
+  /** Spend recorded in the open window, integer USD micros. */
+  spentMicros: number
+  /** Spend recorded in the open window, tokens. */
+  spentTokens: number
+  /** What is left on each axis before the window resets. */
+  remainingMicros: number
+  remainingTokens: number
+  /** RFC3339 UTC. Empty for the "total" period, which never resets. */
+  resetAt: string
+  /** "ok", "approaching" (past alertPct) or "exhausted". */
+  status: 'ok' | 'approaching' | 'exhausted'
+  /** Present when spend cannot be measured — e.g. a key whose secret was hashed away. */
+  note?: string
+}
 /** A reusable policy template (F-3). Keys inherit its limits as defaults. */
 export interface Plan {
   id: string
@@ -1764,6 +1830,12 @@ return conns.map(normalizeConnection)
     }),
   getApiKeyModels: (id: string) =>
     request<{ id: string; models: string[] }>(`/api/keys/${encodeURIComponent(id)}/models`),
+  /**
+   * The key's period budget as the engine sees it — ceiling, open-window spend
+   * and status. The spend is read-only context for the policy modal; it is not
+   * part of what a save writes.
+   */
+  getKeyBudget: (id: string) => request<ApiKeyBudget>(`/api/keys/${encodeURIComponent(id)}/budget`),
   setApiKeyModels: (id: string, models: string[]) =>
     request<{ id: string; models: string[] }>(`/api/keys/${encodeURIComponent(id)}/models`, {
       method: 'PUT',
@@ -2252,6 +2324,53 @@ return conns.map(normalizeConnection)
       method: 'POST',
       body: JSON.stringify({ provider, device_code: deviceCode, session }),
     }),
+  // Free-pi sign-in is a GitHub device flow behind a consent gate, so it gets
+  // its own three calls rather than the generic deviceStart/devicePoll pair:
+  // initiate refuses to contact upstream until the caller asserts that this
+  // user accepted this consent version.
+  freePiConsent: () =>
+    request<{ provider: string; version: string; text: string }>('/api/oauth/free-pi/consent'),
+  freePiInitiate: (consentVersion: string) =>
+    request<{
+      sessionId: string
+      userCode: string
+      verificationUri: string
+      verificationUriComplete?: string
+      interval: number
+      expiresIn: number
+      consentVersion: string
+    }>('/api/oauth/free-pi/initiate', {
+      method: 'POST',
+      body: JSON.stringify({ consentAccepted: true, consentVersion }),
+    }),
+  freePiPoll: (sessionId: string) =>
+    request<{ status: string; connectionId?: string; retryAfter?: number; message?: string }>(
+      '/api/oauth/free-pi/poll',
+      { method: 'POST', body: JSON.stringify({ sessionId }) }
+    ),
+  // The dashboard equivalent of free-pi-cli's /close-other-session.
+  freePiResetSession: (connectionId: string) =>
+    request<{ released: boolean }>('/api/oauth/free-pi/session/reset', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId }),
+    }),
+  // The banner creative. Serving it does not report an impression: that only
+  // happens after the component paints it, via freePiImpression.
+  freePiAd: (connectionId: string) =>
+    request<{
+      ad: {
+        adId: string
+        clickUrl?: string
+        source?: string
+        creative: { title?: string; body?: string; cta?: string; imageUrl?: string }
+      } | null
+    }>(`/api/free-pi/ad?connectionId=${encodeURIComponent(connectionId)}`),
+  freePiImpression: (connectionId: string, adId: string) =>
+    request<{ recorded: boolean }>('/api/free-pi/ad/impression', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId, adId }),
+    }),
+
   kiroImport: (refreshToken: string) =>
     request<{ success: boolean; id?: string; error?: string }>('/api/oauth/kiro/import', {
       method: 'POST',

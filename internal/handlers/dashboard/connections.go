@@ -149,7 +149,7 @@ var usageSupportedProviders = []string{
 	"commandcode", "deepseek", "gemini-cli", "gemini-web", "github", "glm", "glm-cn",
 	"grok-cli", "groq", "kimi", "kiro", "minimax", "minimax-cn", "minimax-code",
 	"minimax-code-global", "ollama",
-	"opencode-go", "opencode-zen", "qoder", "qoder-cn", "trae",
+	"free-pi", "opencode-go", "opencode-zen", "qoder", "qoder-cn", "trae",
 	"vercel-ai-gateway", "xiaomi-mimo", "zed",
 	"zcode",
 }
@@ -159,8 +159,8 @@ var usageSupportedProviders = []string{
 var usageApikeyProviders = []string{
 	"codebuddy-cn", "codebuddy-intl", "commandcode", "deepseek", "gemini-web", "glm",
 	"glm-cn", "groq", "kimi", "kiro", "minimax", "minimax-cn", "ollama",
-	"opencode-go", "opencode-zen", "qoder", "qoder-cn", "vercel-ai-gateway",
-	"xiaomi-mimo",
+	"free-pi", "opencode-go", "opencode-zen", "qoder", "qoder-cn",
+	"vercel-ai-gateway", "xiaomi-mimo",
 }
 
 func strSliceContains(list []string, v string) bool {
@@ -375,6 +375,7 @@ func sanitizeProviderConnection(c *models.ProviderConnection) map[string]any {
 			"githubLogin", "githubName", "githubEmail", "githubUserId",
 			"username", "firstName", "lastName", "authMethod", "authKind",
 			"profileArn", "accessKeyId", "profile",
+			"disabledKinds", "mediaEnabled", "isMediaActive",
 		} {
 			if v, ok := psd[f]; ok && v != nil {
 				out[f] = v
@@ -384,6 +385,8 @@ func sanitizeProviderConnection(c *models.ProviderConnection) map[string]any {
 			safe["providerSpecificData"] = out
 		}
 	}
+	safe["mediaEnabled"] = models.IsConnectionMediaActive(c.Data)
+	safe["isMediaActive"] = models.IsConnectionMediaActive(c.Data)
 	// Effective status: the toggle being on is not evidence the account
 	// works. Derived from testStatus + live cooldown + stored lastError with
 	// the same vocabulary the request path uses, so the dashboard stops
@@ -720,6 +723,31 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 	_, hasAssignedModel := rawBody["assignedModel"]
 	_, hasProxyPool := rawBody["proxyPoolId"]
 	_, hasAllowPrivate := rawBody["allowPrivateNetworking"]
+	hasMediaEnabled := false
+	var mediaEnabledVal bool
+	if v, ok := rawBody["mediaEnabled"].(bool); ok {
+		hasMediaEnabled = true
+		mediaEnabledVal = v
+	}
+	hasIsMediaActive := false
+	var isMediaActiveVal bool
+	if v, ok := rawBody["isMediaActive"].(bool); ok {
+		hasIsMediaActive = true
+		isMediaActiveVal = v
+	}
+	hasDisabledKinds := false
+	var disabledKindsVal []string
+	if dk, ok := rawBody["disabledKinds"].([]any); ok {
+		hasDisabledKinds = true
+		for _, item := range dk {
+			if s, ok := item.(string); ok {
+				disabledKindsVal = append(disabledKindsVal, s)
+			}
+		}
+	} else if dk, ok := rawBody["disabledKinds"].([]string); ok {
+		hasDisabledKinds = true
+		disabledKindsVal = dk
+	}
 	// Issue #154: rotating the credential from the edit modal. Blank (or
 	// whitespace-only) means "keep the stored key" — the modal shows it as a
 	// mask and sends nothing when the user did not type one.
@@ -775,7 +803,7 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 	}
 
 	// Fast path: if only updating active status
-	if hasIsActive && !hasName && !hasPriority && !hasData && !hasPSD && !hasAssignedModel && !hasProxyPool && !hasAPIKey && !hasAllowPrivate {
+	if hasIsActive && !hasName && !hasPriority && !hasData && !hasPSD && !hasAssignedModel && !hasProxyPool && !hasAPIKey && !hasAllowPrivate && !hasMediaEnabled && !hasIsMediaActive && !hasDisabledKinds {
 		if err := h.Repo.SetConnectionStatus(id, a); err != nil {
 			handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -808,7 +836,7 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 	}
 
 	dataStr := existing.Data
-	if hasData || hasPSD || hasAssignedModel || hasProxyPool || hasAPIKey || hasAllowPrivate {
+	if hasData || hasPSD || hasAssignedModel || hasProxyPool || hasAPIKey || hasAllowPrivate || hasMediaEnabled || hasIsMediaActive || hasDisabledKinds {
 		dataMap := make(map[string]any)
 		if existing.Data != "" {
 			_ = json.Unmarshal([]byte(existing.Data), &dataMap)
@@ -890,6 +918,27 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 			}
 		}
 
+		if hasMediaEnabled {
+			dataMap["mediaEnabled"] = mediaEnabledVal
+			if psd, ok := dataMap["providerSpecificData"].(map[string]any); ok && psd != nil {
+				psd["mediaEnabled"] = mediaEnabledVal
+			}
+		}
+
+		if hasIsMediaActive {
+			dataMap["isMediaActive"] = isMediaActiveVal
+			if psd, ok := dataMap["providerSpecificData"].(map[string]any); ok && psd != nil {
+				psd["isMediaActive"] = isMediaActiveVal
+			}
+		}
+
+		if hasDisabledKinds {
+			dataMap["disabledKinds"] = disabledKindsVal
+			if psd, ok := dataMap["providerSpecificData"].(map[string]any); ok && psd != nil {
+				psd["disabledKinds"] = disabledKindsVal
+			}
+		}
+
 		if b, err := json.Marshal(dataMap); err == nil {
 			dataStr = string(b)
 		}
@@ -906,7 +955,13 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 		releaseProviderHaltOnEnable(existing, a)
 	}
 
-	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": id})
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"status":        "ok",
+		"id":            id,
+		"isActive":      isActive,
+		"mediaEnabled":  models.IsConnectionMediaActive(dataStr),
+		"isMediaActive": models.IsConnectionMediaActive(dataStr),
+	})
 }
 
 // HandleReorderConnection handles POST /api/connections/{id}/reorder.
@@ -1576,6 +1631,23 @@ func (h *DashboardHandler) writeConnectionModels(w http.ResponseWriter, r *http.
 			"provider":     conn.Provider,
 			"connectionId": conn.ID,
 			"models":       items,
+		})
+		return
+	}
+
+	// Free-pi's catalogue lives at GET /client-version (unauthenticated,
+	// account-independent) rather than the standard /v1/models shape. The models
+	// array's `id` is the value a request must send as `model`.
+	if conn.Provider == providers.FreePiProviderID {
+		cv, err := freePiFetchModelsFromClientVersion(r.Context(), connData.APIKey, connData.ProviderSpecificData)
+		if err != nil {
+			handlerutil.WriteJSONError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+			"provider":     conn.Provider,
+			"connectionId": conn.ID,
+			"models":       cv,
 		})
 		return
 	}
