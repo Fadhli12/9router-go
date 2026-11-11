@@ -2579,6 +2579,20 @@ return conns.map(normalizeConnection)
         body: JSON.stringify({ selectionToken, idempotencyKey }),
       }
     ),
+  // Claude reset credits (cedar_ember grants). Only for provider == "claude".
+  listClaudeResetCredits: (connectionId: string) =>
+    request<CodexResetCreditListResponse>(
+      `/api/usage/${encodeURIComponent(connectionId)}/claude-reset-credits`
+    ),
+  consumeClaudeResetCredit: (connectionId: string, selectionToken: string, idempotencyKey?: string) =>
+    request<CodexResetCreditConsumeResponse>(
+      `/api/usage/${encodeURIComponent(connectionId)}/claude-reset-credits/consume`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selectionToken, idempotencyKey }),
+      }
+    ),
   // GLM Reset Cards (Z.ai international). Only for provider == "glm".
   getGlmResetCards: (connectionId: string) =>
     request<GLMResetCardsResponse>(
