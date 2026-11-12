@@ -1525,6 +1525,38 @@
     isStoppingOneByOne = true
   }
 
+  // Per-row ban check: the sweep above walks every account; this runs the
+  // same real-request verdict for the ONE account whose row it is, so an
+  // operator can re-check a single appeal without spending requests on the
+  // 44 accounts that did not change. Writes into the same
+  // banCheckResults map the row badge already renders.
+  async function banCheckOneConnection(conn: ProviderConnection) {
+    if (banCheckRunning || !banCheckModel) return
+    try {
+      const res = await api.banCheckConnection(conn.id, banCheckModel)
+      if (res.state === 'refused') {
+        banCheckDrift = res.drift ?? null
+        return
+      }
+      banCheckResults = { ...banCheckResults, [conn.id]: { state: res.state, message: res.message, status: res.status } }
+      if (res.state === 'banned') {
+        try {
+          await api.updateConnection(conn.id, { isActive: 0 })
+          banCheckDisabled = [...new Set([...banCheckDisabled, conn.id])]
+        } catch {
+          // The verdict still stands even if the toggle write failed.
+        }
+      }
+    } catch (err) {
+      banCheckResults = {
+        ...banCheckResults,
+        [conn.id]: { state: 'error', message: err instanceof Error ? err.message : 'ban check failed' }
+      }
+    } finally {
+      onRefresh()
+    }
+  }
+
   // Per-row refresh: probe one account straight from its row instead of
   // opening the edit modal. Reuses the one-by-one badge state so the row
   // shows the live testing/success/failed indicator for free.
@@ -4587,6 +4619,14 @@
                         disabled={isTestingOneByOne || status?.state === 'testing'}
                         onSelect={() => refreshOneConnection(conn)}
                       />
+                      {#if providerId === 'antigravity'}
+                        <MenuItem
+                          label="Check ban"
+                          icon="gavel"
+                          disabled={banCheckRunning || !banCheckModel}
+                          onSelect={() => banCheckOneConnection(conn)}
+                        />
+                      {/if}
                       {#if isDeepSeekWeb}
                         <MenuItem
                           label="Renew credential"
