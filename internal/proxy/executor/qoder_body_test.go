@@ -350,7 +350,7 @@ func TestForwardQoder_UnknownModelNamesTheModel(t *testing.T) {
 		Client:   srv.Client(),
 		Config:   &providers.ProviderConfig{BaseURL: srv.URL},
 		APIKey:   creds.AuthToken,
-		ConnData: map[string]any{"userId": creds.UserID},
+		ConnData: map[string]any{"userId": creds.UserID, "machineId": creds.MachineID},
 		Body:     []byte(`{"model":"qd/not-a-real-model","messages":[{"role":"user","content":"hi"}]}`),
 	}
 	err := ForwardQoder(rec, req)

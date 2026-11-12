@@ -53,6 +53,7 @@ const (
 	// sends "platform": 5 (WINDOWS_AMD64), which has to agree with what this
 	// header claims. Only the version moves on a bump.
 	AntigravityHubVersion    = "2.24.0"
+	AntigravityCLIVersion    = AntigravityHubVersion
 	AntigravityCLIUserAgent  = "antigravity/hub/" + AntigravityHubVersion + " (os_type=windows; arch=amd64)"
 	AntigravityIDEVersion    = AntigravityHubVersion
 	AntigravityIDEUserAgent  = AntigravityCLIUserAgent
