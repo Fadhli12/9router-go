@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	json "encoding/json/v2"
 	"fmt"
 	"net/http"
@@ -142,15 +144,6 @@ func ForwardKimchi(ctx context.Context, client *http.Client, cfg *providers.Prov
 // profile, and a 401/403/404 moves on to the next surface — one dead gateway
 // must not look like a dead account. authMethod decides the TokenType header
 // and the profile ARN travels in `x-amzn-codewhisperer-profile-arn`.
-// kiroDefaultProfileARNs mirrors upstream KIRO_DEFAULT_PROFILE_ARNS: builder-id
-// and social (Google/GitHub) sign-ins map to different shared CodeWhisperer
-// profiles, and sending one account's shared ARN with another account's token
-// makes the gateway reject the request.
-const (
-	kiroBuilderIDProfileARN = "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX"
-	kiroSocialProfileARN    = "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK"
-)
-
 func ForwardKiro(ctx context.Context, client *http.Client, cfg *providers.ProviderConfig, apiKey string, body []byte, isStream bool, psd map[string]any) (*http.Response, error) {
 	clean := cleanKiroBody(body)
 	endpoints := kiroEndpoints(cfg, psd)
@@ -163,25 +156,22 @@ func ForwardKiro(ctx context.Context, client *http.Client, cfg *providers.Provid
 			"Amz-Sdk-Request":                 "attempt=1; max=3",
 			"Amz-Sdk-Invocation-Id":           invocationID,
 			"Accept":                          "application/vnd.amazon.eventstream",
-			"User-Agent":                      "AWS-SDK-JS/3.0.0 kiro-ide/1.0.0",
-			"X-Amz-User-Agent":                "aws-sdk-js/3.0.0 kiro-ide/1.0.0",
 			"x-amzn-kiro-agent-mode":          "spec",
 			"x-amzn-codewhisperer-machine-id": "kiro-desktop",
 		}
-		// Only the legacy codewhisperer surface speaks the X-Amz-Target RPC
-		// protocol; q.* and kiro.dev answer a body carrying it with 400
-		// REQUEST_BODY_INVALID, so it must not ride along anywhere else.
 		if strings.Contains(endpoint, "://codewhisperer.") {
 			headers["X-Amz-Target"] = "AmazonCodeWhispererStreamingService.GenerateAssistantResponse"
 		}
+		ua, amzUA := kiroServiceUserAgent(psd, apiKey)
+		headers["User-Agent"] = ua
+		headers["X-Amz-User-Agent"] = amzUA
 		if apiKey != "" {
 			headers["x-amz-sso-bearer"] = apiKey
 		}
-		// The header carries only the connection's own profile ARN. The shared
-		// defaults belong to specific account families, so a header default
-		// would present this token as a foreign account.
-		if ownARN := kiroOwnProfileArn(psd); ownARN != "" {
-			headers["x-amzn-codewhisperer-profile-arn"] = ownARN
+		authMethod, _ := psd["authMethod"].(string)
+		rawProfileArn, _ := psd["profileArn"].(string)
+		if effectiveArn := providers.KiroEffectiveProfileARN(authMethod, strings.TrimSpace(rawProfileArn)); effectiveArn != "" {
+			headers["x-amzn-codewhisperer-profile-arn"] = effectiveArn
 		}
 		if tokenType := kiroTokenType(psd); tokenType != "" {
 			headers["TokenType"] = tokenType
@@ -209,22 +199,41 @@ func ForwardKiro(ctx context.Context, client *http.Client, cfg *providers.Provid
 	return nil, lastErr
 }
 
-// kiroOwnProfileArn extracts the connection's own profile ARN without any
-// shared-default fallback.
-func kiroOwnProfileArn(psd map[string]any) string {
-	if s, ok := psd["profileArn"].(string); ok {
-		if trimmed := strings.TrimSpace(s); trimmed != "" {
-			return trimmed
+const (
+	KiroRuntimeSDKVersion = "1.0.0"
+	KiroIDEVersion        = "1.4.121"
+	KiroAgentOS           = "windows"
+	KiroAgentOSVersion    = "10.0.26200"
+	KiroNodeVersion       = "22.21.1"
+)
+
+func resolveKiroMachineID(psd map[string]any, accessToken string) string {
+	seed := ""
+	if psd != nil {
+		if s, _ := psd["clientId"].(string); strings.TrimSpace(s) != "" {
+			seed = strings.TrimSpace(s)
+		} else if s, _ := psd["profileArn"].(string); strings.TrimSpace(s) != "" {
+			seed = strings.TrimSpace(s)
 		}
 	}
-	if raw, ok := psd["providerSpecificData"].(map[string]any); ok {
-		if s, ok := raw["profileArn"].(string); ok {
-			if trimmed := strings.TrimSpace(s); trimmed != "" {
-				return trimmed
-			}
-		}
+	if seed == "" && strings.TrimSpace(accessToken) != "" {
+		seed = strings.TrimSpace(accessToken)
 	}
-	return ""
+	if seed == "" {
+		seed = "kiro-anonymous"
+	}
+	sum := sha256.Sum256([]byte(seed))
+	return hex.EncodeToString(sum[:])
+}
+
+func kiroServiceUserAgent(psd map[string]any, accessToken string) (string, string) {
+	machineID := resolveKiroMachineID(psd, accessToken)
+	ua := fmt.Sprintf(
+		"aws-sdk-js/%s ua/2.1 os/%s#%s lang/js md/nodejs#%s api/codewhispererstreaming#%s m/E KiroIDE-%s-%s",
+		KiroRuntimeSDKVersion, KiroAgentOS, KiroAgentOSVersion, KiroNodeVersion, KiroRuntimeSDKVersion, KiroIDEVersion, machineID,
+	)
+	amzUA := fmt.Sprintf("aws-sdk-js/%s KiroIDE-%s-%s", KiroRuntimeSDKVersion, KiroIDEVersion, machineID)
+	return ua, amzUA
 }
 
 // kiroTokenType mirrors upstream buildHeaders: API-key connections announce

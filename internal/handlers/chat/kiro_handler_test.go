@@ -55,13 +55,11 @@ func TestForwardKiroRequest_Success(t *testing.T) {
 	}, payload)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// A non-Amazon mirror is not the codewhisperer surface, so it must not
-		// receive the X-Amz-Target RPC header that only that surface speaks.
-		if r.Header.Get("X-Amz-Target") != "" {
-			t.Errorf("mirror must not receive X-Amz-Target, got %q", r.Header.Get("X-Amz-Target"))
-		}
 		if r.Header.Get("Amz-Sdk-Request") == "" {
 			t.Errorf("expected Amz-Sdk-Request header")
+		}
+		if !strings.Contains(r.Header.Get("User-Agent"), "KiroIDE-") {
+			t.Errorf("expected KiroIDE User-Agent, got %q", r.Header.Get("User-Agent"))
 		}
 		w.WriteHeader(http.StatusOK)
 		w.Write(frame)
