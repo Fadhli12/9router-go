@@ -31,24 +31,24 @@ func TestForwardGemini_Headers_Injection(t *testing.T) {
 			},
 		},
 		{
-			name:      "antigravity lane with project: headers injected",
+			name:      "antigravity lane with project: identity headers absent (reverted #1089)",
 			projectID: "my-proj",
-			want: map[string]string{
-				"X-Goog-User-Project": "my-proj",
-				"X-Client-Name":       "antigravity",
-				"X-Client-Version":    providers.AntigravityCLIVersion,
+			wantAbsent: []string{
+				"X-Goog-User-Project",
+				"X-Machine-Session-Id",
+				"X-Client-Name",
+				"X-Client-Version",
 			},
-			wantAbsent: []string{"X-Machine-Session-Id"},
 		},
 		{
-			name:       "antigravity lane with project and session: all injected",
+			name:       "antigravity lane with project and session: identity headers absent (reverted #1089)",
 			projectID:  "my-proj",
 			sessionCtx: handlerutil.WithSessionID(context.Background(), "sess-123"),
-			want: map[string]string{
-				"X-Goog-User-Project":  "my-proj",
-				"X-Machine-Session-Id": "sess-123",
-				"X-Client-Name":        "antigravity",
-				"X-Client-Version":     providers.AntigravityCLIVersion,
+			wantAbsent: []string{
+				"X-Goog-User-Project",
+				"X-Machine-Session-Id",
+				"X-Client-Name",
+				"X-Client-Version",
 			},
 		},
 		{
