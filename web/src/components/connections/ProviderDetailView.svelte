@@ -99,6 +99,7 @@
   import ExportKeysModal from './ExportKeysModal.svelte'
   import ShareProviderModal from './ShareProviderModal.svelte'
   import FreebuffSessionBanner from './FreebuffSessionBanner.svelte'
+  import FreebuffAdBanner from './FreebuffAdBanner.svelte'
   import ProviderIcon from './ProviderIcon.svelte'
 
   interface Props {
@@ -3213,7 +3214,7 @@
   let canListLiveModels = $derived(
     providerId.startsWith('openai-compatible-') ||
       isCompatibleNode ||
-      ['antigravity', 'gemini-cli', 'cline', 'clinepass', 'qoder', 'qoder-cn', 'zed'].includes(providerId) ||
+      ['antigravity', 'gemini-cli', 'cline', 'clinepass', 'qoder', 'qoder-cn', 'zed', 'claude', 'anthropic'].includes(providerId) ||
       ModelsListURLs.has(providerId)
   )
 
@@ -5124,6 +5125,9 @@
     {/if}
     {#if isFreebuff}
       <div class="mb-4">
+        {#if targetFreebuffConn}
+          <FreebuffAdBanner connectionId={targetFreebuffConn.id} />
+        {/if}
         <FreebuffSessionBanner
           session={freebuffSession}
           isLoading={isLoadingSession}

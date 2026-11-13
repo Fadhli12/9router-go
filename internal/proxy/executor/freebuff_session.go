@@ -20,7 +20,7 @@ import (
 const (
 	freebuffSessionPath  = "/api/v1/freebuff/session"
 	freebuffSessionTTL   = 60 * time.Minute
-	freebuffCLIUserAgent = "freebuff-cli"
+	freebuffCLIUserAgent = "Freebuff-CLI/0.2.36"
 
 	// FreebuffCLIUserAgent is the client identity upstream expects. It is
 	// exported so the OAuth/dashboard handlers send the same string: upstream
@@ -416,7 +416,9 @@ func postFreebuffSession(ctx context.Context, client *http.Client, baseURL, toke
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", freebuffCLIUserAgent)
 	req.Header.Set("x-freebuff-model", model)
-
+	req.Header.Set("x-freebuff-wallet-spend-limit", "session")
+	req.Header.Set("x-freebuff-multi-session", "1")
+	req.Header.Set("x-freebuff-purchase-continuity", "1")
 	resp, err := DoFreebuffHTTP(ctx, client, req)
 	if err != nil {
 		return nil, fmt.Errorf("freebuff session request failed: %w", err)
