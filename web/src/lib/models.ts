@@ -82,6 +82,7 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "iflow": "if",
   "inworld": "inworld",
   "jina-ai": "jina-ai",
+  "kenari": "ki",
   "kilo-gateway": "kgw",
   "kilocode": "kc",
   "kimchi": "kimchi",
@@ -3317,6 +3318,19 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "kind": "embedding"
     }
   ],
+  "kenari": [
+    { "id": "nvidia/nemotron-3-ultra-550b-a55b:free", "name": "Nemotron 3 Ultra 550B (Free)" },
+    { "id": "nvidia/nemotron-3.5-super-vl:free", "name": "Nemotron 3.5 Super VL (Free)" },
+    { "id": "nemotron-3-5-super-vl:free", "name": "Nemotron 3.5 Super VL (Free)" },
+    { "id": "qwen3-8-omni-flash:free", "name": "Qwen3 8 Omni Flash (Free)" },
+    { "id": "glm-4-7-flash:free", "name": "GLM 4.7 Flash (Free)" },
+    { "id": "llama-3-3-70b-instruct:free", "name": "Llama 3.3 70B Instruct (Free)" },
+    { "id": "dots-3-note-preview:free", "name": "Dots 3 Note Preview (Free)" },
+    { "id": "solar-mini4:free", "name": "Solar Mini4 (Free)" },
+    { "id": "deepseek-v4", "name": "DeepSeek V4" },
+    { "id": "deepseek-v4-1-flash", "name": "DeepSeek V4.1 Flash" },
+    { "id": "glm-5-3-flash", "name": "GLM 5.3 Flash" }
+  ],
   "kc": [
     {
       "id": "anthropic/claude-sonnet-4-20250514",
@@ -6331,42 +6345,35 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   ],
   "xiaomi-tokenplan": [
     {
-      "id": "mimo-v2.5-pro",
-      "name": "MiMo V2.5 Pro"
+      "id": "mimo-v2.6-pro",
+      "name": "MiMo V2.6 Pro"
     },
     {
-      "id": "mimo-v2.5-pro-claude",
-      "name": "MiMo V2.5 Pro (Claude Native)",
-      "targetFormat": "claude",
-      "upstreamModelId": "mimo-v2.5-pro"
+      "id": "mimo-v2.6-flash",
+      "name": "MiMo V2.6 Flash"
     },
     {
-      "id": "mimo-v2.5",
-      "name": "MiMo V2.5"
-    },
-    {
-      "id": "mimo-v2-pro",
-      "name": "MiMo V2 Pro"
-    },
-    {
-      "id": "mimo-v2-omni",
-      "name": "MiMo V2 Omni"
-    },
-    {
-      "id": "mimo-v2-tts",
-      "name": "MiMo V2 TTS"
+      "id": "mimo-v2.5-asr",
+      "name": "MiMo V2.5 ASR",
+      "params": [
+        "language"
+      ],
+      "kind": "stt"
     },
     {
       "id": "mimo-v2.5-tts",
-      "name": "MiMo V2.5 TTS"
+      "name": "MiMo V2.5 TTS",
+      "kind": "tts"
     },
     {
       "id": "mimo-v2.5-tts-voiceclone",
-      "name": "MiMo V2.5 TTS Voice Clone"
+      "name": "MiMo V2.5 TTS Voice Clone",
+      "kind": "tts"
     },
     {
       "id": "mimo-v2.5-tts-voicedesign",
-      "name": "MiMo V2.5 TTS Voice Design"
+      "name": "MiMo V2.5 TTS Voice Design",
+      "kind": "tts"
     }
   ],
   "alims-intl": [
