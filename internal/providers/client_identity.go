@@ -56,5 +56,9 @@ const (
 	AntigravityCLIVersion   = AntigravityHubVersion
 	AntigravityCLIUserAgent = "antigravity/hub/" + AntigravityHubVersion + " (os_type=windows; arch=amd64)"
 	AntigravityIDEVersion   = AntigravityHubVersion
+	// AntigravityIDEUserAgent is the hub shape on both lanes. Upstream's
+	// agy 1.5.9 capture (decolua/9router#1220) belongs to the CLI lane this
+	// fork no longer presents; the version the drift check compares against
+	// is AntigravityHubVersion above.
 	AntigravityIDEUserAgent = AntigravityCLIUserAgent
 )

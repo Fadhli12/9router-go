@@ -3,6 +3,7 @@ package translator_test
 import (
 	json "encoding/json/v2"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -429,7 +430,7 @@ func TestStripCompetitivePrompts(t *testing.T) {
 		t.Errorf("expected competitive prompt removed from contents, got %s", stripped.Contents[0].Parts[0].Text)
 	}
 }
-func TestStripCompetitivePrompts_NormalizesHarnessTagsInSystemOnly(t *testing.T) {
+func TestStripCompetitivePrompts_CanonicalizesOMPHarnessMarkersInSystemOnly(t *testing.T) {
 	req := &translator.GeminiRequest{
 		SystemInstruction: &translator.GeminiContent{
 			Role: "user",
@@ -449,12 +450,12 @@ func TestStripCompetitivePrompts_NormalizesHarnessTagsInSystemOnly(t *testing.T)
 
 	stripped := translator.StripCompetitivePrompts(req)
 	sys := stripped.SystemInstruction.Parts[0].Text
-	for _, want := range []string{"<conventions>", "RFC 2119 body stays", "<instructions>dir stays", "<important>crit stays", "Oh My Pi coding harness"} {
+	for _, want := range []string{"<guidelines>", "Requirement terminology: MUST means mandatory", "<instructions>dir stays", "<important>crit stays", "AI coding assistant"} {
 		if !strings.Contains(sys, want) {
 			t.Errorf("expected system text to contain %q, got %q", want, sys)
 		}
 	}
-	for _, banned := range []string{"system-conventions", "system-directive", "critical"} {
+	for _, banned := range []string{"system-conventions", "system-directive", "critical", "Oh My Pi", "RFC 2119 body stays"} {
 		if strings.Contains(sys, banned) {
 			t.Errorf("expected system text to drop %q, got %q", banned, sys)
 		}
@@ -480,34 +481,101 @@ func TestStripCompetitivePrompts_HermesAndBillingHeader(t *testing.T) {
 	if strings.Contains(sys, "x-anthropic-billing-header") {
 		t.Errorf("expected billing header stripped, got %q", sys)
 	}
-	// Verify semantic identity of Hermes is 100% preserved without words being replaced
-	if !strings.Contains(sys, "You are Hermes Agent, an intelligent AI assistant created by Nous Research. Help user.") {
-		t.Errorf("expected Hermes identity intact without alteration, got %q", sys)
+	// Upstream #1219 neutralizes the Hermes brand tokens in place instead of
+	// replacing the whole sentence, so the rest of the identity stays readable.
+	if !strings.Contains(sys, "You are the agent, an intelligent AI assistant created by Nous Research.") {
+		t.Errorf("expected Hermes brand tokens neutralized in place, got %q", sys)
+	}
+	if strings.Contains(sys, "Hermes") {
+		t.Errorf("expected Hermes fingerprint removed, got %q", sys)
+	}
+}
+
+// TestStripCompetitivePrompts_HermesVariants pins the brand tokens upstream
+// #1219 drops. The whole-sentence rewrite this test used to assert ("You are an
+// AI assistant.") is gone: the fingerprint table now neutralizes "Hermes
+// Agent"/"Hermes" and leaves the surrounding identity text readable.
+func TestStripCompetitivePrompts_HermesVariants(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "phrase and vendor name stay, brand token replaced",
+			input: "You are Hermes Agent, an intelligent AI assistant.",
+			want:  "You are the agent, an intelligent AI assistant.",
+		},
+		{
+			name:  "bare name",
+			input: "You are Hermes.",
+			want:  "You are agent.",
+		},
+		{
+			name:  "built by vendor",
+			input: "You are Hermes Agent, built by Nous Research.",
+			want:  "You are the agent, built by Nous Research.",
+		},
+		{
+			name:  "lowercase",
+			input: "you are hermes agent, an AI agent.",
+			want:  "you are the agent, an AI agent.",
+		},
+		{
+			name:  "uppercase",
+			input: "YOU ARE HERMES.",
+			want:  "YOU ARE agent.",
+		},
+		{
+			name:  "embedded in surrounding text",
+			input: "Hello. You are Hermes, an AI agent. Goodbye.",
+			want:  "Hello. You are agent, an AI agent. Goodbye.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &translator.GeminiRequest{
+				SystemInstruction: &translator.GeminiContent{
+					Role:  "user",
+					Parts: []translator.GeminiPart{{Text: tt.input}},
+				},
+			}
+
+			stripped := translator.StripCompetitivePrompts(req)
+			got := stripped.SystemInstruction.Parts[0].Text
+			if got != tt.want {
+				t.Errorf("StripCompetitivePrompts() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
 func TestWrapForAntigravity_NormalizesTriggerSystemPrompt(t *testing.T) {
-	geminiBody := []byte(`{"system_instruction":{"role":"user","parts":[{"text":"<system-conventions>\nRFC 2119: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL."}]},"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`)
+	geminiBody := []byte(`{"systemInstruction":{"role":"user","parts":[{"text":"<system-conventions>\nRFC 2119: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL."}]},"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`)
 	wrapped, err := translator.WrapForAntigravity(geminiBody, "proj-1", "gemini-3.8-flash-high")
 	if err != nil {
 		t.Fatalf("WrapForAntigravity failed: %v", err)
 	}
 	inner := unwrapInnerRequest(t, wrapped)
-	si, _ := inner["system_instruction"].(map[string]any)
+	si, _ := inner["systemInstruction"].(map[string]any)
 	if si == nil {
-		t.Fatal("system_instruction missing from wrapped request")
+		t.Fatal("systemInstruction missing from wrapped request")
 	}
 	parts, _ := si["parts"].([]any)
 	if len(parts) == 0 {
-		t.Fatal("system_instruction.parts missing")
+		t.Fatal("systemInstruction.parts missing")
 	}
 	part, _ := parts[0].(map[string]any)
 	text, _ := part["text"].(string)
 	if strings.Contains(text, "system-conventions") {
 		t.Errorf("expected trigger tag normalized, got %q", text)
 	}
-	if !strings.Contains(text, "<conventions>") || !strings.Contains(text, "RFC 2119") {
-		t.Errorf("expected neutral tag with intact body, got %q", text)
+	if !strings.Contains(text, "<conventions>") || !strings.Contains(text, "Requirement terminology") {
+		t.Errorf("expected the RFC clause replaced with canonical wording, got %q", text)
+	}
+	if strings.Contains(text, "RFC 2119") {
+		t.Errorf("expected the RFC clause absorbed by the canonical wording, got %q", text)
 	}
 }
 
@@ -671,8 +739,8 @@ func TestWrapForAntigravity_CapAndRequestID(t *testing.T) {
 	if gc == nil {
 		t.Fatal("generationConfig missing")
 	}
-	if v, _ := gc["maxOutputTokens"].(float64); v != 64000 {
-		t.Errorf("expected maxOutputTokens capped to 64000, got %v", gc["maxOutputTokens"])
+	if v, _ := gc["maxOutputTokens"].(float64); v != 65536 {
+		t.Errorf("expected maxOutputTokens capped to 65536, got %v", gc["maxOutputTokens"])
 	}
 	// The tier must NOT be injected as a thinking config: gemini-3.7-flash-tiered
 	// is always-thinking, and injecting thinkingConfig triggers strict thought
@@ -701,6 +769,157 @@ func TestWrapForAntigravity_SessionScopesRequestID(t *testing.T) {
 	}
 	if parts1[1] == parts2[1] {
 		t.Errorf("distinct sessions produced identical conversationID: %s", parts1[1])
+	}
+
+	// The agent body carries the official CLI's numeric sessionId, scoped to
+	// the same client session that seeds the request ID.
+	var inner1, inner2 struct {
+		SessionID string `json:"sessionId"`
+	}
+	_ = json.Unmarshal(req1.Request, &inner1)
+	_ = json.Unmarshal(req2.Request, &inner2)
+	if inner1.SessionID == "" || inner2.SessionID == "" {
+		t.Fatalf("payload sessionId missing: %q vs %q", inner1.SessionID, inner2.SessionID)
+	}
+	if inner1.SessionID == inner2.SessionID {
+		t.Errorf("distinct sessions produced identical sessionId: %q", inner1.SessionID)
+	}
+	if !strings.HasPrefix(inner1.SessionID, "-") {
+		t.Errorf("non-numeric session id should be hashed to a negative decimal, got %q", inner1.SessionID)
+	}
+}
+
+func TestWrapForAntigravity_ThinkingLevelUsesCLICasing(t *testing.T) {
+	geminiBody := []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"includeThoughts":true,"thinkingLevel":"high"}}}`)
+	wrapped, err := translator.WrapForAntigravity(geminiBody, "aicode-consumers", "gemini-3.8-flash-high")
+	if err != nil {
+		t.Fatalf("WrapForAntigravity failed: %v", err)
+	}
+	inner := unwrapInnerRequest(t, wrapped)
+	gc, _ := inner["generationConfig"].(map[string]any)
+	tc, _ := gc["thinkingConfig"].(map[string]any)
+	if got := tc["thinkingLevel"]; got != "HIGH" {
+		t.Errorf("thinkingLevel = %v, want the CLI's uppercase HIGH", got)
+	}
+}
+
+// TestWrapForAntigravity_AgentBodyMatchesOfficialCLIKeys pins the inner-body
+// spelling the real agy 1.5.9 capture produced: camelCase systemInstruction, a
+// numeric string sessionId, and no requestType on the agent lane.
+func TestWrapForAntigravity_AgentBodyMatchesOfficialCLIKeys(t *testing.T) {
+	geminiBody := []byte(`{"systemInstruction":{"role":"user","parts":[{"text":"be terse"}]},"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`)
+	wrapped, err := translator.WrapForAntigravity(geminiBody, "aicode-consumers", "gemini-3.8-flash-high", "sess-cli-shape")
+	if err != nil {
+		t.Fatalf("WrapForAntigravity failed: %v", err)
+	}
+
+	var envelope map[string]any
+	if err := json.Unmarshal(wrapped, &envelope); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if _, ok := envelope["requestType"]; ok {
+		t.Errorf("agent lane must omit requestType (upstream #3986), got %v", envelope["requestType"])
+	}
+
+	inner := unwrapInnerRequest(t, wrapped)
+	if _, ok := inner["system_instruction"]; ok {
+		t.Error("snake_case system_instruction must not reach the wire")
+	}
+	if _, ok := inner["systemInstruction"].(map[string]any); !ok {
+		t.Fatalf("camelCase systemInstruction missing from inner request: %v", inner["systemInstruction"])
+	}
+	sid, ok := inner["sessionId"].(string)
+	if !ok || sid == "" {
+		t.Fatalf("numeric string sessionId missing from inner request: %v", inner["sessionId"])
+	}
+	if _, err := strconv.ParseInt(sid, 10, 64); err != nil {
+		t.Errorf("sessionId %q is not a signed integer string: %v", sid, err)
+	}
+}
+
+// TestWrapForAntigravity_NoSessionOmitsSessionID keeps the gateway from sending
+// one shared session id for every caller when the client provided none — that
+// single bucket is a fingerprint the official client never produces.
+func TestWrapForAntigravity_NoSessionOmitsSessionID(t *testing.T) {
+	geminiBody := []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`)
+	wrapped, err := translator.WrapForAntigravity(geminiBody, "aicode-consumers", "gemini-3.8-flash-high")
+	if err != nil {
+		t.Fatalf("WrapForAntigravity failed: %v", err)
+	}
+	inner := unwrapInnerRequest(t, wrapped)
+	if _, ok := inner["sessionId"]; ok {
+		t.Errorf("sessionId must be omitted without a client session, got %v", inner["sessionId"])
+	}
+}
+
+func TestAntigravityNumericSessionID(t *testing.T) {
+	const longID = "session-abcdefghijklmnopqrstuvwxyz-0123456789"
+
+	tests := []struct {
+		name      string
+		sessionID string
+		wantEmpty bool
+		wantExact string
+	}{
+		{
+			name:      "empty id is omitted",
+			sessionID: "",
+			wantEmpty: true,
+		},
+		{
+			name:      "whitespace id is omitted",
+			sessionID: "   ",
+			wantEmpty: true,
+		},
+		{
+			name:      "overlong id is omitted",
+			sessionID: strings.Repeat("x", 257),
+			wantEmpty: true,
+		},
+		{
+			name:      "numeric id passes through unchanged",
+			sessionID: "12345",
+			wantExact: "12345",
+		},
+		{
+			name:      "negative numeric id passes through unchanged",
+			sessionID: "-3750763034362895579",
+			wantExact: "-3750763034362895579",
+		},
+		{
+			name:      "uuid is hashed to a negative decimal",
+			sessionID: "7eecc43d-f855-43c9-8071-68518dd9a31a",
+			wantExact: "-8083753786699868886",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := translator.AntigravityNumericSessionID(tt.sessionID)
+			if tt.wantEmpty {
+				if got != "" {
+					t.Fatalf("AntigravityNumericSessionID(%q) = %q, want empty", tt.sessionID, got)
+				}
+				return
+			}
+			if got != tt.wantExact {
+				t.Errorf("AntigravityNumericSessionID(%q) = %q, want %q", tt.sessionID, got, tt.wantExact)
+			}
+		})
+	}
+
+	// The hash must be deterministic and must stay inside the signed range, so
+	// the id the backend sees is stable across processes and JSON parsers.
+	first := translator.AntigravityNumericSessionID(longID)
+	second := translator.AntigravityNumericSessionID(longID)
+	if first != second {
+		t.Errorf("hash is not deterministic: %q vs %q", first, second)
+	}
+	if !strings.HasPrefix(first, "-") {
+		t.Errorf("hashed id must be negative, got %q", first)
+	}
+	if _, err := strconv.ParseInt(first, 10, 64); err != nil {
+		t.Errorf("hashed id %q is not a signed 64-bit integer: %v", first, err)
 	}
 }
 

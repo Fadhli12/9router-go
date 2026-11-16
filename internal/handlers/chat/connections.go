@@ -236,9 +236,9 @@ func (h *ChatHandler) getBestConnection(provider string, connectionID string, ex
 }
 
 func (h *ChatHandler) getBestConnectionWithContext(ctx context.Context, provider string, connectionID string, excludeIDs []string, model string, excludePools ...map[string]bool) (*models.ProviderConnection, *ConnectionData, error) {
-	if model != "" && !h.Repo.IsProviderAvailable(provider, model) {
-		log.Warn("health", "unhealthy provider", "provider", provider, "model", model)
-	}
+	// The combo loop health-checks every candidate before dialing here
+	// (combo.go "skip unhealthy") and logs the skip; repeating the scan
+	// inside the selector doubled the query cost and only re-logged it.
 
 	var conn *models.ProviderConnection
 	var err error
@@ -460,6 +460,10 @@ func (h *ChatHandler) getBestConnectionWithContext(ctx context.Context, provider
 			// Rotate only connections eligible for the requested model.
 			// New session distribution uses round-robin with effective stickyLimit = 1 across
 			// candidate accounts so distinct sessions alternate evenly.
+			// Same reason as the failover loop: the strategy stamps the row it
+			// picks, so a Codex account parked until its quota reset must not
+			// consume the rotation slot before this loop skips it again.
+			connections = filterCodexQuotaExhausted(provider, connections)
 			if len(connections) > 1 && hasStrat {
 				effectiveStrat := strat
 				if sessionID != "" && affinityEligible {
@@ -553,6 +557,7 @@ func (h *ChatHandler) getBestConnectionWithContext(ctx context.Context, provider
 			return nil, nil, fmt.Errorf("failed to parse connection data: %w", err)
 		}
 	}
+	connData.AuthType = conn.AuthType
 	// The dashboard's proxy assignment endpoint (upstream parity) stores the
 	// binding in providerSpecificData.proxyPoolId, while the top-level field is
 	// what this resolver reads. Accept both so a pool bound from either writer
@@ -590,18 +595,20 @@ func (h *ChatHandler) getBestConnectionWithContext(ctx context.Context, provider
 // specific model — an active per-model lock or a provider quota cache. An
 // empty model means nothing model-scoped applies (upstream parity: the lock
 // filter only runs for a model-bearing request).
+//
+// The lock fields are read from the blob the rotation loop already holds in
+// memory: a row fetch per check here ran 2N queries per rotation pass on an
+// N-connection pool, each re-reading the same row the loop is iterating.
 func (h *ChatHandler) connectionModelBlocked(c *models.ProviderConnection, provider, model string) bool {
 	if model == "" {
 		return false
 	}
 	lockKey := canonicalLockModel(provider, model)
-	if locked, _ := h.Repo.IsConnectionModelLocked(c.ID, lockKey); locked {
+	if db.ConnectionModelLockedData(c.Data, lockKey) {
 		return true
 	}
-	if lockKey != model {
-		if locked, _ := h.Repo.IsConnectionModelLocked(c.ID, model); locked {
-			return true
-		}
+	if lockKey != model && db.ConnectionModelLockedData(c.Data, model) {
+		return true
 	}
 	return quotaCacheBlocked(provider, c.ID, model)
 }
@@ -655,13 +662,11 @@ func (h *ChatHandler) pinnedConnectionIneligible(conn *models.ProviderConnection
 		return false, ""
 	}
 	lockKey := canonicalLockModel(conn.Provider, model)
-	if locked, _ := h.Repo.IsConnectionModelLocked(conn.ID, lockKey); locked {
+	if db.ConnectionModelLockedData(conn.Data, lockKey) {
 		return true, "model lock " + lockKey
 	}
-	if lockKey != model {
-		if locked, _ := h.Repo.IsConnectionModelLocked(conn.ID, model); locked {
-			return true, "model lock " + model
-		}
+	if lockKey != model && db.ConnectionModelLockedData(conn.Data, model) {
+		return true, "model lock " + model
 	}
 	if quotaCacheBlocked(conn.Provider, conn.ID, model) {
 		return true, "quota cache"
@@ -892,7 +897,7 @@ func (h *ChatHandler) getProviderConfig(provider string, connData *ConnectionDat
 		cloned.ProxyPoolID = connData.ProxyPoolID
 		baseCfg = &cloned
 	}
-	return h.applyProviderOverrides(provider, h.withClineIdentity(provider, baseCfg)), nil
+	return h.applyProviderOverrides(provider, h.withClaudeIdentity(provider, h.withClineIdentity(provider, baseCfg))), nil
 }
 
 // resolveEdgeRelay returns the edge relay an assigned pool puts in front of a

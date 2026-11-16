@@ -105,7 +105,7 @@ func (h *ChatHandler) handleAccountFallback(
 		})
 	}
 
-	if !handlerutil.IsProbeContext(ctx) && !h.Repo.IsProviderAvailable(provider, model) {
+	if !handlerutil.IsProbeContext(ctx) && !h.Repo.IsProviderAvailable(ctx, provider, model) {
 		log.Warn("fallback", "skip unhealthy", "provider", provider, "model", model)
 		return fmt.Errorf("provider %s/%s is unhealthy", provider, model)
 	}
@@ -162,6 +162,13 @@ func (h *ChatHandler) handleAccountFallback(
 			affinityEligible = isAffinityEligibleStrategy(strat.RotateStrategy)
 		}
 	}
+	// The rotation below stamps whichever row it reaches (selectByRecency) and
+	// persists that stamp, so an account parked until its Codex quota resets
+	// took the turn's rotation slot for a request it can never serve — and the
+	// resolver then burned a second pass falling through its pin. Filter the
+	// live set first; an all-parked list is kept as-is so the existing
+	// "all excluded / all in cooldown" answer still applies.
+	allConns = filterCodexQuotaExhausted(provider, allConns)
 
 	// Apply provider connection routing strategy (round-robin, sticky, random) or session affinity
 	if len(allConns) > 1 && strat.RotateStrategy != "" && strat.RotateStrategy != "none" {
@@ -688,6 +695,12 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	ctx, w := f.Ctx, f.W
 	provider, model := f.Provider, f.Model
 	connectionID, connData := f.ConnectionID, f.ConnData
+	// authType is a DB column, not part of the data blob; ForwardMinimaxCode
+	// needs it to tell a desktop-app lease connection from an OAuth one.
+	authType := ""
+	if connData != nil {
+		authType = connData.AuthType
+	}
 	body, isStream := f.Body, f.IsStream
 	translateResponse, endpoint := f.TranslateResponse, f.Endpoint
 	prefixHash := f.PrefixHash
@@ -869,7 +882,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		if clientBeta := handlerutil.GetClientAnthropicBeta(ctx); clientBeta != "" {
 			merged := providers.MergeAnthropicBeta(providerCfg.StaticHeaders["Anthropic-Beta"], clientBeta)
 			if merged != "" {
-				providerCfg.StaticHeaders = providers.WithHeader(providerCfg.StaticHeaders, "Anthropic-Beta", merged)
+				providerCfg.StaticHeaders = providers.WithAnthropicBeta(providerCfg.StaticHeaders, merged)
 			}
 		}
 
@@ -1217,6 +1230,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			ClaudeClient:   endpoint == "/v1/v1/messages" || endpoint == "/v1/messages",
 			TranslateResp:  translateResponse,
 			ConnectionID:   connectionID,
+			AuthType:       authType,
 			SessionID:      sessionID,
 			ToolNameMap:    claudeToolMap,
 			UpstreamClaude: upstreamClaude && !claudeNative,
@@ -1275,6 +1289,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 					ClaudeClient:   endpoint == "/v1/v1/messages" || endpoint == "/v1/messages",
 					TranslateResp:  translateResponse,
 					ConnectionID:   connectionID,
+					AuthType:       authType,
 					SessionID:      sessionID,
 					ToolNameMap:    claudeToolMap,
 					UpstreamClaude: upstreamClaude && !claudeNative,
@@ -1729,8 +1744,9 @@ func (h *ChatHandler) applyTokenSavers(ctx context.Context, body []byte, claudeN
 	}
 	// Global system prompt, last in the chain so the prefix stays the first
 	// thing the model reads and the suffix its last word — after every style
-	// prompt has been appended in between.
-	if h.TokenSaver.SystemPromptEnabled() {
+	// prompt has been appended in between. Skipped when a combo's own custom
+	// prompt was already injected (the combo prompt replaces the global one).
+	if h.TokenSaver.SystemPromptEnabled() && !ComboCustomPromptInjected(ctx) {
 		if prefix := h.TokenSaver.SystemPromptPrefix(); prefix != "" {
 			if next, did := tokensaver.InjectPrefixSystemPrompt(out, prefix, claudeNative); did {
 				out = next
@@ -1760,6 +1776,27 @@ func TokenSaverBypassEnabled(ctx context.Context) bool {
 		return false
 	}
 	v, ok := ctx.Value(tokenSaverBypassKey{}).(bool)
+	return ok && v
+}
+
+// comboCustomPromptKey carries the fact that a combo's own custom system prompt
+// was already injected into the body, so the global system prompt prefix/suffix
+// must not be added on top of it.
+type comboCustomPromptKey struct{}
+
+// WithComboCustomPrompt marks ctx as having received the combo's custom system
+// prompt, so applyTokenSavers skips the global system prompt injection.
+func WithComboCustomPrompt(ctx context.Context) context.Context {
+	return context.WithValue(ctx, comboCustomPromptKey{}, true)
+}
+
+// ComboCustomPromptInjected reports whether a combo custom prompt was already
+// injected into the request body.
+func ComboCustomPromptInjected(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, ok := ctx.Value(comboCustomPromptKey{}).(bool)
 	return ok && v
 }
 

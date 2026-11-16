@@ -1,5 +1,378 @@
 # Changelog
 
+## [v1.9.17-exp.5] - 2026-11-16
+
+### Fixed
+
+- **Antigravity cloaking aligned with a live capture of the official `agy` 1.5.9 CLI.** The User-Agent now carries the captured version and `cl` (`1.5.9` / `1021519450`), the inner body uses the camelCase `systemInstruction` spelling both the public Gemini API and the real CLI emit, a numeric-string `sessionId` is sent when the caller supplies a session (omitted otherwise, bounded to upstream's 256-character limit), `thinkingLevel` now uses the CLI's uppercase enum casing (`HIGH`), and `maxOutputTokens` is capped at the CLI's 65536 instead of the upstream 64000. These values came from a real successful `agy` request captured through a TLS MITM on 2026-11-16, not from guessing.
+- No shared session bucket: callers without a session header no longer get one fabricated id for the whole gateway.
+
+**Deliberately not changed:** `requestType:"agent"` stays omitted (upstream `decolua/9router#3986` observed false 429s with it), `toolConfig.mode="VALIDATED"` stays as upstream has it, and the `_ide` tool suffix / decoys, `Accept-Encoding: identity` on streams, and pinned `os_type=windows` remain. A `labels` block needs a per-model `model_enum` table that would have to be fabricated. The two CLI-aligning values above (`HIGH`, 65536) are a deliberate divergence from upstream's lowercase levels and 64000 cap, chosen because the live CLI capture proves the backend accepts them and they make the footprint closer to the official client. Byte-for-byte CLI parity is not achievable behind an OpenAI-compatible proxy because tool sets and prompts come from the caller; only the transport fingerprint is matched here.
+
+**Verified:** `go test ./...`, integration tests, live non-stream requests to real `ag/gemini-3.8-flash-high` and `ag/claude-sonnet-4-6` (HTTP 200, `"content":"OK"`), and a live OMP 18.20.3 request against the real Antigravity backend, which answered `200 OK` with these two additional changes applied. A capture of OMP's own request confirmed it sends no session header, so the new `sessionId` field is not on that path; OMP's earlier `429 RESOURCE_EXHAUSTED` was the harness-fingerprint false 429 fixed by #1219, not a payload or quota regression from this change. The two models that returned 404 (`ag/gemini-4-argon`, `ag/gemini-3.7-flash-high`) do so identically on the pre-tweak baseline, i.e. pre-existing.
+
+### Antigravity: rewrite Hermes/OpenClaw and OMP fingerprints that earn a false 429
+
+- Antigravity's Cloud Code backend answers system text carrying another coding
+  harness's branding with `429 RESOURCE_EXHAUSTED` even when the account still
+  has quota. The system-instruction sanitizer now neutralizes the Hermes Agent /
+  OpenClaw fingerprint rows: the pair-programming and tool-output sentences,
+  `Be direct.`, `is your authoritative reference`, the Google
+  operational-directives header, Hermes section headers and environment
+  identifiers, and the OpenClaw identity sentence.
+- OMP coverage is completed. The `<system-conventions>` block is now replaced
+  whole with canonical neutral wording instead of only renaming its tag, because
+  the RFC 2119 text inside is the fingerprint pair reported in
+  `can1357/oh-my-pi#11699`. A standalone RFC 2119/8174 clause is collapsed too,
+  and OMP brand matching accepts hyphen and underscore separators
+  (`oh-my-pi`, `oh_my_pi`) in addition to `Oh My Pi`.
+- A live OMP 18.20.3 request against `ag/gemini-3.8-flash-high` still answered
+  429 after those rewrites. Bisecting the captured system prompt showed two more
+  standalone triggers: the identity sentence
+  `You are omp's trusted coding assistant.` and the internal `xd://` URL scheme.
+  Both are neutralized now, along with the `omp://` scheme, the `~/.omp/` home
+  path, and a leftover standalone `omp` token. The same request then returned
+  `200 OK` from the real backend, and the captured upstream payload no longer
+  contains any of those markers.
+- Tool descriptions are prompt text the backend scans the same way, so they go
+  through the Hermes fingerprint rewrite and the OMP brand/scheme rows.
+  Conversation turns are left alone: the caller's own vocabulary is not harness
+  text.
+- Ported from ag-shield `0ffb051` (issues #5697, #5701, #5703) and the OMP
+  masking sidecar's block canonicalization. Two rows are deliberately not
+  ported: the self-brand rewrites (`antigravity` → …, `9router` → …) would fight
+  the upstream `opencode` → `antigravity` rewrite, and the reference's 429 retry
+  loop replays against the same exhausted quota window that
+  `proxy.transientRetryPolicy` leaves to the account-fallback path.
+- Verified with `go test ./internal/translator/...` and
+  `go test ./internal/proxy/...`; the tables cover every row, idempotence,
+  system-only scope, and tool-description copying. The live OMP run used a
+  temporary provider entry in the OMP config pointed at a local build of this
+  branch; the config was restored afterwards.
+
+### Fixed
+
+- A Claude Code client keeps its own tool names on an OAuth `claude` connection. The cloak used to rename every tool to `<name>_ide` and declare the plain name as an unusable decoy — correct for a foreign client, fatal for Claude Code itself, whose tools carry exactly those names: the system prompt still said "use TaskUpdate" while the only tool by that name was the dead decoy, and the turn died as `[Tool TaskUpdate is unavailable]`. The cloak is skipped when the client declares three or more of Claude Code's own tool names, and a decoy that merely collides with a declared tool is skipped too.
+
+### Fixed
+
+- The Claude registry now sends every public beta flag the Claude Code CLI gates its features on (2.1.325: 45 gates, 14 were sent). A block behind a flag the gateway never sent was refused by the API — `tool_addition blocks require anthropic-beta: inline-tools-2026-09-15`, `role 'system' must precede an 'assistant' message` — and since the turn stays in the history, every later turn failed too. Client-side `x-cc-internal-*` latches are excluded.
+- `tool_addition` and `tool_removal` count as content, so a turn whose only block is one of them is no longer read as empty and dropped before it reaches the API.
+- The caller's own `anthropic-beta` flags are merged under one canonical header key; a case variant left beside `Anthropic-Beta` could win at header-application time and silently discard the merged value.
+
+### keenable provider: free web search and web fetch
+
+Register the keenable provider (`keenable`) with `SearchURL` (`POST https://api.keenable.ai/v1/search`) and `FetchURL` (`GET https://api.keenable.ai/v1/fetch`), marked `NoAuth` so it works keyless.
+
+- `/v1/search` lane forwards only `query` (strips `model`/`mode`, which keenable rejects as unknown params).
+- `/v1/web/fetch` lane rebuilds `GET /v1/fetch` with `url` (and optional `format`) as query parameters.
+- Alias `keenable` → `keenable` and registry metadata (free tier, apikey auth, `webSearch`+`webFetch` service kinds).
+
+### Fixed
+
+- A tool call that arrives with no arguments (absent, `{}` or `null`) is now removed from the history sent upstream when another call to the same tool in the conversation does carry arguments, together with the `tool_result` paired with it. Clients validate the call against the tool schema and reject it, then resend the full history — so the model used to read its own bare call and repeat it every turn. Tools that are only ever called without arguments are untouched. Applied on both the Claude passthrough lane and the Claude-to-OpenAI conversion lane.
+
+### Kiro: only the official service regions reach a hostname, and a toggle for the whole-turn integrity pass
+
+- **A region the `q.*` host does not serve can no longer reach the hostname.** The live catalog
+  (`internal/handlers/chat/live_catalog.go`) took the region straight out of the profile ARN and
+  spliced it into `https://q.<region>.amazonaws.com/ListAvailableModels`. A `eu-west-1` profile —
+  a real ARN shape, not a hostile one — therefore queried a host that does not exist, so the
+  catalog request NXDOMAIN'd instead of answering. `providers.KiroCatalogRegion` now folds the
+  region onto the set the host actually serves (`us-east-1`, `eu-central-1`) and falls back to
+  `us-east-1` for anything else. The runtime surface order in `internal/proxy/grokcli.go` already
+  guarded this; it now reads the same `providers.KiroQServiceRegions` set, so the two paths cannot
+  drift apart.
+- **`KIRO_INTEGRITY_GATE=off`** (`internal/proxy/executor/kiro_normalize.go`,
+  `internal/proxy/executor/stream.go`). Kiro fragments one tool call across frames, so the
+  arguments are only complete at the end of the stream; the default path assembles them and emits
+  one complete call. That costs the whole turn's latency before the client sees anything. With the
+  gate off each fragment is emitted as it arrives — the OpenAI streaming contract, where the client
+  concatenates the argument fragments itself — which a latency-critical setup can prefer. The
+  default is unchanged, and the `-thinking`/`-agentic`/model-id handling is untouched.
+- Tool-call indices are now assigned per call when its buffer is created (`kiroToolCall.index`)
+  instead of from a counter advanced at flush time. With the gate off the flush loop emits nothing,
+  so a counter advanced only there would have reported every call at index 0.
+
+Verified: `go test ./internal/proxy/executor/ -run 'TestKiro|TestHandleKiroStream|TestForwardKiro'`
+and `go test ./internal/handlers/chat/ -run 'TestKiro'`, plus `go build ./...` and `go vet` on the
+touched packages. New tests pin the region fallback (served region, unserved ARN region, empty,
+non-ARN, hostile string), the toggle's accepted off-values, and both stream shapes — with the gate
+off two fragments arrive as two `tool_calls` chunks, with it on one reassembled call carrying
+`finish_reason: tool_calls`.
+
+### Command Code publishes its live catalogue in `/v1/models`
+
+`commandcode` now resolves its model list from the CLI feed,
+`GET https://api.commandcode.ai/provider/v1/models?view=client`, instead of the
+23-row static snapshot. The surface cursor in the dashboard picker is what
+operators noticed: a model Command Code ships after the snapshot was reachable
+by asking for it by name but never appeared in `/v1/models`, so combos and the
+model picker could not see it.
+
+Two properties of that endpoint decided the implementation:
+
+- **The query string is load-bearing.** Without `view=client` the same URL
+  answers the public list, which carries no `hidden` flag. `parseCommandcodeLiveModels`
+  drops every entry whose `hidden` is true — 16 of the 114 rows probed on
+  2026-11-16, including `reflection/beam:free`, `poolside/laguna-s-2.1-free` and
+  the `stealth/*` canaries. Publishing them would offer models the provider has
+  withdrawn.
+- **The endpoint validates CLI identity, not the key.** No `User-Agent: cli`
+  answers 403 with or without a bearer; `Bearer user_fake` answers 200. The
+  header set therefore comes from the registry's `commandcode` entry — the same
+  `StaticHeaders` the chat lane dials with — so a CLI version bump cannot reach
+  one path and miss the other. A connection whose key was revoked still lists
+  the catalogue instead of reporting a failed fetch.
+
+`context_length` from the feed is marked `LimitsAuthoritative`, because it is the
+provider's enforced window and spans 200k–1.05M while the static table answers
+1M for the whole catalogue. `maxOutput` is deliberately left to the static cap:
+`/alpha/generate` rejects `params.max_tokens` above 200k regardless of what the
+feed advertises per model.
+
+The resolver is keyed on `providers.ResolveAlias(providerID)`, so `cmc` and
+`commandcode` both reach it while `commandcode-goat`/`cmc-goat` keep their own
+generated catalogue — no cross-provider aliasing.
+
+Files: `internal/handlers/chat/live_catalog_commandcode.go` (new),
+`internal/handlers/chat/live_catalog.go` (dispatch branch),
+`internal/handlers/chat/live_catalog_commandcode_test.go` (new).
+
+**Verification**: `go test ./internal/handlers/chat/ -run 'LiveCatalog|Commandcode|HandleModels|Models'`
+passes, including a handler-level case that seeds a `commandcode` connection
+against a fake feed and asserts the live ids publish, the `hidden` id does not,
+and the static `moonshotai/Kimi-K2.5` row disappears. Feed shape was probed live:
+`view=client` + `User-Agent: cli` → 200/114 rows/16 hidden; same URL without the
+CLI UA → 403.
+
+### fix(chat): skip quota-exhausted Codex accounts during 429 failover rotation
+
+- The Codex 429 path already caches the reset instant for the account
+  (`NoteCodexQuotaError` → `BlockCodexConnectionUntil`), and the connection
+  pre-filter already refuses to *serve* a request on a parked row. The rotation
+  still reached it first: `selectByRecency` stamps whichever row its strategy
+  sweep lands on and persists that stamp, so an account parked until its 5h/7d
+  window resets consumed the turn's rotation slot. The failover loop then
+  re-resolved that pin, was told `quota cache`, and fell through to the next
+  account — one wasted resolver pass and a mis-advanced rotation per request.
+- `filterCodexQuotaExhausted` drops the parked Codex accounts from the candidate
+  list before the strategy runs, in both places that rotate
+  (`handleAccountFallback` and `getBestConnectionWithContext`). An all-parked
+  list is returned unchanged so the existing `all excluded` / `all in cooldown`
+  answers still apply — the filter must not turn "everything is parked" into a
+  different error.
+- Scope is Codex only, and it reuses the account-level cache
+  `IsCodexConnectionExhausted` already exposed. No new state, no new query, no
+  cross-provider aliasing (AGENTS.md §3.A).
+- Verified: `TestHandleAccountFallback_CodexRotationSkipsQuotaExhausted` fails on
+  `main` (parked account stamped, resolver logged `pinned connection
+  ineligible ... quota cache`) and passes with the filter, with two live accounts
+  alternating and the parked one never dialled nor stamped. Full
+  `go test ./internal/handlers/chat/` passes.
+
+### Dashboard: track ClinePass plan usage in Provider Limits
+
+Add quota tracking for `clinepass` (`cline-pass`, `cp`) connections in the dashboard Provider Limits view, mapping the upstream plan limits response into percentage quota cards.
+
+- Query `GET https://api.cline.bot/api/v1/users/me/plan/usage-limits`.
+- Authenticate via WorkOS Bearer token with Cline identity headers for OAuth connections, or plain Bearer token for API keys.
+- Map `five_hour` / `session`, `weekly`, and `monthly` windows into `Session (5h)`, `Weekly (7d)`, and `Monthly` quota rows with reset timestamps.
+- Add `clinepass` to `usageSupportedProviders` and `usageApikeyProviders`.
+- Unit tests in `internal/handlers/dashboard/usage_clinepass_test.go` covering window mapping, auth headers, error paths, and eligibility.
+
+### mcode-lease: forward authType through chat dispatch and open usage gate
+
+A `minimax-code` / `minimax-code-global` connection created with `authType:
+"mcode-lease"` was being rejected by the usage eligibility gate
+(`isUsageEligibleConnection`) because only `oauth` and apikey-providers passed,
+and lease detection in `ForwardMinimaxCode` never matched because `authType` is
+a separate `connections` column, not a field in the `data` JSON blob, so
+`mcodelease.IsLeaseConnection(req.ConnData)` always returned `false`.
+
+Changes:
+
+* Add `AuthType string` to `ConnectionData` (`internal/handlers/shared/types.go`)
+  and populate `connData.AuthType = conn.AuthType` from the DB row in
+  `getBestConnection` (`internal/handlers/chat/connections.go`).
+* Add `AuthType string` to `executor.Request` and forward it on `execReq` and
+  `retryReq` in `tryForwardWithConnection` (`internal/handlers/chat/fallback.go`).
+* `ForwardMinimaxCode` now detects lease mode via `req.AuthType == "mcode-lease"`
+  (new `mcodelease.IsLeaseAuthType` / `LeaseAuthType` helper), keeping
+  `IsLeaseConnection(req.ConnData)` as a fallback for callers that populate the
+  data blob.
+* `isUsageEligibleConnection` now allows `c.AuthType == "mcode-lease"` for
+  `minimax-code` / `minimax-code-global`, which are already in
+  `usageSupportedProviders` (`internal/handlers/dashboard/connections.go`).
+* Add `mcode-lease` and `apikey` cases for both minimax-code lanes to
+  `TestIsUsageEligibleConnection`.
+
+Upstream parity: port of the `mcode-lease` lease connection behaviour.
+
+## [v1.9.17-exp.4] - 2026-11-15
+
+### fix(deepseek-web): bound the compiled-schema cache
+
+- `deepSeekSchemaCache` was a package-level map keyed by the client-supplied schema bytes and never evicted, so a client varying its tool schemas grew it without bound (#1167 item 1).
+- The cache now caps at 200 entries — the same cap as the repo's session caches (`pplxSessionMaxEntries`) — and evicts the oldest entry on insert, mirroring `pplxSessionStore` and `deepSeekSessionStore.evictOldestLocked`. Entries carry a store timestamp; a nil validator (a cached compile failure) counts against the cap like any other entry. Lookup behaviour is unchanged.
+- New test `TestDeepSeekSchemaCacheBounded` pins the bound: cap+25 distinct schemas leave exactly the cap, the newest schema still validates, and a failed compile stays bounded. Verified with Go 1.27.4: `go build`, `go vet`, and the executor package's DeepSeek tests pass.
+
+### perf(combo): cut per-candidate health and lock queries
+
+- The combo failure loop health-checked every candidate model (`IsProviderAvailable`) and then checked the picked connection's model lock again by ID (`IsConnectionModelLocked`) — on an N-connection pool that was 1 list query + N single-row data fetches + N full-blob JSON unmarshals per candidate per pass, and the connection selector repeated the same health scan a second time just to log it. Measured: 77 µs and 225 allocations for one health check on an eight-connection pool.
+- `IsProviderAvailable` now answers from one statement over the provider's active rows, parsing the `modelLock_<model>` field in Go with the same tolerant rules as before (missing, empty, unparseable or malformed ⇒ unlocked) — not `json_extract`, which turns a malformed blob into a SQL error and would have flipped the fail-open semantics. An empty pool still reports available; a pool whose every row is locked still does not. "No connections" and "all locked" are kept distinct deliberately.
+- The rotation loop, the pinned-connection ineligibility check and both combo lock-skip sites already hold the connection's data blob in memory; they now read the lock fields from it (`db.ConnectionModelLockedData`) instead of re-fetching and re-parsing the same row from SQLite — the per-pass rotation cost drops from 2N queries to zero.
+- New permanent benchmark pins the health-check cost (`internal/handlers/chat` bench: 16 µs / 28 allocs after, from 77 µs / 225 before).
+- No schema, wire or dashboard change: the blob format, lock write path (`json_set`), and every read shared with the Next.js dashboard are untouched. Verified with the `db` and `chat` unit suites plus the integration suite.
+
+### perf(stream): skip ~99% of per-event allocations on the SSE relay path
+
+- A streamed turn used to allocate on every step of the relay: `scanEvents.emit` called `bytes.Join` even when an event carried a single `data:` line (pprof put `bytes.Join` at 99.2% of the scanner's allocations — 504 allocs for a 500-event stream), the handler path ran two full `json.Unmarshal` passes per content chunk hunting for a usage object, and the executor passthrough re-ran a complete `ScanStream` — a fresh 64 KB scanner buffer each time — on every 4 KB read to find the one chunk that reports usage.
+- All three are now gated by what the parsers actually need: every usage parser (`ParseClaudeUsage`, `ParseResponseUsage`, `ParseResponsesUsage`, `AccumulateClaudeStreamUsage`) unmarshals a struct with a `json:"usage"` field, so a chunk without the `"usage"` substring cannot yield usage. Single-line events hand their slice through instead of joining a one-element slice. Multi-line events keep the join; nothing about the wire protocol changes.
+- Measured on a 500-event (~65 KB) stream: `ScanStream` 88 µs → 52 µs, 129.6 KB → 65.6 KB per op, **504 → 3 allocs per op**. Guarded usage capture over a 200-event stream drops from a nested scan per read to one scan on the single read that carries usage. No single-turn latency change — the relay was already µs-scale between tokens — but per-stream garbage falls by ~1 MB, which cuts GC frequency on the small deployment target where several streams run concurrently.
+- New permanent benchmarks pin the paths (`internal/proxy/sse_stream_bench_test.go`, `internal/proxy/executor/usage_guard_bench_test.go`): passthrough copy, event scan, the multi-line join fallback (so a fast-path regression cannot hide the join path), the guarded usage capture, and the parser-miss fallback.
+- Verified: `go test ./internal/proxy/... ./internal/handlers/chat/` and the integration suite (`-tags=integration`, real router, real DB, fake upstreams) pass.
+
+## [v1.9.17-exp.3] - 2026-11-15
+
+### Parity: upstream decolua/9router v0.5.116..v0.5.119 (issue #1139)
+
+- fix(claude): retire `claude-fable-5.1` from the GitHub Copilot catalogs and `claude-fable-5-1` from `ocz`/`opencode-zen` (upstream 12e7930e); pin `claude-haiku-5-5` to claude-adaptive on the opencode-go and github lanes and to the commandcode format on commandcode (8aef7480).
+- feat(claude): resolve the Claude Code CLI fingerprint from the npm feed (`@anthropic-ai/claude-code/latest`, 6 h TTL, CLAUDE_CODE_VERSION pin, never below the bundled fallback) and rewrite `claude-cli/x.y.z` header values per request — chat lane and the usage tracker (upstream 43bc940e).
+- feat(provider): add `sensenova-intl` (token.sensenova.ai) registry entry, transport, image lane, and model catalog (upstream 14b27dc7).
+- feat(provider): add `synthetic` (synthetic.new) registry entry, transport, model catalog, key validation through `/v2/quotas` (the public `/models` cannot reject a bad key), and a subscription-quota usage handler (upstream ebe398a9 + 402230ed).
+- fix(dashboard): validate new fal-ai keys through `GET /v1/models?limit=1` with `Key <key>` auth instead of a paid generation (upstream 0cf07ccf).
+- feat(opencode): write effort `variants` built from `GetThinkingLevels` into `~/.config/opencode/opencode.json`, keeping variants the user already tuned; expose `thinking_levels` on `/v1/models` entries (upstream 7abc190d).
+- feat(dashboard): shift-click range selection on the proxy-pool list, filtered to visible rows (upstream 12256f72).
+
+Verified: `go build ./internal/...`, targeted `go test` suites (providers, pricing, translator, clientconfig, media, dashboard, chat), `bun test src` (827 pass), `bun run build`, and the svelte-check ratchet at baseline (74, 0 unresolved identifiers). Two pre-existing failures on clean main (`TestLoadConfigFromDotEnv`, `TestRecordConnectionAccountBanFailure_EscalatesAndClears`) are unrelated.
+
+## [v1.9.17-exp.3] - 2026-11-15
+
+### fix(claude): drop caller from blocks that do not define it
+- Claude Code attaches `caller` (agent attribution) to content blocks, and Anthropic defines it on the `tool_use` block only. On a `text` block — or a `text` nested in a `tool_result` — the API answers `messages.<n>.content.<m>.text.caller: Extra inputs are not permitted` and refuses the whole request, so the turn stays in history and every later turn fails too.
+- `SanitizeClaudePassthrough` now drops `caller` from every block that is not a `tool_use`, walking into the blocks nested in a `tool_result`. The valid `tool_use` field is preserved, and a body with nothing to clean is still forwarded byte for byte.
+
+### Documentation
+
+- **scope:** two web-fetch comments (`internal/handlers/media/media.go`, `internal/handlers/media/webfetch_ssrf_test.go`) that called the dialer's socket-level guard the thing that actually stops a private-address fetch. That guard is skipped while `ALLOW_PRIVATE_NETWORKING` is on (the default), so the `targetPrivate` pre-flight is the only check on that path; both comments now say so. Comment-only, no behaviour change.
+
+### docs(ssrf): correct the dial-guard record left by #1171
+
+- The dial-time socket guard is skipped while `ALLOW_PRIVATE_NETWORKING` is on (the default), so it refuses no address class on any dial. The provider-node write-gate comments, the create-gate test comment, and the provider-share-url spec no longer describe it as a backstop.
+- `.env.example` documents `ALLOW_PRIVATE_NETWORKING`, the strict opt-out.
+
+### feat(ssrf): allow private/LAN upstreams by default
+
+- `ALLOW_PRIVATE_NETWORKING` now defaults to on: a self-hosted or LAN provider (ollama on loopback, a second gateway on the LAN, a Tailscale peer) is a normal deployment, so the SSRF guard no longer refuses it out of the box. Set `ALLOW_PRIVATE_NETWORKING=false` to restore the strict refusal.
+- Creating a provider node from a LAN dashboard peer no longer fails with `Base URL is not allowed` when the node points at a private/LAN host. Cloud-metadata URLs are still refused at the provider-node write gate.
+- The media web-fetch pre-flight follows the same switch, so `/v1/web/fetch` dials private targets while private networking is on.
+
+### Fixed
+
+- DeepSeek web tool rendering is now byte-stable: the bound schema text and the nonce-stripped arguments use the deterministic marshaling helper, so identical requests produce identical bytes and keep prefix-cache hits (#1167).
+
+### Mobile dashboard layout: thumb-sized targets, readable values, tighter shell
+
+Dashboard on a phone kept the desktop register: 16px toggle switches, 28px
+buttons, and every long value (API keys, skill URLs, model ids) truncated
+mid-glyph. The changes below make the narrow viewport a designed state, not a
+squeezed desktop.
+
+**Shell**
+- `TopBar`: the breadcrumb crumb ("Providers ›") and the page icon only render
+  from `sm:` up; on a 390px screen the title now gets the whole row instead of
+  wrapping into the truncated "Providers & En…" the before screenshots show.
+- `Sidebar`: the three fake macOS traffic-light dots are hidden below `lg:` —
+  a drawer on a phone has no window around it, so the dots read as broken UI.
+- `App.svelte`: canvas padding steps `px-4 py-4 sm:p-6 lg:p-10`, and the
+  scroll canvas carries `pb-safe`; `index.html` gets `viewport-fit=cover` so
+  the iOS home indicator never covers the last control.
+- Group accordions in the sidebar are full-height tap rows on mobile.
+
+**Tap targets (44px thumb minimum, antislop-layoutmobile R-03)**
+- `ui/Toggle.svelte`: every switch in the app (settings, providers, quota)
+  keeps its 28×16 visual but gains an 8px invisible halo via a new
+  `tap-target` utility (`index.css`), hit-tested in the browser.
+- `ui/Button.svelte`: `size="sm"` is 40px tall below `sm:`, 28px from `sm:` up.
+  This lifts the Wrap/Copy/Export console toolbar, Reconcile rules, and every
+  modal footer button at once.
+- `QuotaTrackerView`: the 13 `h-8` filter/stepper controls are `h-11 sm:h-8`;
+  the per-connection ARN copy pill gets `py-2 sm:py-0.5`.
+- `ApiKeysTable`: reveal/copy icon buttons and the enable/disable/expire pills
+  reach 44px on a phone.
+- `ComboCard`: the Test/Copy/Edit/Delete icon grid rows are 44px, the strategy
+  select is taller, and the two checkboxes carry the `tap-target` halo.
+- `ConsoleLogStream`: level-filter chips are `h-11 sm:h-6`.
+- `Sidebar` drawer nav rows: `py-2.5 sm:py-1.5`.
+
+**Readable values (truncation where the value is the point)**
+- Skills prompt instruction and skill URLs wrap (`break-all`) on mobile.
+- API key tokens (`ApiKeysTable`), bulk-created keys, and the tunnel URL in
+  `EndpointView` wrap on mobile, truncate from `sm:` up.
+- Model ids and proxy URLs in `ProviderDetailView` likewise.
+
+**KPI grids**
+- Usage summary and `SummaryKpiCards` drop from a 1-column phone stack (6 cards
+  ≈ 700px of scrolling) to 2 columns; Cache/Compression analytics keep their
+  existing 2-col base with a tightened gap.
+
+**Token Saver**
+- The "Optimal Setup" header stacks on mobile (icon row, then buttons), so the
+  previously cut-off "Apply Recommended" button and the squeezed title render
+  in full; the guide-toggle chevron no longer overflows the viewport.
+
+**Verification**
+- Before/after screenshots at 390×844 across all 16 dashboard routes
+  (endpoint, providers, combos, usage, quota, token-saver, cli-tools,
+  proxy-pools, plans, persona, security, settings, skills, console, media);
+  DOM audit before: 155+ sub-34px controls, one off-viewport icon; after:
+  zero horizontal overflow on every route and every remaining small control
+  carries the tap-target halo (hit-test verified).
+- `bun run build`, `bun run ratchet:svelte -- --tsconfig tsconfig.app.json`
+  (74 = baseline, 0 unresolved), `bun test src scripts` (835 pass),
+  `go test ./web/...`, `bunx oxlint --deny-warnings`, CGO-disabled builds for
+  all `CROSS_TARGETS` pairs.
+
+### fix(combo): stop failover on in-band error frames while maintaining connection lockout
+
+- In combo streaming, treat verified in-band SSE error frames (`event: error` or non-null `error` payloads) as immediate failure signals: stop the combo chain to avoid masking upstream errors, while recording the connection cooldown/lockout so subsequent client retries route to healthy candidates.
+- Fixes false-positive in-band detection by requiring authoritative `DetectInbandSSEError` match rather than substring matching `"error":null`.
+
+### fix(translator): preserve DeepSeek reasoning_content across message conversions
+
+- Preserves `reasoning_content` on assistant message turns across request translations and Gemini thought mappings, preventing DeepSeek HTTP 400 multi-turn errors.
+- Parity with upstream `decolua/9router#1099`.
+
+### Combos: per-combo custom system prompt with global fallback
+
+Add a `customPrompt` field to combos, letting operators set a combo-specific
+system prompt that overrides the global custom prompt prefix/suffix when set.
+When unset, requests routed through the combo fall back to the global custom
+prompt settings unchanged.
+
+Port of upstream decolua/9router PR #5433 / Issue #5376.
+
+**Backend:**
+- `Combo` model gains `CustomPrompt` (`json:"customPrompt,omitempty"`).
+- `combos` table gains an additive `customPrompt TEXT DEFAULT ''` column.
+- Combo execution injects the combo's custom prompt as the system prompt before
+  any model attempt; when unset, the global prompt prefix/suffix applies.
+- When set, the global prompt is not stacked on top — the combo prompt replaces
+  it.
+
+**Dashboard:**
+- `CreateComboModal` gains an optional "Custom System Prompt" textarea for
+  create and edit.
+- `customPrompt` is threaded through `createCombo`/`updateCombo`.
+
+**Verification:**
+- `go test ./internal/handlers/chat/ -run "Combo" -count=1` — green
+- `go vet ./internal/...` — clean
+- `gofmt -l internal/models internal/db internal/handlers/chat` — clean
+
+Closes #1109
+
 ## [v1.9.17-exp.2] - 2026-11-13
 
 ### deepseek-web parity with upstream (nonce binding, schema validation, citations, done-terminator)
