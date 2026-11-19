@@ -147,7 +147,12 @@ func (h *ChatHandler) forwardGeminiNativeRequest(
 		defer release()
 	}
 
-	resp, err := proxy.ForwardGemini(ctx, httpClient, cfg, apiKey, string(body), isStream, projectID, modelName)
+	resp, err := proxy.ForwardGemini(ctx, httpClient, cfg, apiKey, string(body), isStream, projectID, modelName, func() string {
+		if key := requestKeyFromContext(ctx); key != nil {
+			return key.ID
+		}
+		return ""
+	}())
 	// The one number that separates "the model was thinking" from "the
 	// gateway was slow": everything this handler does before dialing is
 	// milliseconds, so a large value here is the upstream's first-token
@@ -157,6 +162,12 @@ func (h *ChatHandler) forwardGeminiNativeRequest(
 	if err != nil {
 		if uErr, ok := err.(*proxy.UpstreamError); ok {
 			recordAntigravityOutcome(connectionID, uErr.StatusCode, uErr.Body)
+			if uErr.StatusCode == http.StatusNotFound {
+				// The account does not serve this model. Park it: the discovery
+				// roster cannot say so (it also omits models the account does
+				// serve), so a real 404 is the only evidence worth caching.
+				NoteAntigravityModelNotFound(connectionID, modelName)
+			}
 			if uErr.StatusCode == http.StatusConflict || uErr.StatusCode == http.StatusTooManyRequests {
 				if dur, ok := extractResetDuration(uErr.Body); ok {
 					BlockAntigravityModelUntil(connectionID, modelName, time.Now().UTC().Add(dur))
@@ -191,12 +202,7 @@ func (h *ChatHandler) forwardGeminiNativeRequest(
 		}
 		resp = contResp
 	}
-	var bodyCloser io.Closer = resp.Body
-	defer func() {
-		if bodyCloser != nil {
-			bodyCloser.Close()
-		}
-	}()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Handle response — antigravity wraps non-streaming response in {"response": {...}}
 	// For streaming (SSE), the events are NOT wrapped — pipe directly.
@@ -230,7 +236,7 @@ func (h *ChatHandler) forwardGeminiNativeRequest(
 			firstEventTimeout = proxy.FlashFirstEventTimeout
 		}
 		stallReader := proxy.NewStallReaderWithFirstEvent(ctx, resp.Body, cfg.ResolveStallTimeout(proxy.ResolveDefaultStallTimeout()), firstEventTimeout, provider)
-		bodyCloser = stallReader
+		defer func() { _ = stallReader.Close() }()
 		return h.handleGeminiStream(ctx, w, stallReader, translateResponse, metrics)
 	}
 	return h.handleGeminiNonStream(ctx, w, resp.Body, translateResponse, metrics)
@@ -697,7 +703,12 @@ func (h *ChatHandler) followLongDecodeContinuation(
 		}
 
 		// Forward the continuation request.
-		nextResp, fwdErr := proxy.ForwardGemini(ctx, httpClient, cfg, apiKey, contReq, false, projectID, modelName)
+		nextResp, fwdErr := proxy.ForwardGemini(ctx, httpClient, cfg, apiKey, contReq, false, projectID, modelName, func() string {
+			if key := requestKeyFromContext(ctx); key != nil {
+				return key.ID
+			}
+			return ""
+		}())
 		if fwdErr != nil {
 			log.Warn("gemini", "long-decode: forward continuation failed", "hop", hop+1, "error", fwdErr)
 			return &http.Response{
@@ -757,7 +768,12 @@ func (h *ChatHandler) handleGeminiStream(ctx context.Context, w http.ResponseWri
 	hw := proxy.NewHeartbeatWriter(ctx, w, 0)
 	defer hw.Close()
 	flusher := proxy.WriteSSEHeaders(hw)
-	geminiState := &translator.GeminiStreamState{SessionID: handlerutil.GetSessionID(ctx)}
+	geminiState := &translator.GeminiStreamState{SessionID: handlerutil.GetSessionID(ctx), APIKeyId: func() string {
+		if k := requestKeyFromContext(ctx); k != nil {
+			return k.ID
+		}
+		return ""
+	}()}
 	start := time.Now()
 	// A /v1/responses client is one hop further out: Gemini events become
 	// OpenAI chunks here and those chunks become Responses events, so the
