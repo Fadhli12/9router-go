@@ -246,7 +246,11 @@ func (h *ChatHandler) handleAccountFallback(
 			continue
 		}
 		apiKey := extractAPIKey(connData)
-		if apiKey == "" && !customJSONKeyOptional(connData) {
+		// agy-acp is credential-resolved by the executor from either a
+		// referenced antigravity connection or copied tokens, so a blank
+		// apiKey on the connection is valid.
+		acpOptional := provider == "agy-acp" && connData != nil
+		if apiKey == "" && !customJSONKeyOptional(connData) && !acpOptional {
 			providerCfg, pErr := h.getProviderConfig(provider, connData)
 			if pErr == nil && providerCfg.DefaultAPIKey != "" {
 				apiKey = providerCfg.DefaultAPIKey
@@ -518,7 +522,13 @@ func classifyOpencodeFreeTierRefusal(provider string, body []byte) opencodeRefus
 		}
 
 	case strings.Contains(lower, "detect abuse traffic") ||
-		strings.Contains(lower, "abuse"):
+		strings.Contains(lower, "abuse") ||
+		// The gate also words the same verdict without the word "abuse": "free
+		// models aren't available ... from your current network". Both halves
+		// are required — each appears alone in benign prose — so the pair is
+		// matched conjunctively rather than by either phrase.
+		(strings.Contains(lower, "free models aren't available") &&
+			strings.Contains(lower, "from your current network")):
 		return opencodeRefusalDetail{
 			StatusCode: http.StatusServiceUnavailable,
 			ErrorType:  "free_tier_abuse_detected",
@@ -797,7 +807,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	if apiKey == "" {
 		if providerCfg.DefaultAPIKey != "" {
 			apiKey = providerCfg.DefaultAPIKey
-		} else if !customJSONKeyOptional(connData) {
+		} else if !customJSONKeyOptional(connData) && provider != "agy-acp" {
 			return &upstreamError{StatusCode: http.StatusUnauthorized, Body: []byte(`{"error":{"message":"no API key found","type":"auth_error","code":401}}`)}
 		}
 	}
@@ -1058,6 +1068,17 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 				}
 			}
 			pipedBody = filtered
+
+			// Cloudflare's OpenAI-compatible endpoint rejects tool-call rounds for
+			// models it does not declare tool-capable (e.g. llama-3.1-8b-instruct-fp8-fast).
+			// The gateway's default capability is Tools:true for unknown models, so
+			// ask the static registry instead of GetCapabilitiesForModel: only models
+			// explicitly marked Tools:true keep their tool definitions and turns.
+			// Everything else gets the same prose flattening combo fusion already
+			// uses for panel models, preserving context without emitting tool_calls.
+			if provider == "cloudflare-ai" && !providers.ExplicitToolSupport(provider, wireModel) {
+				pipedBody = stripToolsForNonToolModel(pipedBody)
+			}
 		}
 	}
 
@@ -1285,6 +1306,17 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			StartTime:      start,
 			TTFT:           &metrics.TTFT,
 		}
+		if provider == "agy-acp" {
+			acpData := map[string]any{}
+			if connData != nil {
+				if raw, jerr := json.Marshal(connData); jerr == nil {
+					_ = json.Unmarshal(raw, &acpData)
+				}
+			}
+			execReq.ACPCredentials = func(ctx context.Context, _ map[string]any, cid string) (string, string, time.Time, error) {
+				return h.resolveACPCredentials(ctx, acpData, cid)
+			}
+		}
 		// client_id cloaking: hand the connection's providerSpecificData
 		// (fingerprintId) to executors that mimic an official client.
 		if connData != nil && len(connData.ProviderSpecificData) > 0 {
@@ -1349,6 +1381,17 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 					ResponseBuf:    &streamNoteWriter{w: &metrics.ResponseBuf, note: metrics.NoteOutput},
 					StartTime:      start,
 					TTFT:           &metrics.TTFT,
+				}
+				if provider == "agy-acp" {
+					acpData := map[string]any{}
+					if connData != nil {
+						if raw, jerr := json.Marshal(connData); jerr == nil {
+							_ = json.Unmarshal(raw, &acpData)
+						}
+					}
+					retryReq.ACPCredentials = func(ctx context.Context, _ map[string]any, cid string) (string, string, time.Time, error) {
+						return h.resolveACPCredentials(ctx, acpData, cid)
+					}
 				}
 				// Same client_id cloaking as the first attempt: a refreshed
 				// retry without ConnData would fall back to a random id and

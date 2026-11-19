@@ -582,6 +582,52 @@ var providerCapabilities = map[string]map[string]Capabilities{
 		"gpt-5.5-medium": devinCLIGPTCaps,
 		"gpt-5.5-low":    devinCLIGPTCaps,
 	},
+	// agy-acp: models served by the local agy 1.5.9 CLI over ACP. The roster
+	// is explicit (no cross-provider aliasing); context window is agy's own
+	// 1M-token session window reported by session/new usage_update.
+	// agy-acp: full Antigravity roster served by the local agy CLI over ACP.
+	// Synced with internal/providers/registry_models.go. Context window is agy's
+	// own 1M-token session window; models an account cannot select still list
+	// here and fail with a clear error at session/new, not silently.
+	"agy-acp": {
+		"gemini-4-carbon-high":     {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-carbon-medium":   {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-carbon-low":      {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-carbon":          {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-argon-high":      {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-argon-medium":    {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-argon-low":       {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-argon":           {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-hydrogen-xhigh":  {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-hydrogen-high":   {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-hydrogen-medium": {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-hydrogen-low":    {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-hydrogen":        {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-3.8-flash-high":    {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-3.8-flash-medium":  {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-3.8-flash-low":     {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-3.8-flash":         {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-3.7-flash-high":    {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-3.7-flash-medium":  {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-3.7-flash-low":     {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-3.1-pro-high":      {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-pro-agent":         {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-3.1-pro-low":       {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"claude-sonnet-5-5-high":   {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"claude-sonnet-5-5-medium": {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"claude-sonnet-5-5-low":    {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"claude-sonnet-5-5":        {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"claude-opus-5-5-high":     {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"claude-opus-5-5-medium":   {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"claude-opus-5-5-low":      {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"claude-opus-5-5":          {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"claude-sonnet-4-6":        {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"claude-opus-4-6-thinking": {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gpt-oss-120b-medium":      {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gpt-oss-120b":             {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"claude-sonnet":            {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"claude-opus":              {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+	},
 	// MiniMax Code (mcode) credits lane — Anthropic messages on the mavis
 	// gateway, thinking as adaptive effort via output_config.effort
 	// (claude-adaptive). Limits are the static catalog magpie's minimax plugin
@@ -1101,22 +1147,63 @@ var providerTokenLimits = map[string]map[string][2]int{
 	},
 }
 
-// lookupProviderTokenLimits returns the limits a provider declares for a model,
-// or (0, 0) when it declares none.
-func lookupProviderTokenLimits(provider, model string) (contextWindow, maxOutput int) {
-	byModel, ok := providerTokenLimits[strings.ToLower(provider)]
-	if !ok {
-		return 0, 0
+// providerCapabilityKeys returns the published provider id first, then its
+// canonical id. The static capability tables are keyed by canonical ids, but
+// /v1/models publishes short aliases (`oc`, `cf`, ...), so an alias-only lookup
+// silently skipped the provider's own limits and inherited a generic guess.
+func providerCapabilityKeys(provider string) []string {
+	keys := []string{provider}
+	if canonical := ResolveAlias(provider); canonical != "" && canonical != provider {
+		keys = append(keys, canonical)
 	}
+	return keys
+}
+
+// lookupProviderTokenLimits returns the limits a provider declares for a model,
+// or (0, 0) when it declares none. It tries the published id and its canonical
+// id so an alias sees the same provider-qualified declaration.
+func lookupProviderTokenLimits(provider, model string) (contextWindow, maxOutput int) {
 	base := model
 	if _, after, found := strings.CutLast(model, "/"); found {
 		base = after
 	}
-	if limits, found := byModel[base]; found {
-		return limits[0], limits[1]
+	for _, key := range providerCapabilityKeys(provider) {
+		byModel, ok := providerTokenLimits[strings.ToLower(key)]
+		if !ok {
+			continue
+		}
+		if limits, found := byModel[base]; found {
+			return limits[0], limits[1]
+		}
+		if limits, found := byModel[model]; found {
+			return limits[0], limits[1]
+		}
 	}
-	if limits, found := byModel[model]; found {
-		return limits[0], limits[1]
+	return 0, 0
+}
+
+// lookupCanonicalStaticLimits copies only the token limits from the canonical
+// provider's static capability entry when the published alias has none. It must
+// not copy thinking shape or modalities: those stay keyed by the published id,
+// which is what the thinking-level fixtures assert.
+func lookupCanonicalStaticLimits(provider, model string) (contextWindow, maxOutput int) {
+	canonical := ResolveAlias(provider)
+	if canonical == "" || canonical == provider {
+		return 0, 0
+	}
+	pCaps, ok := providerCapabilities[canonical]
+	if !ok {
+		return 0, 0
+	}
+	baseModel := model
+	if _, after, found := strings.CutLast(model, "/"); found {
+		baseModel = after
+	}
+	if c, found := pCaps[model]; found {
+		return c.ContextWindow, c.MaxOutput
+	}
+	if c, found := pCaps[baseModel]; found {
+		return c.ContextWindow, c.MaxOutput
 	}
 	return 0, 0
 }
@@ -1309,6 +1396,32 @@ func GetCapabilitiesForModel(provider, model string) Capabilities {
 	capsCacheMu.Unlock()
 
 	return res
+}
+
+// ExplicitToolSupport reports whether the static registry explicitly declares
+// Tools:true for provider/model. Unlike GetCapabilitiesForModel it does not
+// inherit DefaultCapabilities.Tools — which is true for every unknown model —
+// so callers can distinguish "declared tool-capable" from "not declared".
+// Custom overrides and dynamic catalog modalities are intentionally ignored:
+// neither can turn tool support on, and a provider-specific request filter
+// must not be widened by an unrelated modalities refresh.
+func ExplicitToolSupport(provider, model string) bool {
+	if provider == "" || model == "" {
+		return false
+	}
+	caps, ok := providerCapabilities[provider]
+	if !ok {
+		return false
+	}
+	if c, ok := caps[model]; ok {
+		return c.Tools
+	}
+	if _, after, ok := strings.CutLast(model, "/"); ok {
+		if c, ok := caps[after]; ok {
+			return c.Tools
+		}
+	}
+	return false
 }
 
 func mergeCapabilities(base, overlay Capabilities) Capabilities {
@@ -1516,6 +1629,9 @@ func GetCapabilitiesDetailForModel(provider, model string) CapabilitiesDetail {
 		} else if c, found := pCaps[baseModel]; found {
 			fill(c.ContextWindow, c.MaxOutput)
 		}
+	}
+	if c, m := lookupCanonicalStaticLimits(provider, model); c > 0 || m > 0 {
+		fill(c, m)
 	}
 	if c, m := GetCatalogLimits(provider, model); c > 0 || m > 0 {
 		fill(c, m)
