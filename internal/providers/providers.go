@@ -959,7 +959,11 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader:    "Authorization",
 		AuthScheme:    "bearer",
 		LocalByDesign: true,
-		SystemoneURL:  "http://localhost:11434/v1/systemone",
+		// Phonon speech synthesis: the OpenAI-compatible /v1/audio/speech
+		// endpoint on the local daemon (upstream ollama-local.js ttsConfig,
+		// commit 31a9d262). Used when the connection has no custom base URL.
+		TTSURL:       "http://localhost:11434/v1/audio/speech",
+		SystemoneURL: "http://localhost:11434/v1/systemone",
 		// Saved host (providerSpecificData.baseUrl) is joined with this path.
 		SystemonePath: "/v1/systemone",
 	},
@@ -1565,6 +1569,15 @@ var KnownProviders = map[string]ProviderConfig{
 	},
 	"runcrate": {
 		BaseURL:    "https://api.runcrate.ai/v1/chat/completions",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+	},
+	// DeepRelay — pay-per-token serverless inference (api.deeprelay.ai/v1).
+	// Chat completions, embeddings, image and video are all OpenAI-shaped on
+	// /v1, so ForwardOpenAI serves them. The wallet sits on
+	// GET /v1/billing/balance (used by the usage fetcher and the key probe).
+	"deeprelay": {
+		BaseURL:    "https://api.deeprelay.ai/v1/chat/completions",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
