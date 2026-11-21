@@ -236,6 +236,18 @@ type SettingsData struct {
 	// a single suspension no longer halts a healthy pool, but two accounts are
 	// spent before the halt engages.
 	SuspensionThreshold int `json:"suspensionThreshold,omitempty"`
+	// White-label branding (Settings > White-label branding card). Empty means
+	// the project default: the sidebar and login screen fall back to the
+	// built-in name and favicon. LoginLogo and TrayIcon stay separate from
+	// AppLogoUrl because the login tile and the tray render at different sizes
+	// and may be a different mark entirely.
+	AppName        string `json:"appName,omitempty"`
+	AppLogoURL     string `json:"appLogoUrl,omitempty"`
+	AppDescription string `json:"appDescription,omitempty"`
+	AppTagline     string `json:"appTagline,omitempty"`
+	LoginLogoURL   string `json:"loginLogo,omitempty"`
+	TrayAppName    string `json:"trayAppName,omitempty"`
+	TrayIconURL    string `json:"trayIcon,omitempty"`
 }
 
 // ProviderThinking is one provider's operator reasoning override, mirroring

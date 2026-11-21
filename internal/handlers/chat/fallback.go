@@ -357,7 +357,8 @@ func (h *ChatHandler) handleAccountFallback(
 		if errors.As(lastErr, &ue) {
 			h.recordModelCooldown(ctx, provider, model, connObj.ID, ue)
 		}
-		if errors.As(lastErr, &ue) && providers.RetryableStatusCodes[ue.StatusCode] {
+		modelScoped := errors.As(lastErr, &ue) && providers.RetryModelScopedError(ue.StatusCode, extractErrorText(ue.Body), provider)
+		if modelScoped || (errors.As(lastErr, &ue) && providers.RetryableStatusCodes[ue.StatusCode]) {
 			if handlerutil.IsProbeContext(ctx) {
 				excludeIDs = append(excludeIDs, connObj.ID)
 				continue
@@ -421,9 +422,11 @@ func (h *ChatHandler) handleAccountFallback(
 			// Account-scoped cooldown alongside the per-model locks, so the
 			// selector can skip this account before spending a request
 			// (upstream applyErrorState). Only lock if error is account-scoped,
-			// not model-scoped (e.g. 401 auth issues), so unrelated models stay available.
-			if isModelScopedError(ue.StatusCode, errorText, model, ue.Body) {
-				if recErr := h.Repo.RecordConnectionScopedError(connObj.ID, model, "chat", ue.StatusCode, errMsg, classification.NewBackoffLevel); recErr != nil {
+			// not model-scoped (e.g. 401 auth issues, or a rule that said so
+			// itself such as an NVIDIA NIM degraded cluster), so unrelated
+			// models stay available.
+			if classification.ModelScoped || isModelScopedError(ue.StatusCode, errorText, model, ue.Body) {
+				if recErr := h.Repo.RecordConnectionScopedError(connObj.ID, model, "chat", ue.StatusCode, errorText, classification.NewBackoffLevel); recErr != nil {
 					log.Warn("fallback", "record connection error failed", "conn", connObj.ID, "error", recErr)
 				}
 			} else {
@@ -872,6 +875,14 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	if compressDurMs <= 0 {
 		compressDurMs = 1
 	}
+	// The mirror of the conversion below. A /v1/messages combo converts the
+	// client's body once, for its FIRST member: when that member speaks Claude
+	// the body is still Messages-shaped by the time a later member that does not
+	// (cx/gpt-6.x, deepseek, …) is tried. Handing tool_use/tool_result blocks to
+	// such an upstream loses them — buildResponsesBody keeps only blocks carrying
+	// a "text" key — so the model never saw the output of its own tool call and
+	// re-issued the same command forever.
+	pipedBody = claudeBodyForNonClaudeUpstream(pipedBody, claudeNative)
 	var claudeToolMap map[string]string
 	if upstreamClaude {
 		if !claudeNative || bodySpeaksOpenAIChat(pipedBody) {
@@ -1359,8 +1370,10 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	// single-use token on the same request would only log the rejection again
 	// and re-park. The 401 stands and the account loop below moves on.
 	// A custom JSON business endpoint has no OAuth token to refresh, so it is
-	// excluded from the reactive 401 refresh as well.
-	if errors.As(fwdErr, &ue) && ue.StatusCode == http.StatusUnauthorized && connectionID != "" && !customJSON && !connectionParkedForReauth(h, connectionID) {
+	// excluded from the reactive refresh as well. credentialRejected widens the
+	// trigger from a bare 401 to a 403 whose body names the token, which is how
+	// Kiro reports an expired access token.
+	if errors.As(fwdErr, &ue) && credentialRejected(ue) && connectionID != "" && !customJSON && !connectionParkedForReauth(h, connectionID) {
 		refreshedKey, _, rErr := h.forceRefreshOAuthToken(connectionID)
 		if rErr == nil && refreshedKey != "" && refreshedKey != apiKey {
 			log.Info("fallback", "reactive 401 token refresh success, retrying request", "conn", connectionID)
@@ -2337,6 +2350,40 @@ func sanitizeOutboundToolSchemas(body []byte, provider string) []byte {
 	return body
 }
 
+// credentialRejected reports a refusal of the credential itself — the only
+// class a forced OAuth refresh can answer.
+//
+// A 401 always is one. A 403 is not: an unentitled, geo-blocked or quota-refused
+// account is refused the same way, and spending the single-use refresh token on
+// that would park an otherwise healthy account. So a 403 counts only when its
+// body names the token. Kiro answers a dead OAuth access token with
+//
+//	403 {"message":"The bearer token included in the request is invalid."}
+//
+// instead of 401, which is why the reactive refresh never fired for it and the
+// account stayed unusable — 403 on every turn — until someone logged in again
+// by hand.
+func credentialRejected(ue *upstreamError) bool {
+	if ue == nil {
+		return false
+	}
+	switch ue.StatusCode {
+	case http.StatusUnauthorized:
+		return true
+	case http.StatusForbidden:
+		body := strings.ToLower(string(ue.Body))
+		for _, marker := range []string{
+			"bearer token", "access token", "token is invalid", "invalid token",
+			"token has expired", "token expired", "expired token",
+		} {
+			if strings.Contains(body, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // bodySpeaksOpenAIChat reports whether this request body is in Chat
 // Completions shape rather than the Claude Messages shape a /v1/messages
 // client sends. A combo converts a client's body once, for its first member,
@@ -2373,6 +2420,122 @@ func bodySpeaksOpenAIChat(body []byte) bool {
 			}
 			if role, _ := msg["role"].(string); role == "tool" {
 				return true
+			}
+		}
+	}
+	return false
+}
+
+// claudeBodyForNonClaudeUpstream converts a Messages-shaped body to Chat
+// Completions for an upstream that does not answer Messages itself.
+//
+// It exists because a combo fixes the body's wire format at its FIRST member:
+// a combo whose first seat is Anthropic leaves a /v1/messages client's body in
+// Messages shape for every seat behind it. The conversions at the upstreamClaude
+// branch below only repair the other direction (OpenAI body → Claude upstream),
+// so a Claude body used to reach a Responses upstream — the call sites in
+// buildResponsesBody keep only content blocks carrying a "text" key, which drops
+// every tool_use and tool_result. The model then never saw its tool output and
+// re-issued the same command indefinitely. Reported against combos whose
+// Anthropic seat is rate-limited, so the turn lands on cx/gpt-6.x every time.
+//
+// upstreamSpeaksClaude is the candidate's own lane decision (claudeNative in
+// tryForwardWithConnection): a provider that serves the Messages endpoint —
+// minimax-code, opencode-zen's Claude lane — must keep receiving Messages, so
+// only the providers that do not are converted here.
+func claudeBodyForNonClaudeUpstream(body []byte, upstreamSpeaksClaude bool) []byte {
+	// A body that already speaks Chat is never converted, whatever blocks its
+	// user content happens to carry: converting it again would rebuild the
+	// conversation from fields Chat does not use and drop the system turn it
+	// keeps inside messages. The two probes are exclusive by construction.
+	if upstreamSpeaksClaude || bodySpeaksOpenAIChat(body) || !bodySpeaksClaudeMessages(body) {
+		return body
+	}
+	var src map[string]any
+	if err := json.Unmarshal(body, &src); err != nil {
+		return body
+	}
+	converted, err := translator.TranslateClaudeToOpenAI(body)
+	if err != nil || len(converted) == 0 {
+		return body
+	}
+	// The converter writes its own "stream": false. Carrying the client's flag
+	// over keeps a streamed combo turn streamed instead of handing the client a
+	// buffered answer it reads as a dead connection.
+	stream, hadStream := src["stream"]
+	if !hadStream {
+		return converted
+	}
+	var dst map[string]any
+	if err := json.Unmarshal(converted, &dst); err != nil {
+		return converted
+	}
+	dst["stream"] = stream
+	out, err := json.Marshal(dst)
+	if err != nil {
+		return converted
+	}
+	return out
+}
+
+// bodySpeaksClaudeMessages reports whether body is an Anthropic Messages
+// request rather than Chat Completions.
+//
+// It keys on what only Messages carries: a top-level `system` (Chat puts the
+// system turn inside messages), tools declared with `input_schema` (Chat uses
+// `function.parameters`), and the block types Chat has no spelling for. A plain
+// text-only Messages body with neither system nor tools is left alone on
+// purpose — it is wire-compatible either way, and guessing wrong would hand
+// TranslateClaudeToOpenAI a body it must not touch.
+func bodySpeaksClaudeMessages(body []byte) bool {
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		return false
+	}
+	if _, ok := req["system"]; ok {
+		return true
+	}
+	if tools, ok := req["tools"].([]any); ok {
+		for _, tRaw := range tools {
+			tool, ok := tRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, has := tool["input_schema"]; has {
+				return true
+			}
+		}
+	}
+	if msgs, ok := req["messages"].([]any); ok {
+		for _, mRaw := range msgs {
+			msg, ok := mRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			role, _ := msg["role"].(string)
+			blocks, ok := msg["content"].([]any)
+			if !ok {
+				continue
+			}
+			for _, bRaw := range blocks {
+				block, ok := bRaw.(map[string]any)
+				if !ok {
+					continue
+				}
+				// Paired with the role the Messages API requires, so content a
+				// Chat request happens to shape this way cannot steer the
+				// conversion: a tool_use belongs to an assistant turn and a
+				// tool_result to a user turn.
+				switch block["type"] {
+				case "tool_use", "thinking", "redacted_thinking", "server_tool_use":
+					if role == "assistant" {
+						return true
+					}
+				case "tool_result", "web_search_tool_result", "document":
+					if role == "user" {
+						return true
+					}
+				}
 			}
 		}
 	}
