@@ -95,6 +95,8 @@ var postgresTables = []pgTableDef{
 			{"machineId", "TEXT"},
 			{"isActive", "BOOLEAN DEFAULT TRUE"},
 			{"createdAt", "TEXT NOT NULL"},
+			{"maxConcurrent", "INTEGER DEFAULT 0"},
+			{"allowedProviders", "TEXT DEFAULT ''"},
 		},
 		indexes: []string{
 			"CREATE INDEX IF NOT EXISTS idx_ak_key ON apiKeys(key)",

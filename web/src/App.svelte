@@ -387,7 +387,6 @@
     keys: { title: 'Endpoint & Key', description: 'API endpoint and key configuration' },
     plans: { title: 'Plans', description: 'Per-key quota plans and policy resolution' },
     jailbreak: { title: 'Persona', description: 'Per-model system-prompt injection and Gemini safety bypass' },
-    keys: { title: 'Endpoint & Key', description: 'API endpoint and key configuration' },
   }
 
   let isUpdateModalOpen = $state(false)
