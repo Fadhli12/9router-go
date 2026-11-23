@@ -122,10 +122,32 @@ func langName(code string) string {
 	return code
 }
 
+// providerFromVoicesPath resolves the provider from a provider-specific voices
+// route (/api/media-providers/tts/{provider}/voices). Those routes carry the
+// provider in the path, not the query, so without this the handler's edge-tts
+// fallback answered them with Microsoft voices (af-ZA-AdriNeural…) for every
+// provider, including elevenlabs (upstream serves each path from its own route).
+func providerFromVoicesPath(path string) string {
+	switch {
+	case strings.Contains(path, "/elevenlabs/voices"):
+		return "elevenlabs"
+	case strings.Contains(path, "/deepgram/voices"):
+		return "deepgram"
+	case strings.Contains(path, "/inworld/voices"):
+		return "inworld"
+	case strings.Contains(path, "/minimax/voices"):
+		return "minimax"
+	}
+	return ""
+}
+
 // HandleAudioVoices lists available audio voices per provider.
 func (h *MediaHandler) HandleAudioVoices(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	provider := q.Get("provider")
+	if provider == "" {
+		provider = providerFromVoicesPath(r.URL.Path)
+	}
 	if provider == "" {
 		provider = "edge-tts"
 	}

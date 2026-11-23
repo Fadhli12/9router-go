@@ -106,7 +106,15 @@ func (h *MediaHandler) forwardTTSRequest(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	// 5. Default OpenAI-compatible TTS
+	// 5. ElevenLabs — dedicated adapter (upstream ttsProviders/elevenlabs.js):
+	// the voice id rides the URL path and the body speaks the vendor's own
+	// shape, so the OpenAI-compatible funnel below cannot serve it.
+	if modelInfo.Provider == "elevenlabs" || modelInfo.Provider == "el" {
+		h.forwardElevenLabsTTS(w, r, body, modelInfo, req.Input, req.Voice, req.ResponseFormat)
+		return
+	}
+
+	// 6. Default OpenAI-compatible TTS
 	h.forwardMediaRequest(w, r, body, "tts-1", "/v1/audio/speech")
 }
 
