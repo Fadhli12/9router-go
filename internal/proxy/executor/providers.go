@@ -105,6 +105,13 @@ func ForwardCodex(w http.ResponseWriter, req *Request) error {
 
 	// The ChatGPT Codex backend rejects unsupported parameters and requires the allowlist
 	transformedBody = stripCodexUnsupportedTokenParams(transformedBody, responsesLite)
+	// json_object text.format requires "json" in the input messages; a client
+	// whose only JSON mention lived in system text (hoisted into instructions)
+	// would otherwise 502. Codex-only: perplexity-agent shares this executor
+	// but is a different provider (root §3 isolation).
+	if req.Provider == "codex" {
+		transformedBody = injectCodexJSONObjectHint(transformedBody)
+	}
 	// Only now that the "(level)" suffix is gone can the catalog id be mapped
 	// to its wire id, so this has to follow the transform rather than precede it.
 	transformedBody = rewriteCodexUpstreamModel(transformedBody)
