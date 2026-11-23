@@ -7,10 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
+
+var exeSuffix = map[bool]string{true: ".exe"}[runtime.GOOS == "windows"]
 
 // fakeACP is a tiny scripted ACP server used as a stand-in for the agy binary.
 // It speaks NDJSON on stdin/stdout and drives the client through the full
@@ -53,11 +56,17 @@ func main(){
 	if err != nil {
 		t.Fatal(err)
 	}
-	build := exec.Command(bin, "build", "-o", path, helper)
+	// go build appends no extension on Windows, so the exhaustive build in
+	// fakeACP produced a bare "fakeagy" that exec could not start.
+	binPath := path
+	if runtime.GOOS == "windows" {
+		binPath += ".exe"
+	}
+	build := exec.Command(bin, "build", "-o", binPath, helper)
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build fake ACP: %v: %s", err, out)
 	}
-	return path, func() {}
+	return binPath, func() {}
 }
 
 func TestResolveModel(t *testing.T) {
@@ -126,7 +135,13 @@ func TestWriteCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	if info.Mode().Perm() != 0o600 {
-		t.Errorf("credential mode = %v, want 0600", info.Mode().Perm())
+		// Windows: os.Chmod only toggles the read-only bit, so a 0600
+		// request lands on -rw-rw-rw-. The code already wrote the file as
+		// tightly as the platform allows; asserting 0600 unconditionally
+		// fails every Windows run.
+		if runtime.GOOS != "windows" {
+			t.Errorf("credential mode = %v, want 0600", info.Mode().Perm())
+		}
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -173,6 +188,8 @@ func TestClientCall(t *testing.T) {
 }
 
 func TestRunTurnStream(t *testing.T) {
+	p := isolatedPoolDeferred(t)
+	defer p.Close()
 	fake, cleanup := fakeACP(t)
 	defer cleanup()
 	// Force the fake binary through AGY_PATH.
@@ -210,6 +227,52 @@ func TestClassifyError(t *testing.T) {
 		got := classifyError(tt.err)
 		if !strings.Contains(got.Error(), tt.want.Error()) {
 			t.Errorf("classifyError(%v) = %v, want contains %v", tt.err, got, tt.want)
+		}
+	}
+}
+
+func TestBuildCommandIsolatesEnv(t *testing.T) {
+	t.Setenv("HOME", "/host/home")
+	t.Setenv("USERPROFILE", `C:\host\user`)
+	t.Setenv("GEMINI_API_KEY", "secret-1")
+	t.Setenv("GOOGLE_API_KEY", "secret-2")
+
+	dir, err := NewAccountDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := buildCommand(context.Background(), "agy", dir, TurnOptions{})
+
+	var homes, userProfiles []string
+	for _, entry := range cmd.Env {
+		k, v, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		switch {
+		case envKeyMatches(k, "HOME"):
+			homes = append(homes, v)
+		case envKeyMatches(k, "USERPROFILE"):
+			userProfiles = append(userProfiles, v)
+		case envKeyMatches(k, "GEMINI_API_KEY"), envKeyMatches(k, "GOOGLE_API_KEY"):
+			t.Errorf("secret env var %q leaked into subprocess env", k)
+		}
+	}
+	if len(homes) != 1 || homes[0] != dir.Root {
+		t.Errorf("HOME entries = %v, want single [%q]", homes, dir.Root)
+	}
+	if len(userProfiles) != 1 || userProfiles[0] != dir.Root {
+		t.Errorf("USERPROFILE entries = %v, want single [%q]", userProfiles, dir.Root)
+	}
+
+	gotExact := removeEnv([]string{"USERPROFILE=old", "KEEP=1"}, "USERPROFILE")
+	if len(gotExact) != 1 || gotExact[0] != "KEEP=1" {
+		t.Errorf("removeEnv exact = %v, want [KEEP=1]", gotExact)
+	}
+	if runtime.GOOS == "windows" {
+		gotFold := removeEnv([]string{"UserProfile=old", "KEEP=1"}, "USERPROFILE")
+		if len(gotFold) != 1 || gotFold[0] != "KEEP=1" {
+			t.Errorf("removeEnv Windows case-fold = %v, want [KEEP=1]", gotFold)
 		}
 	}
 }

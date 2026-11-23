@@ -354,6 +354,11 @@ func kiroUpstreamBody(req *Request) ([]byte, error) {
 
 // ForwardAzure forwards to Azure OpenAI with dynamic URL from env vars.
 func ForwardAzure(w http.ResponseWriter, req *Request) error {
+	fittedBody, toolNameMap := applyToolNameAlias(req)
+	if len(toolNameMap) > 0 {
+		req.Body = fittedBody
+		req.ToolNameMap = mergeToolNameMaps(req.ToolNameMap, toolNameMap)
+	}
 	var oreq struct {
 		Model string `json:"model"`
 	}
@@ -771,7 +776,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 			return forwardOpencodeRequestDirect(ctx, &cfg, apiKey, transformedBody, req.IsStream)
 		}, opencodeSessionRotation(req, true, hint, func(session string) {
 			cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(baseHeaders, session, req.IsStream)
-		}))
+		}), forgetOpencodeStableSession(req, true, hint))
 		if err != nil {
 			return fmt.Errorf("ForwardOpencode (muse-spark responses): %w", err)
 		}
@@ -862,7 +867,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		return forwardOpencodeRequestDirect(ctx, &cfg, apiKey, body, true)
 	}, opencodeSessionRotation(req, true, hint, func(session string) {
 		cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(baseHeaders, session, true)
-	}))
+	}), forgetOpencodeStableSession(req, true, hint))
 	if err != nil {
 		return fmt.Errorf("ForwardOpencode: %w", err)
 	}
@@ -1107,6 +1112,7 @@ func ensureMessagesFor(body []byte, provider, model string) []byte {
 	applyClaudeThinkingDisplay(reqMap)
 	applyClaudeThinkingType(reqMap, provider, model)
 	SanitizeClaudeThinking(reqMap)
+	applyClaudeThinkingOffAndToolChoice(reqMap, provider, model)
 	enforceClaudeThinkingSampling(reqMap)
 	delete(reqMap, "stream_options")
 	delete(reqMap, "store")
@@ -1146,6 +1152,65 @@ func enforceClaudeThinkingSampling(reqMap map[string]any) {
 	if hasTemp || hasTopP {
 		reqMap["temperature"] = 1.0
 		delete(reqMap, "top_p")
+	}
+}
+
+// applyClaudeThinkingOffAndToolChoice ports the Anthropic per-model rules that
+// upstream applies in formats/claude.js prepareClaudeRequest (decolua/9router
+// f3e1f716). Runs on every Claude-bound body so an OpenAI client, a native
+// passthrough and the provider-level "off" override are all covered.
+//
+//   - thinkingCanDisable:false: a model that cannot switch thinking off
+//     (Opus 5.5) must never see thinking.type "disabled" — upstream clamps the
+//     request to minimal effort, drops the thinking block and sets
+//     output_config.effort "low" (thinkingUnified.js applyFormat claude-adaptive).
+//   - thinkingOffType: a model that rejects thinking "disabled" (Sonnet 5.5) takes
+//     thinkingOffType ("between_tools") in its place, and between_tools only
+//     accepts effort up to high.
+//   - forcedToolChoice: a model that rejects forced tool_choice pinning
+//     ("any" or a named tool) gets tool_choice downgraded to "auto". "required"
+//     is left untouched, matching upstream, which only downgrades "any"/"tool".
+func applyClaudeThinkingOffAndToolChoice(reqMap map[string]any, provider, model string) {
+	caps := providers.GetCapabilitiesForModel(provider, model)
+	thinking, _ := reqMap["thinking"].(map[string]any)
+	disabled := thinking != nil && thinking["type"] == "disabled"
+
+	if disabled && !caps.CanDisableThinking() {
+		// thinking can't be switched off: clamp to minimal, drop the block,
+		// and carry the effort on output_config (upstream claude-adaptive).
+		delete(reqMap, "thinking")
+		outCfg, _ := reqMap["output_config"].(map[string]any)
+		if outCfg == nil {
+			outCfg = map[string]any{}
+			reqMap["output_config"] = outCfg
+		}
+		if _, set := outCfg["effort"]; !set {
+			outCfg["effort"] = "low"
+		}
+		disabled = false
+	}
+
+	if disabled && caps.ThinkingOffType != "" {
+		reqMap["thinking"] = map[string]any{"type": caps.ThinkingOffType}
+		if oc, _ := reqMap["output_config"].(map[string]any); oc != nil {
+			switch oc["effort"] {
+			case "xhigh", "max":
+				oc["effort"] = "high"
+			}
+		}
+	}
+
+	if !caps.CanForceToolChoice() {
+		if tc, _ := reqMap["tool_choice"].(map[string]any); tc != nil {
+			switch tc["type"] {
+			case "any", "tool":
+				graded := map[string]any{"type": "auto"}
+				if v, ok := tc["disable_parallel_tool_use"]; ok {
+					graded["disable_parallel_tool_use"] = v
+				}
+				reqMap["tool_choice"] = graded
+			}
+		}
 	}
 }
 
@@ -1798,7 +1863,7 @@ func forwardOpencodeGoFree(w http.ResponseWriter, req *Request, cleanModel strin
 		return forwardOpencodeRequestDirect(ctx, &cfg, "public", body, true)
 	}, opencodeSessionRotation(req, true, hint, func(session string) {
 		cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(baseHeaders, session, true)
-	}))
+	}), forgetOpencodeStableSession(req, true, hint))
 	if err != nil {
 		return fmt.Errorf("ForwardOpencodeGo (free lane): %w", err)
 	}

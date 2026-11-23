@@ -590,6 +590,7 @@ func (r *Repo) SetKV(scope, key, value string) error {
 	if err != nil {
 		return fmt.Errorf("set kv [%s] %s: %w", scope, key, err)
 	}
+	r.invalidateKVScope(scope)
 	return nil
 }
 
@@ -628,6 +629,7 @@ func (r *Repo) SetKVMany(ctx context.Context, scope string, entries []KVEntry) e
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("set kv batch [%s]: %w", scope, err)
 	}
+	r.invalidateKVScope(scope)
 	return nil
 }
 
@@ -637,7 +639,15 @@ func (r *Repo) DeleteKV(scope, key string) error {
 	if err != nil {
 		return fmt.Errorf("delete kv [%s] %s: %w", scope, key, err)
 	}
+	r.invalidateKVScope(scope)
 	return nil
+}
+
+// invalidateKVScope drops any snapshot built from scope.
+func (r *Repo) invalidateKVScope(scope string) {
+	if scope == customModelsScope {
+		r.InvalidateCustomModelExtraBody()
+	}
 }
 
 // GetSettingsRaw reads settings row id=1 data JSON into map[string]any.

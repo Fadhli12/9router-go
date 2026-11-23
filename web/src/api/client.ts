@@ -699,6 +699,19 @@ export interface ProviderNode {
   limits?: ProviderNodeLimits
 }
 
+/** Availability of a live candidate provider namespace or composed id. */
+export interface ProviderNodeFieldAvailability {
+  value: string
+  status: 'available' | 'taken' | 'invalid' | 'automatic' | 'random'
+  reason?: string
+  providerId?: string
+}
+
+export interface ProviderNodeAvailability {
+  prefix: ProviderNodeFieldAvailability
+  urlSuffix: ProviderNodeFieldAvailability
+}
+
 /**
  * ProviderNodeLimits mirrors the Go side (ProviderNodeLimitsResponse). Live
  * figures (`rpmUsedWindow`, `activeConcurrency`) come from the gateway's own
@@ -792,6 +805,7 @@ export interface ConnectionQuotaInfo {
 
 export interface ConnectionUsageResponse {
   plan?: string
+  message?: string
   quotas?: Record<string, ConnectionQuotaInfo> | ConnectionQuotaInfo[]
   error?: string
 }
@@ -945,7 +959,7 @@ export interface FreebuffSessionSwitchResponse {
 }
 
 export interface FreebuffSessionStatusResponse {
-  status: 'active' | 'none' | 'unauthorized' | 'banned' | 'country_blocked'
+  status: 'active' | 'queued' | 'ended' | 'none' | 'unauthorized' | 'banned' | 'country_blocked'
   /** Account this report describes — set so the UI can name it. */
   connectionId?: string
   connectionName?: string
@@ -1166,6 +1180,24 @@ export interface JailbreakDoc {
   excludes?: JailbreakKeyword[]
   /** Operator arrangement position in the preset list. */
   order?: number
+  /**
+   * Where the prompt lands in the outbound body. "" and "system" prepend it as
+   * the system prompt (the default a legacy or imported preset keeps);
+   * "append" places it after the original content.
+   */
+  position?: string
+  /**
+   * What kind of turn the prompt travels as. "" sends it as a system prompt;
+   * "chat" sends it as a scripted trailing user turn for endpoints with no
+   * system prompt slot.
+   */
+  mode?: string
+  /**
+   * Scope of one client API key: empty is every key, a non-empty id makes this
+   * preset visible only to requests that present that key. The resolver
+   * prefers a key-scoped match over the global one.
+   */
+  apiKeyId?: string
   /** RFC3339 UTC stamp the store filled on first write. */
   createdAt?: string
   /** RFC3339 UTC stamp of the last write. */
@@ -1185,6 +1217,8 @@ export interface JailbreakKeyword {
 export interface JailbreakModelConfig {
   enabled: boolean
   presetId: string
+  /** Empty is every key; a key-scoped binding outranks the same model's global one. */
+  apiKeyId?: string
 }
 
 /** The global exclude list: models matching these rules are never injected. */
@@ -1219,7 +1253,7 @@ export interface JailbreakImportResult {
 /** Why one model id resolved (or did not resolve) to a preset. */
 export interface JailbreakMatch {
   injected: boolean
-  /** global-exclude | exact-binding | keyword | preset-exclude | no-match */
+  /** global-exclude | exact-binding | key-binding | keyword | preset-exclude | no-match */
   reason: string
   presetId?: string
   presetName?: string
@@ -1684,6 +1718,12 @@ return conns.map(normalizeConnection)
   ) =>
     request<{ node: ProviderNode }>(`/api/provider-nodes/${encodeURIComponent(id)}`, {
       method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  /** Checks a candidate prefix and URL suffix for immediate availability. */
+  checkProviderNodeAvailability: (payload: { prefix?: string; urlSuffix?: string; type?: string; apiType?: string }) =>
+    request<ProviderNodeAvailability>('/api/provider-nodes/availability', {
+      method: 'POST',
       body: JSON.stringify(payload),
     }),
   deleteProviderNode: (id: string) =>
@@ -2338,6 +2378,10 @@ return conns.map(normalizeConnection)
   codexPollStatus: (state: string) =>
     request<{ status: string; connectionId?: string; email?: string; error?: string }>(
       `/api/oauth/codex/poll-status?state=${encodeURIComponent(state)}`
+    ),
+  getOAuthCallbackResult: (state: string) =>
+    request<{ found: boolean; state?: string; raw?: string; error?: string; errorDesc?: string }>(
+      `/api/oauth/callback-result?state=${encodeURIComponent(state)}`
     ),
   codexStopProxy: () => request<{ success: boolean }>('/api/oauth/codex/stop-proxy'),
   authcodeAuthorize: (provider: string, redirectUri?: string) => {
@@ -3016,6 +3060,24 @@ return conns.map(normalizeConnection)
       method: 'PUT',
       body: JSON.stringify({ id, presetId, enabled }),
     }),
+  // One API key's bindings, already filtered to that key: the map is keyed by
+  // the bare model id, so a row here is the key's own override of whatever the
+  // global binding above says.
+  listJailbreakKeyBindings: (keyId: string) =>
+    request<Record<string, JailbreakModelConfig>>(
+      `/api/jailbreak/keys/bindings?keyId=${encodeURIComponent(keyId)}`,
+    ),
+  // Arm a preset for one model under one key only. The same `enabled` toggle
+  // convention the global write uses: omitted arms it, presetId "off"/"none"
+  // means turn it off rather than delete the row.
+  setJailbreakKeyModel: (keyId: string, id: string, presetId: string, enabled: boolean) =>
+    request<{ ok: boolean; keyId: string; id: string; enabled: boolean; presetId: string }>(
+      '/api/jailbreak/keys/model',
+      {
+        method: 'PUT',
+        body: JSON.stringify({ keyId, id, presetId, enabled }),
+      },
+    ),
   deleteJailbreakModel: (id: string) =>
     request<{ ok: boolean; id: string }>('/api/jailbreak/models', {
       method: 'DELETE',
@@ -3061,10 +3123,13 @@ return conns.map(normalizeConnection)
     request<{ models: string[] }>('/api/jailbreak/models/catalog'),
   getJailbreakUsage: () =>
     request<{ usage: Record<string, number> }>('/api/jailbreak/usage'),
-  explainJailbreak: (id: string) =>
+  // The scope is the second resolver argument: passing one client key's id
+  // re-runs the same resolution under that key, so a key-scoped binding can be
+  // shown winning over the same model's global binding.
+  explainJailbreak: (id: string, apiKeyId = '') =>
     request<JailbreakMatch>('/api/jailbreak/resolve', {
       method: 'POST',
-      body: JSON.stringify({ id }),
+      body: JSON.stringify({ id, apiKeyId }),
     }),
   duplicateJailbreakPreset: (id: string, newId?: string) =>
     request<{ ok: boolean; preset: JailbreakDoc }>(`/api/jailbreak/presets/${encodeURIComponent(id)}/duplicate`, {

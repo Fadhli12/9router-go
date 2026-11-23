@@ -397,7 +397,7 @@ func (h *ChatHandler) handleAccountFallback(
 			currentBackoffLevel := h.Repo.GetConnectionBackoffLevel(connObj.ID)
 			// Classify error to get dynamic cooldown; provider-scoped rules
 			// key off the canonical provider the request routed to.
-			classification := providers.ClassifyErrorForProvider(ue.StatusCode, errorText, currentBackoffLevel, provider)
+			classification := providers.ClassifyErrorForProvider(ue.StatusCode, errorText, currentBackoffLevel, provider, ue.Body)
 			cooldownSec := retryableCooldownSec(ue.StatusCode, time.Duration(classification.CooldownMs)*time.Millisecond, ue, provider)
 			// A 402 is a spent quota/billing window, not a transient blip. Kiro
 			// resets its monthly request count on the 1st, so park the account
@@ -1015,7 +1015,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	}
 
 	// Fit tool names exceeding MaxToolNameLength (64 chars) to prevent upstream HTTP 400.
-	fittedBody, fittedToolMap := translator.FitToolNames(pipedBody)
+	fittedBody, fittedToolMap := translator.FitToolNamesForProvider(pipedBody, provider)
 	if len(fittedToolMap) > 0 {
 		log.Debug("fallback", "fitted long tool names", "provider", provider, "model", model, "count", len(fittedToolMap))
 		pipedBody = fittedBody
@@ -1123,6 +1123,9 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	// neither field, so the normalizer is a no-op there.
 	if !claudeNative && !upstreamClaude && !executor.UpstreamSpeaksResponses(provider, wireModel, providerCfg) {
 		pipedBody = normalizeChatTokenFields(pipedBody)
+		// Operator-declared extraBody for an OpenRouter custom model: merged
+		// after every rewrite above so none of them can drop it.
+		pipedBody = h.applyCustomExtraBody(pipedBody, provider, wireModel)
 	}
 
 	// Strict pattern validation: strip regex lookarounds and malformed patterns
@@ -1957,12 +1960,14 @@ func extractErrorText(body []byte) string {
 	var parsed struct {
 		Error struct {
 			Message string `json:"message"`
+			Code    any    `json:"code"`
 			Status  string `json:"status"`
 			Details []struct {
 				Reason string `json:"reason"`
 			} `json:"details"`
 		} `json:"error"`
 		Message string `json:"message"`
+		Code    any    `json:"code"`
 	}
 	if err := json.Unmarshal(body, &parsed); err == nil {
 		var parts []string
@@ -1978,6 +1983,12 @@ func extractErrorText(body []byte) string {
 			if d.Reason != "" {
 				parts = append(parts, d.Reason)
 			}
+		}
+		// The structured code is part of what the classifier reads: a 400 is
+		// only a spent balance when the upstream's own code says so, and that
+		// code rides in error.code, not in the prose (providers.ClassifyError).
+		if code := creditErrorCodeString(parsed.Error.Code, parsed.Code); code != "" {
+			parts = append(parts, code)
 		}
 		if len(parts) > 0 {
 			return strings.Join(parts, " ")
@@ -1996,6 +2007,21 @@ func extractErrorText(body []byte) string {
 			}
 		}
 		return "upstream returned HTML error page"
+	}
+	return ""
+}
+
+// creditErrorCodeString renders a structured error code for the classifier. A
+// numeric code says nothing about billing and a non-string is not a code, so
+// both yield "". error.code wins over the top-level code, the same precedence
+// providers.BodyErrorCode uses.
+func creditErrorCodeString(codes ...any) string {
+	for _, v := range codes {
+		if s, ok := v.(string); ok {
+			if s = strings.TrimSpace(s); s != "" {
+				return s
+			}
+		}
 	}
 	return ""
 }

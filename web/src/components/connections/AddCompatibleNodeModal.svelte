@@ -6,11 +6,19 @@
   import Modal from '../../lib/ui/Modal.svelte'
   import ProviderNodeLimitsField from './ProviderNodeLimitsField.svelte'
   import { EMPTY_NODE_LIMITS, nodeLimitsPatchOf, type NodeLimitsDraft } from '../../lib/node-limits'
+  import { getReservedPrefixes } from '../../lib/providers'
+  import { suggestPrefixFromName, suggestUrlSuffixFromName } from '../../lib/provider-name-slug'
   import type { ProviderNodeLimitsPatch } from '../../api/client'
+  import { untrack } from 'svelte'
+
+  export type CompatibleNodeType = 'openai-compatible' | 'anthropic-compatible' | 'custom-embedding'
 
   interface Props {
     isOpen: boolean
-    type?: 'openai-compatible' | 'anthropic-compatible' | 'custom-embedding'
+    /** Initial node type. The user can switch it inside the modal. */
+    type?: CompatibleNodeType
+    /** Types offered by the type switch; omit to offer all three. */
+    allowedTypes?: CompatibleNodeType[]
     isSubmitting?: boolean
     onClose: () => void
     onSubmit: (data: {
@@ -28,41 +36,80 @@
   let {
     isOpen,
     type = 'openai-compatible',
+    allowedTypes = ['openai-compatible', 'anthropic-compatible'],
     onClose,
     onSubmit,
   }: Props = $props()
 
-  const VARIANT_CONFIG = {
+  const VARIANT_CONFIG: Record<CompatibleNodeType, {
+    label: string
+    summary: string
+    title: string
+    defaultBaseUrl: string
+    namePlaceholder: string
+    prefixPlaceholder: string
+    baseUrlHint: string
+    modelIdPlaceholder: string
+    nameHint: string
+    prefixHint: string
+    /** A blank prefix is legal for chat providers, not for embeddings. */
+    prefixRequired: boolean
+    modelIdHint: string
+    hasApiType: boolean
+  }> = {
     'openai-compatible': {
-      title: 'Add OpenAI Compatible',
+      label: 'OpenAI Compatible',
+      summary: 'Chat Completions or Responses endpoints',
+      title: 'Add Custom Provider',
       defaultBaseUrl: 'https://api.openai.com/v1',
       namePlaceholder: 'OpenAI Compatible (Prod)',
       prefixPlaceholder: 'oc-prod',
       baseUrlHint: 'Use the base URL (ending in /v1) for your OpenAI-compatible API.',
       modelIdPlaceholder: 'e.g. gpt-4, claude-3-opus',
+      nameHint: 'Required. A friendly label for this node.',
+      prefixHint:
+        'Optional. Follows the name you type (spaces become dashes, capitals lowercase) until you edit it. Left blank it reuses this provider’s URL suffix, or a short token when the suffix is generated.',
+      prefixRequired: false,
+      modelIdHint: 'If provider lacks /models endpoint, enter a model ID to validate via chat/completions instead.',
       hasApiType: true,
     },
     'anthropic-compatible': {
-      title: 'Add Anthropic Compatible',
+      label: 'Anthropic Compatible',
+      summary: 'Endpoints speaking the Anthropic Messages API',
+      title: 'Add Custom Provider',
       defaultBaseUrl: 'https://api.anthropic.com/v1',
       namePlaceholder: 'Anthropic Compatible (Prod)',
       prefixPlaceholder: 'ac-prod',
       baseUrlHint: 'Use the base URL (ending in /v1) for your Anthropic-compatible API. The system will append /messages.',
       modelIdPlaceholder: 'e.g. claude-3-opus',
+      nameHint: 'Required. A friendly label for this node.',
+      prefixHint:
+        'Optional. Follows the name you type (spaces become dashes, capitals lowercase) until you edit it. Left blank it reuses this provider’s URL suffix, or a short token when the suffix is generated.',
+      prefixRequired: false,
+      modelIdHint: 'If provider lacks /models endpoint, enter a model ID to validate via messages instead.',
       hasApiType: false,
     },
     'custom-embedding': {
+      label: 'Custom Embedding',
+      summary: 'OpenAI-compatible /embeddings endpoints',
       title: 'Add Custom Embedding',
       defaultBaseUrl: 'https://api.openai.com/v1',
       namePlaceholder: 'Voyage AI',
       prefixPlaceholder: 'voyage',
       baseUrlHint: 'Most embedding APIs are OpenAI-compatible: Voyage, Cohere, Jina, Mistral, Together...',
       modelIdPlaceholder: 'e.g. voyage-3, embed-english-v3.0, text-embedding-3-small',
+      nameHint: 'Required. A friendly label for this embedding provider.',
+      prefixHint: 'Required. Used as the provider prefix for model IDs (e.g. voyage/voyage-3).',
+      prefixRequired: true,
+      modelIdHint: 'Required for validation. Will send a test embeddings request.',
       hasApiType: false,
     },
   }
 
-  let config = $derived(VARIANT_CONFIG[type] || VARIANT_CONFIG['openai-compatible'])
+  // The node type lives in local state so switching it inside the modal keeps
+  // every field the user already typed. Picking the wrong protocol used to
+  // mean closing the modal and retyping the whole form (#182).
+  let selectedType = $state<CompatibleNodeType>('openai-compatible')
 
   let formName = $state('')
   let formPrefix = $state('')
@@ -79,12 +126,41 @@
   // node id, which only exists once the create answers).
   let limitsDraft = $state<NodeLimitsDraft>({ ...EMPTY_NODE_LIMITS })
 
+  // Both fields follow the Name until the operator types in them, then stop.
+  //
+  // "Typed in" is a real event, forwarded from the native input, rather than a
+  // guess from the value: a field the operator cleared is empty exactly like
+  // one nobody has reached yet, and refilling the cleared one would undo the
+  // choice they just made.
+  let prefixTouched = $state(false)
+  let suffixTouched = $state(false)
+
+  function takeOverPrefix() {
+    prefixTouched = true
+  }
+  function takeOverSuffix() {
+    suffixTouched = true
+  }
+  let availability = $state<import('../../api/client').ProviderNodeAvailability | null>(null)
+  let availabilityError = $state('')
+  let availabilityLoading = $state(false)
+  let availabilitySequence = 0
+
+  let typeOptions = $derived(allowedTypes.map((t) => ({ value: t, ...VARIANT_CONFIG[t] })))
+  let config = $derived(VARIANT_CONFIG[selectedType])
+
+  // One rule for the button and the submit handler: a blank prefix blocks the
+  // create only for the node types that still require one.
+  let canSubmit = $derived(
+    !!formName.trim() && !(config.prefixRequired && !formPrefix.trim()) && !!formBaseUrl.trim()
+  )
+
   // The literal the backend pins in front of the suffix, so the field can show
   // the provider id the user is about to create instead of a bare "suffix".
   let idLiteral = $derived(
-    type === 'anthropic-compatible'
+    selectedType === 'anthropic-compatible'
       ? 'anthropic-compatible'
-      : type === 'custom-embedding'
+      : selectedType === 'custom-embedding'
         ? 'custom-embedding'
         : `openai-compatible-${formApiType}`
   )
@@ -93,26 +169,91 @@
   // Reset the form when the modal opens.
   $effect(() => {
     if (isOpen) {
+      selectedType = type
       formName = ''
       formPrefix = ''
       formUrlSuffix = ''
+      prefixTouched = false
+      suffixTouched = false
       formApiType = 'chat'
       checkKey = ''
       checkModelId = ''
       validationResult = null
       submitting = false
-      formBaseUrl = config.defaultBaseUrl
+      formBaseUrl = (VARIANT_CONFIG[type] ?? VARIANT_CONFIG[selectedType]).defaultBaseUrl
     }
   })
 
-  // Mirrors upstream: when the API type changes (OpenAI only), snap the base
-  // URL back to the provider default so a stale path isn't reused across API shapes.
-
+  // Autofill: the Name decides both the prefix and the URL suffix until the
+  // operator types in either field.
+  //
+  // Only the two chat-compatible types are filled. custom-embedding requires a
+  // prefix and reads it as the catalog namespace, so a guess there is a value
+  // the operator did not ask for on the one type where being wrong matters.
+  //
+  // Reading the two form fields inside untrack keeps this effect from
+  // re-running on its own writes: the dependency is the name, and the fields
+  // are here only to be written.
   $effect(() => {
-    if (config.hasApiType) {
-      formBaseUrl = config.defaultBaseUrl
-    }
+    if (!isOpen) return
+    const name = formName
+    if (selectedType === 'custom-embedding') return
+    untrack(() => {
+      if (!prefixTouched) formPrefix = suggestPrefixFromName(name, getReservedPrefixes())
+      if (!suffixTouched) formUrlSuffix = suggestUrlSuffixFromName(name)
+    })
   })
+
+  // Check both suggestions against the live database as they change. The
+  // sequence token drops stale replies when a later keystroke is already in
+  // flight; a short debounce avoids turning every key into a REST request.
+  $effect(() => {
+    if (!isOpen || selectedType === 'custom-embedding') return
+    const prefix = formPrefix.trim()
+    const urlSuffix = formUrlSuffix.trim()
+    const nodeType = selectedType
+    const apiType = formApiType
+    const sequence = ++availabilitySequence
+    availability = null
+    availabilityError = ''
+    if (!prefix && !urlSuffix) {
+      availabilityLoading = false
+      return
+    }
+    availabilityLoading = true
+    const timer = setTimeout(() => {
+      void api.checkProviderNodeAvailability({ prefix, urlSuffix, type: nodeType, apiType })
+        .then((result) => {
+          if (sequence !== availabilitySequence) return
+          availability = result
+          availabilityError = ''
+        })
+        .catch((err) => {
+          if (sequence !== availabilitySequence) return
+          availability = null
+          availabilityError = err instanceof Error ? err.message : String(err)
+        })
+        .finally(() => {
+          if (sequence === availabilitySequence) availabilityLoading = false
+        })
+    }, 250)
+    return () => clearTimeout(timer)
+  })
+
+  // Switching type mid-form is the whole point of the unified dialog (#182), so
+  // only the protocol-specific parts move: the base URL follows the new
+  // protocol when it still holds the old default, everything the user typed
+  // survives, and a stale Check result is dropped rather than shown as valid.
+  function selectType(next: CompatibleNodeType) {
+    if (next === selectedType) return
+    const previousDefault = VARIANT_CONFIG[selectedType].defaultBaseUrl
+    selectedType = next
+    validationResult = null
+    if (formBaseUrl.trim() === '' || formBaseUrl.trim() === previousDefault) {
+      formBaseUrl = VARIANT_CONFIG[next].defaultBaseUrl
+    }
+  }
+
 
   async function handleCheck() {
     validating = true
@@ -120,7 +261,7 @@
       validationResult = await api.validateProviderNode({
         baseUrl: formBaseUrl.trim(),
         apiKey: checkKey.trim(),
-        type,
+        type: selectedType,
         modelId: checkModelId.trim() || undefined,
       })
     } catch (err) {
@@ -133,16 +274,15 @@
     }
   }
 
-  function handleSubmit(e?: SubmitEvent) {
-    e?.preventDefault()
-    if (!formName.trim() || !formPrefix.trim() || !formBaseUrl.trim() || submitting) return
+  function handleSubmit() {
+    if (!canSubmit || submitting) return
     submitting = true
     Promise.resolve(onSubmit({
       name: formName.trim(),
       prefix: formPrefix.trim(),
       baseUrl: formBaseUrl.trim(),
       apiType: config.hasApiType ? formApiType : undefined,
-      type,
+      type: selectedType,
       urlSuffix: formUrlSuffix.trim(),
       limits: nodeLimitsPatchOf(limitsDraft),
     })).finally(() => {
@@ -153,34 +293,96 @@
 
 <Modal {isOpen} title={config.title} {onClose}>
   <div class="flex flex-col gap-4">
+    <fieldset class="flex flex-col gap-2">
+      <legend class="text-sm font-medium text-text-main">Provider Type</legend>
+      <div class="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Provider Type">
+        {#each typeOptions as option (option.value)}
+          <button
+            type="button"
+            role="radio"
+            aria-checked={selectedType === option.value}
+            onclick={() => selectType(option.value)}
+            class="flex flex-col items-start gap-0.5 rounded-[10px] border px-3 py-2 text-left transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 {selectedType === option.value
+              ? 'border-brand-500 bg-brand-500/10'
+              : 'border-border bg-surface-2 hover:border-brand-500/40'}"
+          >
+            <span class="flex w-full items-center justify-between gap-2">
+              <span class="text-sm font-medium text-text-main">{option.label}</span>
+              {#if selectedType === option.value}
+                <span class="material-symbols-outlined text-[16px] text-brand-500" aria-hidden="true">check</span>
+              {/if}
+            </span>
+            <span class="text-xs text-text-muted">{option.summary}</span>
+          </button>
+        {/each}
+      </div>
+      <p class="text-xs text-text-muted">
+        Already entered your endpoint? Switch type here — your name, prefix and base URL stay put.
+      </p>
+    </fieldset>
+
     <Input
       label="Name"
       bind:value={formName}
       placeholder={config.namePlaceholder}
-      hint={type === 'custom-embedding' ? 'Required. A friendly label for this embedding provider.' : 'Required. A friendly label for this node.'}
+      hint={config.nameHint}
       required
     />
 
     <Input
       label="Prefix"
       bind:value={formPrefix}
+      oninput={takeOverPrefix}
       placeholder={config.prefixPlaceholder}
-      hint={type === 'custom-embedding' ? 'Required. Used as the provider prefix for model IDs (e.g. voyage/voyage-3).' : 'Required. Used as the provider prefix for model IDs.'}
-      required
+      hint={config.prefixHint}
+      required={config.prefixRequired}
     />
 
     <Input
       label="Custom URL Suffix"
       bind:value={formUrlSuffix}
+      oninput={takeOverSuffix}
       placeholder="e.g. bai"
       hint={composedID
-        ? `Optional. Replaces the random suffix of this provider id: ${composedID}`
-        : `Optional. Leave blank to keep a randomized suffix for '${idLiteral}-<this_is_user_custom_suffix>'.`}
+        ? `Optional. Follows the name until you edit it. Replaces the random suffix of this provider id: ${composedID}`
+        : `Optional. Follows the name until you edit it; leave blank to keep a randomized suffix for '${idLiteral}-<this_is_user_custom_suffix>'.`}
       inputClass="font-mono"
     />
 
-    {#if config.hasApiType}
+    {#if selectedType !== 'custom-embedding'}
+      <!-- Live availability, the way a username picker reports taken names.
+           One row per identifier, only rendered once a value exists to judge. -->
+      {#if availabilityLoading}
+        <p class="text-xs text-text-muted" role="status">Checking availability…</p>
+      {:else if availabilityError}
+        <p class="text-xs text-error" role="alert">{availabilityError}</p>
+      {:else if availability}
+        <ul class="flex flex-col gap-1" aria-label="Name availability">
+          {#each [availability.prefix, availability.urlSuffix] as field, i (i)}
+            {#if field.value !== '' || field.status === 'automatic' || field.status === 'random'}
+              <li class="flex items-center gap-2 text-xs">
+                {#if field.status === 'available'}
+                  <Badge tone="success">{field.value}</Badge>
+                  <span class="text-text-muted">available</span>
+                {:else if field.status === 'taken'}
+                  <Badge tone="error">{field.value}</Badge>
+                  <span class="text-text-muted">{field.reason}</span>
+                {:else if field.status === 'invalid'}
+                  <Badge tone="error">{field.value}</Badge>
+                  <span class="text-text-muted">{field.reason}</span>
+                {:else if field.status === 'automatic'}
+                  <span class="text-text-muted">{field.reason}</span>
+                {:else if field.status === 'random'}
+                  <span class="text-text-muted">{field.reason}</span>
+                {/if}
+              </li>
+            {/if}
+          {/each}
+        </ul>
+      {/if}
+    {/if}
 
+    {#if config.hasApiType}
       <div>
         <label for="api-type" class="text-sm font-medium text-text-main mb-1.5 block">API Type</label>
         <select
@@ -213,7 +415,7 @@
       label="Model ID (for Check)"
       bind:value={checkModelId}
       placeholder={config.modelIdPlaceholder}
-      hint={type === 'custom-embedding' ? 'Required for validation. Will send a test embeddings request.' : 'If provider lacks /models endpoint, enter a model ID to validate via chat/completions instead.'}
+      hint={config.modelIdHint}
     />
 
     <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -256,7 +458,7 @@
         type="button"
         onclick={handleSubmit}
         fullWidth
-        disabled={!formName.trim() || !formPrefix.trim() || !formBaseUrl.trim() || submitting}
+        disabled={!canSubmit || submitting}
       >
         {submitting ? 'Creating...' : 'Create'}
       </Button>

@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"9router/proxy/internal/browsercookies"
 	"9router/proxy/internal/connlimit"
 	"9router/proxy/internal/handlers/chat"
 	"9router/proxy/internal/handlerutil"
@@ -89,10 +90,10 @@ func (h *DashboardHandler) HandleGetProvidersClient(w http.ResponseWriter, r *ht
 	accountFiltered := make([]*models.ProviderConnection, 0, len(providerFiltered))
 	for _, c := range providerFiltered {
 		// "active" means the account can serve a request, not that the toggle
-		// is on. A credit-exhausted connection with isActive=1 is not active,
-		// so filtering on the toggle alone hides the accounts the operator
-		// most needs to see.
-		active := providers.IsEffectivelyActive(c.IsActive, "", providers.HasActiveCooldown(c.Data))
+		// is on. A credit-exhausted or cooldown-locked connection with
+		// isActive=1 is not active, so filtering reads the same effective
+		// status derivation as sanitizeProviderConnection.
+		_, active := providers.ConnectionStatus(c.IsActive, c.Data)
 		if accountStatus == "active" && !active {
 			continue
 		}
@@ -145,7 +146,7 @@ const (
 // usageSupportedProviders mirrors upstream USAGE_SUPPORTED_PROVIDERS
 // (registry features.usage).
 var usageSupportedProviders = []string{
-	"antigravity", "claude", "clinepass", "codebuddy-cn", "codebuddy-intl", "codex",
+	"antigravity", "claude", "clinepass", "cloudflare-ai", "codebuddy-cn", "codebuddy-intl", "codex",
 	"commandcode", "commandcode-goat", "deeprelay", "deepseek", "gemini-cli", "gemini-web", "github", "glm", "glm-cn",
 	"grok-cli", "groq", "kimi", "kiro", "minimax", "minimax-cn", "minimax-code",
 	"minimax-code-global", "ollama", "opendesign",
@@ -157,7 +158,7 @@ var usageSupportedProviders = []string{
 // usageApikeyProviders mirrors upstream USAGE_APIKEY_PROVIDERS
 // (registry features.usageApikey).
 var usageApikeyProviders = []string{
-	"clinepass", "codebuddy-cn", "codebuddy-intl", "commandcode", "commandcode-goat", "deeprelay", "deepseek", "gemini-web", "glm",
+	"clinepass", "cloudflare-ai", "codebuddy-cn", "codebuddy-intl", "commandcode", "commandcode-goat", "deeprelay", "deepseek", "gemini-web", "glm",
 	"glm-cn", "groq", "kimi", "kiro", "minimax", "minimax-cn", "ollama",
 	"free-pi", "freebuff", "opencode-go", "opencode-zen", "opendesign", "qoder", "qoder-cn",
 	"vercel-ai-gateway", "xiaomi-mimo",
@@ -396,10 +397,12 @@ func sanitizeProviderConnection(c *models.ProviderConnection) map[string]any {
 	// works. Derived from testStatus + live cooldown + stored lastError with
 	// the same vocabulary the request path uses, so the dashboard stops
 	// counting a credit-exhausted account as connected.
+	testStatus, _ := safe["testStatus"].(string)
 	lastError, _ := safe["lastError"].(string)
-	effective := providers.EffectiveStatusWithError(c.IsActive, fmt.Sprintf("%v", safe["testStatus"]), providers.HasActiveCooldown(c.Data), lastError)
+	cooldown := providers.HasActiveCooldown(c.Data)
+	effective := providers.EffectiveStatusWithError(c.IsActive, testStatus, cooldown, lastError)
 	safe["effectiveStatus"] = effective
-	safe["isEffectivelyActive"] = providers.IsEffectivelyActiveWithError(c.IsActive, fmt.Sprintf("%v", safe["testStatus"]), providers.HasActiveCooldown(c.Data), lastError)
+	safe["isEffectivelyActive"] = providers.IsEffectivelyActiveWithError(c.IsActive, testStatus, cooldown, lastError)
 	safe["statusVariant"] = providers.StatusVariant(c.IsActive, effective)
 	return safe
 }
@@ -491,6 +494,22 @@ func (h *DashboardHandler) HandleCreateConnection(w http.ResponseWriter, r *http
 		}
 	}
 	if apiKey != "" {
+		// gemini-web's credential is the whole site Cookie header, and the
+		// modal hands it over as apiKey. A paste is often a Cookie-Editor JSON
+		// export, so render it once here: the row, every later probe and every
+		// chat turn then read the header form. A malformed export is refused at
+		// the boundary rather than stored and sent to the site as a header it
+		// cannot read. deepseek-web, grok-web, perplexity-web and uc-web are
+		// excluded: their apiKey is a token or a single cookie value, not a
+		// header, so the JSON-cookie parser must not read it.
+		if req.Provider == "gemini-web" {
+			normalized, err := browsercookies.NormalizeCookieHeaderInput(apiKey)
+			if err != nil {
+				handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			apiKey = normalized
+		}
 		dataMap["apiKey"] = apiKey
 	}
 	if len(req.ProviderSpecificData) > 0 {
@@ -1105,7 +1124,8 @@ func (h *DashboardHandler) HandleExportProviderKeys(w http.ResponseWriter, r *ht
 }
 
 // HandleDeleteConnection handles DELETE /api/connections/{id}.
-// Calls DeleteProviderConnection.
+// Calls DeleteProviderConnectionWithCount and prunes combos when the last
+// connection for a non-keyless provider is removed.
 func (h *DashboardHandler) HandleDeleteConnection(w http.ResponseWriter, r *http.Request) {
 	id := getURLParam(r, "id")
 	if id == "" {
@@ -1113,11 +1133,15 @@ func (h *DashboardHandler) HandleDeleteConnection(w http.ResponseWriter, r *http
 		return
 	}
 
-	if err := h.Repo.DeleteProviderConnection(id); err != nil {
+	provider, remaining, err := h.Repo.DeleteProviderConnectionWithCount(r.Context(), id)
+	if err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	connlimit.Close(id) // release breaker/backoff state so nothing leaks
+	if provider != "" && remaining == 0 {
+		h.pruneDeletedProviderFromCombosBestEffort(r.Context(), provider)
+	}
 
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": id})
 }

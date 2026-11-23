@@ -3,7 +3,6 @@
   import { Loader2 } from 'lucide-svelte'
   import {
     api,
-    getStoredAPIKey,
     onUnauthorized,
     type APIKey,
     type Combo,
@@ -28,7 +27,6 @@
   import MediaWebView from './components/media/MediaWebView.svelte'
   import QuotaTrackerView from './components/QuotaTrackerView.svelte'
   import SkillsView from './components/SkillsView.svelte'
-  import SettingsView from './components/SettingsView.svelte'
   import SecurityPanel from './components/security/SecurityPanel.svelte'
   import PlansView from './components/plans/PlansView.svelte'
   import Sidebar from './components/Sidebar.svelte'
@@ -91,6 +89,9 @@
   })
 
   let isLoading = $state(true)
+  // True once loadProviderCatalog() populates PROVIDER_CATALOG, because that
+  // array is non-reactive and derived lookups would otherwise stick on empty.
+  let catalogLoaded = $state(false)
   let isAuthChecking = $state(true)
   let isAuthenticatedState = $state(false)
   // A share link waiting to be reviewed, and the import surface that fills it.
@@ -168,6 +169,7 @@
     // install would render an error where the login form belongs.
     try {
       await loadProviderCatalog()
+      catalogLoaded = true
     } catch (err) {
       console.error('provider catalog failed to load', err)
     }
@@ -177,7 +179,7 @@
         api.getProviderNodes().catch(() => []),
         api.getCombos().catch(() => []),
         api.getApiKeys().catch(() => []),
-        api.getSettings().catch(() => ({})),
+        api.getSettings().catch((): Settings => ({})),
       ])
       connections = connsRes
       providerNodes = nodesRes
@@ -331,7 +333,7 @@
     connections.filter((c) => c.isActive === 1 && !!c.lastError).length
   )
   let selectedMediaCatalogItem = $derived.by(() => {
-    if (!selectedMedia) return null
+    if (!catalogLoaded || !selectedMedia) return null
     return PROVIDER_CATALOG.find((p) => p.id === selectedMedia!.providerId) || null
   })
   let selectedProviderMeta = $derived.by(() => {
@@ -344,7 +346,9 @@
     }
     if (activeTab !== 'connections' || !selectedProviderId) return null
     const node = providerNodes.find((n) => n.id === selectedProviderId)
-    const cat = PROVIDER_CATALOG.find((p) => p.id === selectedProviderId)
+    const cat = catalogLoaded
+      ? PROVIDER_CATALOG.find((p) => p.id === selectedProviderId)
+      : undefined
     return {
       id: selectedProviderId,
       name: node?.name || cat?.name || selectedProviderId,
@@ -383,12 +387,9 @@
     keys: { title: 'Endpoint & Key', description: 'API endpoint and key configuration' },
     plans: { title: 'Plans', description: 'Per-key quota plans and policy resolution' },
     jailbreak: { title: 'Persona', description: 'Per-model system-prompt injection and Gemini safety bypass' },
+    keys: { title: 'Endpoint & Key', description: 'API endpoint and key configuration' },
   }
 
-  function handleOpenNewCombo() {
-    navigate('combos')
-    isCreateComboOpen = true
-  }
   let isUpdateModalOpen = $state(false)
   let systemUpdateInfo = $state<SystemVersionInfo | null>(null)
   let systemVersion = $state(typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '')

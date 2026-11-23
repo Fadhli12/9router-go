@@ -122,6 +122,7 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 
 		// Provider Nodes (Custom Endpoints)
 		r.Get("/provider-nodes", h.HandleGetProviderNodes)
+		r.Post(AvailabilityRoutePath, h.HandleCheckProviderNodeAvailability)
 		r.Post("/provider-nodes", h.HandleCreateProviderNode)
 		r.Put("/provider-nodes/{id}", h.HandleUpdateProviderNode)
 		r.Post("/provider-nodes/validate", h.HandleValidateProviderNode)
@@ -199,6 +200,8 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Get("/jailbreak/models", h.HandleListJailbreakModels)
 		r.Get("/jailbreak/models/catalog", h.HandleJailbreakModelCatalog)
 		r.Put("/jailbreak/models", h.HandleSetJailbreakModel)
+		r.Put("/jailbreak/keys/model", h.HandleSetJailbreakKeyModel)
+		r.Get("/jailbreak/keys/bindings", h.HandleListJailbreakKeyBindings)
 		r.Delete("/jailbreak/models", h.HandleDeleteJailbreakModel)
 		r.Get("/jailbreak/excludes", h.HandleGetJailbreakExcludes)
 		r.Put("/jailbreak/excludes", h.HandlePutJailbreakExcludes)

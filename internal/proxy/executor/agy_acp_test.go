@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -45,7 +46,12 @@ func main(){
 	if err := os.WriteFile(srcPath, []byte(src), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// go build appends no extension on Windows, so the exhaustive build
+	// produced a bare "fakeagy" that exec could not start.
 	bin := filepath.Join(dir, "fakeagy")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
 	build := exec.Command("go", "build", "-o", bin, srcPath)
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build fake agy: %v: %s", err, out)
@@ -55,6 +61,7 @@ func main(){
 
 func TestForwardAGYACPNonStream(t *testing.T) {
 	fake := buildFakeAGY(t)
+	t.Cleanup(agy.DefaultPool().Close)
 	t.Setenv("AGY_PATH", fake)
 	body, _ := json.Marshal(map[string]any{
 		"model":    "gemini-3.8-flash-high",
@@ -99,6 +106,7 @@ func TestForwardAGYACPNonStream(t *testing.T) {
 
 func TestForwardAGYACPStream(t *testing.T) {
 	fake := buildFakeAGY(t)
+	t.Cleanup(agy.DefaultPool().Close)
 	t.Setenv("AGY_PATH", fake)
 	body, _ := json.Marshal(map[string]any{
 		"model":    "gemini-3.8-flash-high",
@@ -132,6 +140,7 @@ func TestForwardAGYACPStream(t *testing.T) {
 
 func TestForwardAGYACPNonStreamClaude(t *testing.T) {
 	fake := buildFakeAGY(t)
+	t.Cleanup(agy.DefaultPool().Close)
 	t.Setenv("AGY_PATH", fake)
 	body, _ := json.Marshal(map[string]any{
 		"model":      "gemini-3.8-flash-high",
@@ -197,6 +206,7 @@ func TestForwardAGYACPNonStreamClaude(t *testing.T) {
 
 func TestForwardAGYACPStreamClaude(t *testing.T) {
 	fake := buildFakeAGY(t)
+	t.Cleanup(agy.DefaultPool().Close)
 	t.Setenv("AGY_PATH", fake)
 	body, _ := json.Marshal(map[string]any{
 		"model":      "gemini-3.8-flash-high",

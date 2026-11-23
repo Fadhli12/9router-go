@@ -49,7 +49,6 @@
     buildAvailableModels,
     fetchProviderModelsData,
     fetchSuggestedModels,
-    getIconPath,
     isChatModel,
     isConnectionError,
     providerDisplayPrefix,
@@ -88,6 +87,7 @@
   } from './connectionProbe'
   import EditConnectionModal, { type ConnectionUpdate } from './EditConnectionModal.svelte'
   import AddConnectionModal from './AddConnectionModal.svelte'
+  import { buildEditedRow, pruneDisabledAfterDelete } from '../../lib/customModelEdit'
   import AddCustomModelModal from './AddCustomModelModal.svelte'
   import { nodeLimitsDraftOf, nodeLimitsSummary, nodeLimitsUsageSummary } from '../../lib/node-limits'
   import type { ProviderNodeLimitsPatch } from '../../api/client'
@@ -103,6 +103,11 @@
   import FreebuffSessionBanner from './FreebuffSessionBanner.svelte'
   import FreebuffAdBanner from './FreebuffAdBanner.svelte'
   import ProviderIcon from './ProviderIcon.svelte'
+  import {
+    computeProviderThinkingOptions,
+    formatThinkingOptionLabel,
+    resolveProviderThinkingSuffix,
+  } from './providerThinking'
 
   interface Props {
     providerId: string
@@ -565,25 +570,21 @@
   // the catalog ships as a static bundle, but caps depend on the provider
   // registry, the capability tables and the synced models.dev catalog.
   let modelCaps = $state<Record<string, ModelCaps>>({})
-  // Union of the thinking levels this provider's models accept, with the
-  // explicit "auto" reset first — upstream providerThinkingLevels
-  // (dashboard/providers/[id]/page.js:186). null hides the picker entirely for a
-  // provider whose models have no reasoning.
-  let providerThinkingLevels = $derived.by(() => {
-    const levels = new Set<string>()
-    for (const m of allAvailableModels) {
-      for (const l of modelCaps[m.id]?.thinkingLevels ?? []) {
-        if (l !== 'none') levels.add(l)
-      }
-    }
-    return levels.size ? ['auto', ...levels] : null
-  })
+  // Options for the per-provider "Thinking:" picker: compatible nodes always
+  // offer auto/off/on even with no model capability metadata, and built-in
+  // providers include "off" whenever at least one model can disable thinking.
+  let providerThinkingLevels = $derived.by(() =>
+    computeProviderThinkingOptions({
+      modelThinkingLevels: toolbarRows.map((r) => r.thinkingLevels),
+      isCompatibleNode,
+      currentMode: thinkingLevel,
+    }),
+  )
   // A picked level only applies to a model that actually supports it, so the
-  // displayed id and the copied id never carry a level the provider rejects.
+  // displayed id and the copied id never carry a level the provider rejects
+  // or a switch mode like auto/off/on.
   function resolveThinkingSuffix(modelId: string): string | null {
-    if (!thinkingLevel || thinkingLevel === 'auto') return null
-    const levels = modelCaps[modelId]?.thinkingLevels
-    return levels && levels.includes(thinkingLevel) ? thinkingLevel : null
+    return resolveProviderThinkingSuffix(thinkingLevel, modelCaps[modelId]?.thinkingLevels)
   }
   // Compatible nodes (upstream CompatibleModelsSection): rows = custom models
   // + legacy aliases, both keyed by the node row id; display = node prefix.
@@ -771,7 +772,44 @@
   $effect(() => {
     if (!showOAuthModal || typeof window === 'undefined') return
     autoSubmitted = false
+    let cancelled = false
+    let serverPollInFlight = false
     consumeOAuthCallback()
+
+    async function pollServerCallback() {
+      if (cancelled || serverPollInFlight || autoSubmitted || isConnecting || !showOAuthModal || providerId === 'codex') {
+        return
+      }
+      let pending
+      try {
+        pending = matchPending(loadPendings(window.localStorage), providerId, '')
+      } catch {
+        return
+      }
+      if (!pending?.state) return
+      serverPollInFlight = true
+      try {
+        const res = await api.getOAuthCallbackResult(pending.state)
+        if (!cancelled && res.found && (res.raw || res.error)) {
+          try {
+            writeCallback(window.localStorage, {
+              state: res.state || pending.state,
+              raw: res.raw || '',
+              error: res.error || '',
+              errorDesc: res.errorDesc || '',
+            })
+          } catch {
+            /* storage blocked */
+          }
+          consumeOAuthCallback()
+        }
+      } catch {
+        /* retry on next poll */
+      } finally {
+        serverPollInFlight = false
+      }
+    }
+
     const onStorage = (e: StorageEvent) => {
       if (e.key === OAUTH_CALLBACK_KEY || e.key === null) consumeOAuthCallback()
     }
@@ -783,6 +821,7 @@
         const data = e.data.data as {
           code?: string
           token?: string
+          raw?: string
           state?: string
           error?: string
           errorDescription?: string
@@ -791,7 +830,7 @@
           oauthError = `Login failed: ${data.error}${data.errorDescription ? ` — ${data.errorDescription}` : ''}`
           return
         }
-        const raw = data.code || data.token || ''
+        const raw = data.code || data.token || data.raw || ''
         if (raw) {
           try {
             writeCallback(window.localStorage, { state: data.state || '', raw, error: '', errorDesc: '' })
@@ -828,8 +867,11 @@
     } catch {
       /* BroadcastChannel unavailable — poll covers it */
     }
-    const timer = setInterval(consumeOAuthCallback, 1500)
+    const timer = setInterval(() => {
+      if (!consumeOAuthCallback()) void pollServerCallback()
+    }, 1500)
     return () => {
+      cancelled = true
       window.removeEventListener('storage', onStorage)
       window.removeEventListener('message', onWindowMessage)
       try {
@@ -861,7 +903,7 @@
     const q = proxyPoolSearch.trim().toLowerCase()
     if (!q) return proxyPools
     return proxyPools.filter(
-      (p) => p.name.toLowerCase().includes(q) || p.proxyUrl.toLowerCase().includes(q)
+      (p) => p.name.toLowerCase().includes(q) || (p.proxyUrl ?? '').toLowerCase().includes(q)
     )
   })
 
@@ -872,6 +914,7 @@
   let showAddKeyModal = $state(false)
   let addConnectionError = $state('')
   let showAddCustomModelModal = $state(false)
+  let editingModel = $state<CustomModelData | null>(null)
   let showEditNodeModal = $state(false)
   let showExportKeysModal = $state(false)
   let showShareProviderModal = $state(false)
@@ -921,7 +964,6 @@
     }
     return providerConnections.find((c) => c.isActive === 1) ?? providerConnections[0]
   })
-  let freebuffConnection = $derived(targetFreebuffConn)
   let freebuffSession = $state<FreebuffSessionStatusResponse | null>(null)
   let isLoadingSession = $state(false)
   let isAuthorizingFreebuff = $state(false)
@@ -929,7 +971,7 @@
   let currentFreebuffInit = $state<{
     fingerprintId: string
     fingerprintHash: string
-    expiresAt: number
+    expiresAt: string | number
     loginUrl: string
   } | null>(null)
 
@@ -1052,10 +1094,11 @@
 
   // Load models, settings, proxy pools
   async function loadData() {
+    const pid = providerId
     try {
       const [modelsData, settingsData, poolsData, aliasesData, capsData] = await Promise.all([
         fetchProviderModelsData(providerId, storageAlias),
-        api.getSettings().catch(() => ({})),
+        api.getSettings().catch((): Settings => ({})),
         api.getProxyPools().catch(() => []),
         api.getModelAliases().catch(() => ({ aliases: {} })),
         // The caps endpoint answers for compatible nodes too: a node with
@@ -1074,6 +1117,7 @@
           ? api.getModelCaps(providerId).catch(() => ({ caps: {} as Record<string, ModelCaps> }))
           : Promise.resolve({ caps: {} as Record<string, ModelCaps> }),
       ])
+      if (pid !== providerId) return
       const capsById = capsData?.caps || {}
       // Same guard as the call above: an alias equal to the id would spend a
       // second round trip on a map we already have.
@@ -1082,6 +1126,7 @@
         const aliasCaps = await api
           .getModelCaps(storageAlias)
           .catch(() => ({ caps: {} as Record<string, ModelCaps> }))
+        if (pid !== providerId) return
         const aliasMap = aliasCaps?.caps || {}
         for (const [id, entry] of Object.entries(aliasMap)) {
           if (!capsMerged[id]) capsMerged[id] = entry
@@ -1285,6 +1330,7 @@
         if (lastLoadedProviderId !== pid) {
           lastLoadedProviderId = pid
           suggestedModels = []
+          thinkingLevel = 'auto'
         }
         loadData()
       })
@@ -1368,19 +1414,24 @@
   }
 
   async function handleThinkingChange(event: Event) {
-    const val = (event.target as HTMLSelectElement).value
+    const select = event.target as HTMLSelectElement
+    const prevLevel = thinkingLevel
+    const val = select.value
     thinkingLevel = val
+    const prevSettings = (settings as any)?.providerThinking
     try {
-      const current = (settings as any)?.providerThinking || {}
+      const current = prevSettings || {}
       const updated = { ...current }
       if (val && val !== 'auto') {
         updated[providerId] = { mode: val }
       } else {
         delete updated[providerId]
       }
-      if (settings) (settings as any).providerThinking = updated
       await api.updateSettings({ providerThinking: updated })
+      if (settings) (settings as any).providerThinking = updated
     } catch (err) {
+      thinkingLevel = prevLevel
+      if (settings) (settings as any).providerThinking = prevSettings
       console.error('Error saving provider thinking:', err)
     }
   }
@@ -2687,6 +2738,20 @@
     }
   }
 
+  // The delete endpoint parks the id in disabledModels; drop it so a deleted
+  // custom model does not show under "Disabled models".
+  async function pruneDeletedFromDisabled(deletedIds: string[]) {
+    const fresh = await fetchProviderModelsData(providerId, storageAlias)
+    customModels = fresh.customModels
+    const kept = pruneDisabledAfterDelete(
+      fresh.disabledModelIds,
+      deletedIds,
+      builtInModels.map((m) => m.id)
+    )
+    disabledModelIds = kept
+    if (kept.length !== fresh.disabledModelIds.length) await api.saveDisabledModels(storageAlias, kept)
+  }
+
   async function handleEnableModel(modelId: string) {
     const updated = disabledModelIds.filter((id) => id !== modelId)
     disabledModelIds = updated
@@ -2723,25 +2788,39 @@
     caps?: { vision?: boolean; reasoning?: boolean; jailbreak?: boolean },
     limits?: { contextWindow?: number; maxOutput?: number },
     modelType?: CustomModelType,
+    extraBody?: Record<string, unknown>,
   ) {
     // The modal picks the kind; the id is only consulted for a caller that adds
     // a model without going through it.
     const kind = modelType ?? inferModelKind(modelId)
     try {
-      await api.saveCustomModel(customModelKeyFor(storageAlias, modelId, kind), {
+      if (editingModel) {
+        const stored = editingModel
+        await api.saveCustomModel(
+          customModelKeyFor(storageAlias, stored.id, stored.type),
+          buildEditedRow(stored, {
+            caps: { vision: false, reasoning: false, jailbreak: false, ...caps },
+            contextWindow: limits?.contextWindow ?? 0,
+            maxOutput: limits?.maxOutput ?? 0,
+            extraBody,
+          }),
+        )
+      } else await api.saveCustomModel(customModelKeyFor(storageAlias, modelId, kind), {
         id: modelId,
         providerAlias: storageAlias,
         type: kind,
         ...(kind !== 'llm' ? {} : caps ? { caps } : {}),
         ...(limits?.contextWindow ? { contextWindow: limits.contextWindow } : {}),
         ...(limits?.maxOutput ? { maxOutput: limits.maxOutput } : {}),
+        ...(extraBody ? { extraBody } : {}),
       })
       showAddCustomModelModal = false
+      editingModel = null
       const modelsData = await fetchProviderModelsData(providerId, storageAlias)
       customModels = modelsData.customModels
       notifyCustomModelsChanged()
     } catch (err) {
-      alert(`Failed to add custom model: ${err instanceof Error ? err.message : String(err)}`)
+      alert(`Failed to save custom model: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -3030,7 +3109,8 @@
   let compatibleTestSummary = $derived(formatCheckAllSummary(compatibleTestResults))
 
   function copyCompatibleModel(modelId: string) {
-    copyToClipboard(`${displayAlias()}/${modelId}`)
+    const level = resolveThinkingSuffix(modelId)
+    copyToClipboard(`${displayAlias()}/${modelId}${level ? `(${level})` : ''}`)
     copiedModelId = modelId
     setTimeout(() => (copiedModelId = null), 2000)
   }
@@ -3534,6 +3614,7 @@
     if (!confirm(parts.join(' '))) return
 
     let deleted = 0
+    const deletedIds: string[] = []
     let disabledOnly = 0
     const failures: string[] = []
     for (const row of rows) {
@@ -3546,19 +3627,22 @@
           if (match?.alias) await api.deleteModelAlias(match.alias)
           else await api.deleteCustomModel(customModelKeyFor(storageAlias, row.id, match?.kind))
           deleted++
+          deletedIds.push(row.id)
         } else {
-          const stored = compatibleRows.find((r) => r.id === row.id)?.kind
+          const stored =
+            compatibleRows.find((r) => r.id === row.id)?.kind ??
+            providerCustomModels.find((m) => m.id === row.id)?.type
           await api.deleteCustomModel(customModelKeyFor(storageAlias, row.id, stored))
           deleted++
+          deletedIds.push(row.id)
         }
       } catch (err) {
         failures.push(`${row.id}: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
     if (pid !== providerId) return
-    const modelsData = await fetchProviderModelsData(providerId, storageAlias)
-    customModels = modelsData.customModels
-    disabledModelIds = modelsData.disabledModelIds
+    await pruneDeletedFromDisabled(deletedIds).catch((err) => console.error('prune disabled failed:', err))
+    if (pid !== providerId) return
     notifyCustomModelsChanged()
     selectedModelIds = new Set()
     const summary = [`${deleted} deleted`]
@@ -3575,8 +3659,7 @@
       if (!confirm(`Delete custom model "${modelId}"?`)) return
       try {
         await api.deleteCustomModel(customModelKeyFor(storageAlias, modelId, custom.type))
-        const modelsData = await fetchProviderModelsData(providerId, storageAlias)
-        customModels = modelsData.customModels
+        await pruneDeletedFromDisabled([modelId])
         notifyCustomModelsChanged()
       } catch (err) {
         alert(`Failed to delete model: ${err instanceof Error ? err.message : String(err)}`)
@@ -4821,6 +4904,24 @@
   {#if isCompatibleNode}
   <div class="bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-soft)] p-6">
     <div class="flex flex-col gap-4">
+      <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex flex-wrap items-center gap-3">
+          <h2 class="text-lg font-semibold">Available Models</h2>
+          {#if providerThinkingLevels}
+            <select
+              aria-label="Provider thinking mode"
+              title="Sets per-provider thinking override for requests routed to this provider"
+              value={thinkingLevel}
+              onchange={handleThinkingChange}
+              class="rounded-md border border-border bg-background px-2 py-1 text-xs focus:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer"
+            >
+              {#each providerThinkingLevels as opt (opt)}
+                <option value={opt}>Thinking: {formatThinkingOptionLabel(opt)}</option>
+              {/each}
+            </select>
+          {/if}
+        </div>
+      </div>
       <p class="text-sm text-text-muted">
         Add {isAnthropicCompatibleNode ? 'Anthropic' : 'OpenAI'}-compatible models manually or import them from the /models endpoint.
       </p>
@@ -4952,6 +5053,8 @@
       {#if compatibleRows.length > 0}
         <div class="flex flex-col gap-3">
           {#each filteredRows as row (row.id)}
+            {@const level = resolveThinkingSuffix(row.id)}
+            {@const fullModelId = `${displayAlias()}/${row.id}${level ? `(${level})` : ''}`}
             {@const tStatus = compatibleTestResults[row.id]}
             {@const tError = compatibleTestErrors[row.id]}
             {@const isTestingRow = compatibleTesting[row.id]}
@@ -4972,7 +5075,7 @@
               <div class="flex-1 min-w-0">
                 <p class="text-sm font-medium truncate">{row.id}</p>
                 <div class="flex items-center gap-1 mt-1 flex-wrap">
-                  <code class="max-w-[72vw] truncate text-xs text-text-muted font-mono bg-sidebar px-1.5 py-0.5 rounded sm:max-w-[360px]">{displayAlias()}/{row.id}</code>
+                  <code class="max-w-[72vw] truncate text-xs text-text-muted font-mono bg-sidebar px-1.5 py-0.5 rounded sm:max-w-[360px]">{fullModelId}</code>
                   <!-- Capability icons, mirroring the registered grid's row:
                        the same model id can be imported into a compatible
                        node, and a row that shows nothing there reads as a
@@ -5096,13 +5199,14 @@
         {/if}
         {#if providerThinkingLevels}
         <select
-          title="Appends (level) suffix to copied model names"
+          aria-label="Provider thinking mode"
+          title="Sets per-provider thinking override (and appends (level) suffix to copied model names when supported)"
           value={thinkingLevel}
           onchange={handleThinkingChange}
-          class="rounded-md border border-border bg-background px-2 py-1 text-xs focus:border-primary focus:outline-none cursor-pointer"
+          class="rounded-md border border-border bg-background px-2 py-1 text-xs focus:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer"
         >
           {#each providerThinkingLevels as opt (opt)}
-            <option value={opt}>Thinking: {opt.charAt(0).toUpperCase() + opt.slice(1)}</option>
+            <option value={opt}>Thinking: {formatThinkingOptionLabel(opt)}</option>
           {/each}
         </select>
         {/if}
@@ -5174,7 +5278,7 @@
           isLoading={isLoadingSession}
           expiresInMin={sessionExpiresInMin}
           onRefresh={loadFreebuffSession}
-          models={visibleModels.map((m) => ({ id: m.id, name: m.name }))}
+          models={visibleModels.map((m) => ({ id: m.id, name: m.name ?? m.id }))}
           onSwitch={switchFreebuffModel}
           connections={providerConnections.map((c) => {
             const specific = c.providerSpecificData as Record<string, any> | undefined
@@ -5342,12 +5446,25 @@
               </span>
             </div>
 
+            {#if model.isCustom}
+              <button
+                type="button"
+                onclick={() => {
+                  editingModel = providerCustomModels.find((c) => c.id === model.id) ?? null
+                  showAddCustomModelModal = !!editingModel
+                }}
+                class="shrink-0 rounded p-0.5 text-text-muted hover:bg-sidebar hover:text-primary cursor-pointer"
+                title="Edit model"
+              >
+                <span class="material-symbols-outlined text-sm">edit</span>
+              </button>
+            {/if}
             <!-- Disable button -->
             <button
               type="button"
-              onclick={() => handleDisableModel(model.id)}
+              onclick={() => (model.isCustom ? handleDeleteModel(model.id) : handleDisableModel(model.id))}
               class="ml-auto rounded p-0.5 text-text-muted transition-opacity hover:bg-red-500/10 hover:text-red-500 cursor-pointer"
-              title="Disable this model"
+              title={model.isCustom ? 'Delete this custom model' : 'Disable this model'}
             >
               <span class="material-symbols-outlined text-sm">close</span>
             </button>
@@ -5371,7 +5488,10 @@
       <!-- Add Model button inside the same flex-wrap -->
       <button
         type="button"
-        onclick={() => (showAddCustomModelModal = true)}
+        onclick={() => {
+          editingModel = null
+          showAddCustomModelModal = true
+        }}
         class="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-primary/40 px-3 py-2 text-xs text-primary transition-colors hover:border-primary hover:bg-primary/5 sm:w-auto cursor-pointer"
       >
         <span class="material-symbols-outlined text-sm">add</span>
@@ -6012,7 +6132,11 @@
 <AddCustomModelModal
   isOpen={showAddCustomModelModal}
   providerAlias={storageAlias}
-  onClose={() => (showAddCustomModelModal = false)}
+  editing={editingModel}
+  onClose={() => {
+    showAddCustomModelModal = false
+    editingModel = null
+  }}
   onSave={submitAddCustomModel}
   onBulkSaved={handleBulkModelsSaved}
 />
