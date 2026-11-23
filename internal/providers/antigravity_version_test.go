@@ -21,7 +21,7 @@ func TestParseAntigravityClientVersion(t *testing.T) {
 		},
 		{
 			name:      "hub shape, the pinned identity",
-			userAgent: "antigravity/hub/2.24.0 (os_type=windows; arch=amd64)",
+			userAgent: "antigravity/hub/2.24.0 darwin/arm64",
 			want:      "2.24.0",
 		},
 		{

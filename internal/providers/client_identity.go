@@ -46,16 +46,23 @@ const (
 	// was adopted for the same reason (the 'ide' flavor 404'd on Argon) and
 	// the Hub shape now serves both.
 	//
-	// The captured upstream UA reports darwin/arm64 — the host it ran on.
-	// The platform stays pinned to windows/amd64 anyway, for two reasons:
-	// every pooled account then presents one identical fingerprint rather
-	// than leaking the gateway's own platform, and antigravity_project.go
-	// sends "platform": 5 (WINDOWS_AMD64), which has to agree with what this
-	// header claims. Only the version moves on a bump.
-	AntigravityHubVersion   = "2.24.0"
+	// The UA is upstream's captured Hub string verbatim
+	// (open-sse/providers/shared.js ANTIGRAVITY_IDE_USER_AGENT). The earlier
+	// "(os_type=windows; arch=amd64)" suffix was the CLI lane's metadata
+	// grafted onto the Hub version: a string no real Hub or CLI client sends,
+	// shared by every pooled account. It stays darwin/arm64 regardless of
+	// the gateway host, and antigravity_project.go pins "platform": 2
+	// (DARWIN_ARM64) so the body agrees with the header. Only the version
+	// moves on a bump.
+	AntigravityHubVersion   = "2.34.0"
 	AntigravityCLIVersion   = AntigravityHubVersion
-	AntigravityCLIUserAgent = "antigravity/hub/" + AntigravityHubVersion + " (os_type=windows; arch=amd64)"
+	AntigravityCLIUserAgent = "antigravity/hub/" + AntigravityHubVersion + " darwin/arm64"
 	AntigravityIDEVersion   = AntigravityHubVersion
+	// AntigravityCLIReleaseBaseline is the `agy` CLI stable version the
+	// release watch compares the CLI auto-updater against. The updater only
+	// reports the CLI line (1.5.x), so comparing it with the Hub pin (2.x)
+	// could never report drift. Bump it after reviewing a new CLI release.
+	AntigravityCLIReleaseBaseline = "1.5.14"
 	// AntigravityIDEUserAgent is the hub shape on both lanes. Upstream's
 	// agy 1.5.9 capture (decolua/9router#1220) belongs to the CLI lane this
 	// fork no longer presents; the version the drift check compares against

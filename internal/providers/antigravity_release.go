@@ -138,19 +138,23 @@ func fetchAntigravityReleaseFrom(ctx context.Context, client *http.Client, url s
 	return rel, nil
 }
 
-// AntigravityReleaseDrift reports whether the released version is ahead of the
-// identity this gateway sends.
+// AntigravityReleaseDrift reports whether the released CLI version is ahead of
+// the CLI baseline this build was reviewed against.
 //
-// Only a released version strictly ahead of the pin counts. An equal or older
-// one is the healthy state, and an unreadable one is not drift — see
+// The updater reports the `agy` CLI line, so it is compared with
+// AntigravityCLIReleaseBaseline, not the Hub pin: the CLI (1.5.x) can never
+// order above the Hub (2.x), which left the watch unable to fire.
+//
+// Only a released version strictly ahead of the baseline counts. An equal or
+// older one is the healthy state, and an unreadable one is not drift — see
 // ParseAntigravityRelease.
 func AntigravityReleaseDrift(rel AntigravityRelease) AntigravityDrift {
-	d := AntigravityDrift{Pinned: AntigravityHubVersion}
+	d := AntigravityDrift{Pinned: AntigravityCLIReleaseBaseline}
 	if rel.Version == "" {
 		return d
 	}
 	d.Observed = rel.Version
-	d.Newer = CompareVersions(rel.Version, AntigravityHubVersion) > 0
+	d.Newer = CompareVersions(rel.Version, AntigravityCLIReleaseBaseline) > 0
 	return d
 }
 
@@ -221,7 +225,7 @@ func AntigravityDriftReason(d AntigravityDrift, rel AntigravityRelease) string {
 	var b strings.Builder
 	b.WriteString("client version drift: Antigravity released ")
 	b.WriteString(d.Observed)
-	b.WriteString(", this gateway sends ")
+	b.WriteString(", this build was last reviewed against ")
 	b.WriteString(d.Pinned)
 	if rel.RolloutPercent >= 0 {
 		b.WriteString(" (rollout ")

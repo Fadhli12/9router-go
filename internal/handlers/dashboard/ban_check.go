@@ -114,8 +114,8 @@ func (h *DashboardHandler) HandleBanCheck(w http.ResponseWriter, r *http.Request
 	if drift := antigravityDriftFor(conn.Provider); drift != nil {
 		handlerutil.WriteJSON(w, http.StatusConflict, BanCheckResponse{
 			State: banCheckStateRefused,
-			Message: "the gateway's Antigravity identity is stale (released " + drift.Released +
-				", this build sends " + drift.Pinned + "). A ban check is a real request on that " +
+			Message: "the gateway's Antigravity identity is stale (CLI released " + drift.Released +
+				", this build was last reviewed against " + drift.Pinned + "). A ban check is a real request on that " +
 				"fingerprint, so it is refused until the pinned identity is patched.",
 			Drift: drift,
 		})

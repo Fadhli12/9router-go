@@ -88,7 +88,7 @@ func TestForwardGemini_Headers_Injection(t *testing.T) {
 			}
 			cfg := &providers.ProviderConfig{BaseURL: baseURL, Format: tt.format}
 			body := `{"model":"gemini-3.8-flash-medium","messages":[{"role":"user","content":"hi"}]}`
-			_, err := ForwardGemini(ctx, srv.Client(), cfg, "ya29.fake", body, false, tt.projectID, "gemini-3.8-flash-medium")
+			_, err := ForwardGemini(ctx, srv.Client(), cfg, "ya29.fake", body, false, tt.projectID, "gemini-3.8-flash-medium", "")
 			if err != nil {
 				t.Fatalf("ForwardGemini() error = %v", err)
 			}

@@ -171,14 +171,14 @@ func TestAntigravityDriftRefusesWhileStale(t *testing.T) {
 		if d.Released != "99.0.0" {
 			t.Errorf("Released = %q, want 99.0.0", d.Released)
 		}
-		if d.Pinned != providers.AntigravityHubVersion {
-			t.Errorf("Pinned = %q, want %q", d.Pinned, providers.AntigravityHubVersion)
+		if d.Pinned != providers.AntigravityCLIReleaseBaseline {
+			t.Errorf("Pinned = %q, want %q", d.Pinned, providers.AntigravityCLIReleaseBaseline)
 		}
 	})
 
-	t.Run("the pinned version allows the check", func(t *testing.T) {
+	t.Run("the baseline version allows the check", func(t *testing.T) {
 		if d := antigravityDriftFrom("antigravity",
-			providers.AntigravityRelease{Version: providers.AntigravityHubVersion}, seen); d != nil {
+			providers.AntigravityRelease{Version: providers.AntigravityCLIReleaseBaseline}, seen); d != nil {
 			t.Errorf("drift = %+v when the identity matches; the button would be dead for no reason", d)
 		}
 	})

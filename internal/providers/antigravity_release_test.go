@@ -86,16 +86,29 @@ func TestAntigravityReleaseDrift(t *testing.T) {
 	t.Run("a newer release is drift", func(t *testing.T) {
 		d := AntigravityReleaseDrift(AntigravityRelease{Version: "99.0.0", RolloutPercent: 100})
 		if !d.Newer {
-			t.Errorf("Newer = false for 99.0.0 against the pinned %s", AntigravityHubVersion)
+			t.Errorf("Newer = false for 99.0.0 against the baseline %s", AntigravityCLIReleaseBaseline)
 		}
-		if d.Observed != "99.0.0" || d.Pinned != AntigravityHubVersion {
+		if d.Observed != "99.0.0" || d.Pinned != AntigravityCLIReleaseBaseline {
 			t.Errorf("drift = %+v", d)
 		}
 	})
 
-	t.Run("the pinned version is not drift", func(t *testing.T) {
-		if AntigravityReleaseDrift(AntigravityRelease{Version: AntigravityHubVersion}).Newer {
-			t.Error("Newer = true for the pinned version")
+	t.Run("the baseline version is not drift", func(t *testing.T) {
+		if AntigravityReleaseDrift(AntigravityRelease{Version: AntigravityCLIReleaseBaseline}).Newer {
+			t.Error("Newer = true for the baseline version")
+		}
+	})
+
+	// The updater reports the CLI line, which always orders below the Hub
+	// pin. Compared against the Hub pin, a real CLI release could never be
+	// drift and the watch was silently dead.
+	t.Run("a CLI release past the baseline is drift even below the hub pin", func(t *testing.T) {
+		next := "1.5.15"
+		if CompareVersions(next, AntigravityHubVersion) >= 0 {
+			t.Fatalf("fixture %s must order below the hub pin %s", next, AntigravityHubVersion)
+		}
+		if !AntigravityReleaseDrift(AntigravityRelease{Version: next}).Newer {
+			t.Errorf("Newer = false for CLI %s against baseline %s", next, AntigravityCLIReleaseBaseline)
 		}
 	})
 

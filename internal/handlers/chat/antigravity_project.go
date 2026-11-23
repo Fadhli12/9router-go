@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,10 +52,15 @@ func antigravityProjectUserAgent(connData *shared.ConnectionData) string {
 }
 
 var lcaMetadata = map[string]any{
-	"ideType":    9, // ANTIGRAVITY
-	"platform":   GetAntigravityPlatformEnum(runtime.GOOS, runtime.GOARCH),
+	"ideType": 9, // ANTIGRAVITY
+	// Pinned, not the host: the User-Agent claims darwin/arm64
+	// (providers.AntigravityCLIUserAgent), and a Linux gateway sending 4 here
+	// would contradict its own header on every pooled account.
+	"platform":   antigravityPinnedPlatform,
 	"pluginType": 2, // GEMINI
 }
+
+var antigravityPinnedPlatform = GetAntigravityPlatformEnum("darwin", "arm64")
 
 // GetAntigravityPlatformEnum maps the host (GOOS, GOARCH) to the Google Cloud
 // Code client platform enum sent in loadCodeAssist/onboardUser metadata.

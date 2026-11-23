@@ -45,7 +45,10 @@ func TestIsAntigravityClientProfile(t *testing.T) {
 
 func TestAntigravityUserAgentFor(t *testing.T) {
 	ide := AntigravityUserAgentFor(AntigravityProfileIDE)
-	if ide != "antigravity/hub/"+AntigravityIDEVersion+" (os_type=windows; arch=amd64)" {
+	// Upstream's captured Hub string verbatim (decolua/9router
+	// open-sse/providers/shared.js ANTIGRAVITY_IDE_USER_AGENT). The previous
+	// "(os_type=windows; arch=amd64)" suffix matched no real client.
+	if ide != "antigravity/hub/"+AntigravityIDEVersion+" darwin/arm64" {
 		t.Errorf("IDE user agent = %q, want the pinned hub shape", ide)
 	}
 	cli := AntigravityUserAgentFor(AntigravityProfileCLI)

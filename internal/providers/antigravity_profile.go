@@ -73,7 +73,7 @@ func (p AntigravityClientProfile) String() string { return string(p) }
 
 // AntigravityUserAgentFor returns the User-Agent header for the given profile.
 //
-//	ide → antigravity/<hub version> (os_type=…; arch=…)
+//	ide → antigravity/hub/<hub version> darwin/arm64
 //	cli → the same hub shape
 //
 // Both lanes present the Hub desktop fingerprint since the port of upstream
@@ -86,5 +86,5 @@ func AntigravityUserAgentFor(profile AntigravityClientProfile) string {
 	if profile == AntigravityProfileCLI {
 		return AntigravityCLIUserAgent
 	}
-	return "antigravity/hub/" + AntigravityIDEVersion + " (os_type=windows; arch=amd64)"
+	return "antigravity/hub/" + AntigravityIDEVersion + " darwin/arm64"
 }

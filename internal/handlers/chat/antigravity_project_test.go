@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -165,7 +164,9 @@ func TestAntigravityProbe_HeadersAndMetadata(t *testing.T) {
 	if gotBodyMeta["ideType"] != float64(9) {
 		t.Errorf("body metadata ideType = %v, want 9", gotBodyMeta["ideType"])
 	}
-	wantPlatform := float64(GetAntigravityPlatformEnum(runtime.GOOS, runtime.GOARCH))
+	// Pinned to DARWIN_ARM64 on every host so the body agrees with the
+	// darwin/arm64 User-Agent; the host enum leaked the gateway's own OS.
+	wantPlatform := float64(2)
 	if gotBodyMeta["platform"] != wantPlatform {
 		t.Errorf("body metadata platform = %v, want %d", gotBodyMeta["platform"], int(wantPlatform))
 	}
