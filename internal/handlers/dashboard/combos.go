@@ -55,7 +55,7 @@ func (h *DashboardHandler) HandleGetCombos(w http.ResponseWriter, r *http.Reques
 		}
 		combo.AutoMembers = smart.AutoMembers(rules)
 	}
-	handlerutil.WriteJSON(w, http.StatusOK, combos)
+	handlerutil.WriteJSON(w, http.StatusOK, toComboWire(combos))
 }
 
 // HandleCreateCombo handles POST /api/combos.

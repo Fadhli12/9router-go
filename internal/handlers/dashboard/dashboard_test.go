@@ -314,7 +314,7 @@ func TestCombosEndpoints(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var combos []*models.Combo
+	var combos []comboListRow
 	if err := json.Unmarshal(rec.Body.Bytes(), &combos); err != nil {
 		t.Fatalf("failed to unmarshal combos: %v", err)
 	}

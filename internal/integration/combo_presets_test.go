@@ -4,6 +4,7 @@ package integration
 
 import (
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/samber/lo"
@@ -152,25 +153,25 @@ func TestComboPresetsCreatedComboIsRoutable(t *testing.T) {
 	if res.Status != http.StatusOK {
 		t.Fatalf("GET /api/combos = %d, want 200 (body: %s)", res.Status, truncate(res.Body))
 	}
-	// The combos endpoint answers the stored row, where models is the JSON
-	// string the column holds rather than an array.
+	// The combos endpoint carries models as a JSON array on the wire, even
+	// though the column stores it as a JSON string.
 	var combos []struct {
-		Name   string `json:"name"`
-		Models string `json:"models"`
+		Name   string   `json:"name"`
+		Models []string `json:"models"`
 	}
 	res.Decode(t, &combos)
 
 	opusplan, ok := lo.Find(combos, func(c struct {
-		Name   string `json:"name"`
-		Models string `json:"models"`
+		Name   string   `json:"name"`
+		Models []string `json:"models"`
 	}) bool {
 		return c.Name == "opusplan"
 	})
 	if !ok {
 		t.Fatalf("created combos have no %q entry", "opusplan")
 	}
-	if want := `["cc/claude-opus-5"]`; opusplan.Models != want {
-		t.Errorf("opusplan models = %s, want %s", opusplan.Models, want)
+	if want := []string{"cc/claude-opus-5"}; !slices.Equal(opusplan.Models, want) {
+		t.Errorf("opusplan models = %v, want %v", opusplan.Models, want)
 	}
 }
 
@@ -214,27 +215,30 @@ func TestComboPresetsCursorCreateStoresSeededModels(t *testing.T) {
 		t.Fatalf("GET /api/combos = %d, want 200 (body: %s)", res.Status, truncate(res.Body))
 	}
 	var combos []struct {
-		Name   string `json:"name"`
-		Models string `json:"models"`
+		Name   string   `json:"name"`
+		Models []string `json:"models"`
 	}
 	res.Decode(t, &combos)
 
-	stored := make(map[string]string, len(combos))
+	stored := make(map[string][]string, len(combos))
 	for _, c := range combos {
 		stored[c.Name] = c.Models
 	}
-	for _, want := range []struct{ name, models string }{
-		{"default", `["cu/default"]`},
-		{"gpt-5.2-codex", `["cu/gpt-5.2-codex"]`},
-		{"gpt-5.3-codex", `["cu/gpt-5.3-codex"]`},
+	for _, want := range []struct {
+		name   string
+		models []string
+	}{
+		{"default", []string{"cu/default"}},
+		{"gpt-5.2-codex", []string{"cu/gpt-5.2-codex"}},
+		{"gpt-5.3-codex", []string{"cu/gpt-5.3-codex"}},
 	} {
 		got, ok := stored[want.name]
 		if !ok {
 			t.Errorf("created cursor combos have no %q entry", want.name)
 			continue
 		}
-		if got != want.models {
-			t.Errorf("combo %q models = %s, want %s", want.name, got, want.models)
+		if !slices.Equal(got, want.models) {
+			t.Errorf("combo %q models = %v, want %v", want.name, got, want.models)
 		}
 	}
 }

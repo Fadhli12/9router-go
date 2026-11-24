@@ -144,9 +144,9 @@ func TestApiKeysAreMaskedForApiKeyCallers(t *testing.T) {
 
 // comboRow is one row of GET /api/combos.
 type comboRow struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Models string `json:"models"`
+	ID     string   `json:"id"`
+	Name   string   `json:"name"`
+	Models []string `json:"models"`
 }
 
 // listCombos fetches every combo.
@@ -200,11 +200,11 @@ func TestComboLifecycleThroughTheDashboard(t *testing.T) {
 
 	t.Run("it is listed with its members", func(t *testing.T) {
 		found := requireCombo(t, listCombos(t, env), id)
-		if !strings.Contains(found.Models, "deepseek/deepseek-chat") {
-			t.Errorf("combo models = %q, want the first member persisted", found.Models)
+		if !lo.Contains(found.Models, "deepseek/deepseek-chat") {
+			t.Errorf("combo models = %v, want the first member persisted", found.Models)
 		}
-		if !strings.Contains(found.Models, "groq/llama-3.3-70b-versatile") {
-			t.Errorf("combo models = %q, want the second member persisted", found.Models)
+		if !lo.Contains(found.Models, "groq/llama-3.3-70b-versatile") {
+			t.Errorf("combo models = %v, want the second member persisted", found.Models)
 		}
 	})
 
@@ -217,8 +217,8 @@ func TestComboLifecycleThroughTheDashboard(t *testing.T) {
 		if res.Status != http.StatusOK {
 			t.Fatalf("PUT /api/combos/%s = %d, want 200 (body: %s)", id, res.Status, truncate(res.Body))
 		}
-		if got := requireCombo(t, listCombos(t, env), id).Models; strings.Contains(got, "deepseek/") {
-			t.Errorf("combo models = %q, want the removed member gone", got)
+		if got := requireCombo(t, listCombos(t, env), id).Models; lo.Contains(got, "deepseek/deepseek-chat") {
+			t.Errorf("combo models = %v, want the removed member gone", got)
 		}
 	})
 

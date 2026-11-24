@@ -89,7 +89,7 @@ func TestSmartComboRulesAreReachableThroughTheRouter(t *testing.T) {
 	}
 	var combos []struct {
 		ID          string   `json:"id"`
-		Models      string   `json:"models"`
+		Models      []string `json:"models"`
 		MatchRules  string   `json:"matchRules"`
 		AutoMembers []string `json:"autoMembers"`
 	}
