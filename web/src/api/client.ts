@@ -52,7 +52,8 @@ export interface Combo {
   id: string
   name: string
   kind: string | null
-  models: string // JSON array string
+  /** Array on the wire (upstream parity); older gateways sent a JSON array string. */
+  models: string | string[]
   strategy: string
   createdAt: string
   updatedAt: string
