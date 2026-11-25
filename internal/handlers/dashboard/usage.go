@@ -154,6 +154,7 @@ func (h *DashboardHandler) HandleGetConnectionUsage(w http.ResponseWriter, r *ht
 		}
 	}
 	if ok {
+		h.syncCodexPlanFromUsage(conn, data, res.plan)
 		resp := res.toResponse()
 		setCachedUsage(connID, resp)
 		handlerutil.WriteJSON(w, http.StatusOK, resp)

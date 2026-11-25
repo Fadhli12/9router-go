@@ -684,6 +684,7 @@
   let kiroCliProxyJson = $state('')
   let kiroSocialAuthUrl = $state('')
   let kiroSocialCallback = $state('')
+  let kiroSocialCodeVerifier = $state('')
   // OAuth auto-handoff: callback tab writes to storage + BroadcastChannel,
   // this modal restores the pending session and auto-submits.
   let autoSubmitted = $state(false)
@@ -1882,10 +1883,16 @@
     copiedAuthUrl = false
     try {
       const redirectUri = loopbackCallback()
+      // Behind a reverse proxy the dashboard origin carries no listener port,
+      // so the browser would send the code to localhost:80/443 where nothing
+      // listens. Ask the gateway to pin the loopback redirect to its own port;
+      // its /callback page records the code and the modal polls it back
+      // cross-origin through /api/oauth/callback-result.
+      const behindProxy = !['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)
       const res =
         providerId === 'agy-acp'
-          ? await api.getAGYACPAuthorizeUrl(redirectUri)
-          : await api.getAntigravityAuthorizeUrl(redirectUri)
+          ? await api.getAGYACPAuthorizeUrl(redirectUri, behindProxy)
+          : await api.getAntigravityAuthorizeUrl(redirectUri, behindProxy)
       oauthAuthUrl = res.authUrl || res.url || res.redirectUrl
       if (res.state) {
         rememberPending({
@@ -2011,6 +2018,7 @@
     showOAuthModal = false
     stopDevicePoll()
     stopCodexPoll()
+    kiroSocialCodeVerifier = ''
     if (providerId === 'codex') {
       void api.codexStopProxy().catch(() => {})
     }
@@ -2070,6 +2078,7 @@
     kiroRefreshToken = ''
     kiroCliProxyJson = ''
     kiroSocialAuthUrl = ''
+    kiroSocialCodeVerifier = ''
     kiroSocialCallback = ''
   }
 
@@ -2188,11 +2197,13 @@
   async function startKiroSocial(provider: 'google' | 'github') {
     oauthError = null
     kiroSocialAuthUrl = ''
+    kiroSocialCodeVerifier = ''
     kiroSocialCallback = ''
     isConnecting = true
     try {
       const res = await api.kiroSocialAuthorize(provider)
       kiroSocialAuthUrl = res.authUrl || res.url || ''
+      kiroSocialCodeVerifier = res.codeVerifier || ''
       if (typeof window !== 'undefined' && kiroSocialAuthUrl) {
         window.open(kiroSocialAuthUrl, '_blank', 'width=600,height=700')
       }
@@ -2230,7 +2241,7 @@
     oauthError = null
     isConnecting = true
     try {
-      await api.kiroSocialExchange(code)
+      await api.kiroSocialExchange(code, kiroSocialCodeVerifier, kiroMethod === 'social-github' ? 'github' : 'google')
       showOAuthModal = false
       resetKiroMethod()
       onRefresh()
@@ -5802,7 +5813,7 @@
           {/if}
           <input bind:value={kiroSocialCallback} placeholder="kiro://kiro.kiroAgent/authenticate-success?code=…" class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary font-mono" />
           <div class="flex gap-2">
-            <button type="button" onclick={() => { kiroMethod = null; kiroSocialAuthUrl = '' }} class="px-3 py-1.5 text-xs rounded-md border border-border bg-surface-2 hover:bg-surface-3 cursor-pointer">Back</button>
+            <button type="button" onclick={() => { kiroMethod = null; kiroSocialAuthUrl = ''; kiroSocialCodeVerifier = '' }} class="px-3 py-1.5 text-xs rounded-md border border-border bg-surface-2 hover:bg-surface-3 cursor-pointer">Back</button>
             <button type="button" onclick={submitKiroSocialCallback} disabled={isConnecting} class="px-3 py-1.5 text-xs font-semibold rounded-md bg-primary text-white disabled:opacity-50 cursor-pointer">{isConnecting ? 'Exchanging…' : 'Exchange code'}</button>
           </div>
         </div>

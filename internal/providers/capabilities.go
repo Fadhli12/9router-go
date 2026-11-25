@@ -296,6 +296,7 @@ var modelCapabilities = map[string]Capabilities{
 	// adding it to the Anthropic request builder too; until then these entries
 	// are knowingly incomplete on that one flag.
 	"claude-opus-5-5":          {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive", ThinkingCanDisable: new(false), ContextWindow: 1000000, MaxOutput: 128000},
+	"claude-opus-5-5-max":      {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive", ThinkingCanDisable: new(false), ContextWindow: 1000000, MaxOutput: 128000},
 	"claude-opus-5-5-thinking": {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive", ThinkingCanDisable: new(false), ContextWindow: 1000000, MaxOutput: 128000},
 	"claude-opus-5-5-high":     {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive", ThinkingCanDisable: new(false), ContextWindow: 1000000, MaxOutput: 128000},
 	"claude-opus-5-5-medium":   {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive", ThinkingCanDisable: new(false), ContextWindow: 1000000, MaxOutput: 128000},
@@ -331,6 +332,12 @@ var modelCapabilities = map[string]Capabilities{
 	"claude-sonnet-5-5-high":           {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive", ContextWindow: 1000000, MaxOutput: 128000},
 	"claude-sonnet-5-5-medium":         {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive", ContextWindow: 1000000, MaxOutput: 128000},
 	"claude-sonnet-5-5-low":            {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive", ContextWindow: 1000000, MaxOutput: 128000},
+	"claude-sonnet-5-5-max":            {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive", ContextWindow: 1000000, MaxOutput: 128000},
+	"gemini-4-neon":                    {Vision: true, PDF: true, AudioInput: true, VideoInput: true, Reasoning: true, Search: true, Tools: true, ContextWindow: 1000000, MaxOutput: 65536},
+	"gemini-4-neon-high":               {Vision: true, PDF: true, AudioInput: true, VideoInput: true, Reasoning: true, Search: true, Tools: true, ContextWindow: 1000000, MaxOutput: 65536},
+	"gemini-4-neon-xhigh":              {Vision: true, PDF: true, AudioInput: true, VideoInput: true, Reasoning: true, Search: true, Tools: true, ContextWindow: 1000000, MaxOutput: 65536},
+	"gemini-4-neon-medium":             {Vision: true, PDF: true, AudioInput: true, VideoInput: true, Reasoning: true, Search: true, Tools: true, ContextWindow: 1000000, MaxOutput: 65536},
+	"gemini-4-neon-low":                {Vision: true, PDF: true, AudioInput: true, VideoInput: true, Reasoning: true, Search: true, Tools: true, ContextWindow: 1000000, MaxOutput: 65536},
 	"claude-sonnet-5":                  {Vision: true, PDF: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive", ContextWindow: 1000000, MaxOutput: 128000},
 	"claude-sonnet-5-thinking":         {Vision: true, PDF: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive", ContextWindow: 1000000, MaxOutput: 128000},
 	"claude-sonnet-5-agentic":          {Vision: true, PDF: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive", ContextWindow: 1000000, MaxOutput: 128000},
@@ -417,6 +424,8 @@ var modelCapabilities = map[string]Capabilities{
 	"kimi-k3":                   {Vision: true, VideoInput: true, Reasoning: true, Tools: true, ThinkingFormat: "kimi", ThinkingCanDisable: new(false), ContextWindow: 1048576, MaxOutput: 131072},
 	"k3":                        {Vision: true, VideoInput: true, Reasoning: true, Tools: true, ThinkingFormat: "kimi", ThinkingCanDisable: new(false), ContextWindow: 1048576, MaxOutput: 131072},
 	"kimi-k3.1-pro":             {Vision: true, VideoInput: true, Reasoning: true, Tools: true, ThinkingFormat: "kimi", ThinkingCanDisable: new(false), ContextWindow: 1048576, MaxOutput: 131072},
+	"k3.1-pro":                  {Vision: true, VideoInput: true, Reasoning: true, Tools: true, ThinkingFormat: "kimi", ThinkingCanDisable: new(false), ContextWindow: 1048576, MaxOutput: 131072},
+	"k3.1-pro-highspeed":        {Vision: true, VideoInput: true, Reasoning: true, Tools: true, ThinkingFormat: "kimi", ThinkingCanDisable: new(false), ContextWindow: 1048576, MaxOutput: 131072},
 	"kimi-for-coding":           {Vision: true, VideoInput: true, Reasoning: true, Tools: true, ThinkingFormat: "kimi", ThinkingCanDisable: new(false), ContextWindow: 262144, MaxOutput: 65536},
 	"kimi-for-coding-highspeed": {Vision: true, VideoInput: true, Reasoning: true, Tools: true, ThinkingFormat: "kimi", ThinkingCanDisable: new(false), ContextWindow: 262144, MaxOutput: 65536},
 	"kimi-k2.7-code":            {Vision: true, VideoInput: true, Reasoning: true, Tools: true, ThinkingFormat: "kimi", ThinkingCanDisable: new(false), ContextWindow: 262144, MaxOutput: 65536},
@@ -515,7 +524,7 @@ var providerCapabilities = map[string]map[string]Capabilities{
 		"nvidia/nemotron-3.5-bolt-e4b":                  {Tools: true, ContextWindow: 128000, MaxOutput: 8192},
 		"nvidia/nemotron-3.5-lightning-30b-a3b":         {Reasoning: true, ThinkingFormat: "openai", ContextWindow: 128000, MaxOutput: 8192},
 		"nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": {Reasoning: true, ThinkingFormat: "openai", ContextWindow: 128000, MaxOutput: 8192},
-		"nvidia/nemotron-3-ultra-550b-a55b":             {Reasoning: true, ThinkingFormat: "openai", ContextWindow: 128000, MaxOutput: 8192},
+		"nvidia/nemotron-3-ultra-550b-a55b":             {Tools: true, Reasoning: true, ThinkingFormat: "openai", ContextWindow: 1000000, MaxOutput: 8192},
 		"poolside/laguna-xs-2.1":                        {Tools: true, ContextWindow: 200000, MaxOutput: 32000},
 		"meta/llama-guard-4-12b":                        {ContextWindow: 128000, MaxOutput: 4096},
 		"nvidia/riva-translate-4b-instruct-v2":          {ContextWindow: 128000, MaxOutput: 4096},
@@ -536,16 +545,20 @@ var providerCapabilities = map[string]map[string]Capabilities{
 		// capabilities.js), which differ from both the OpenAI API's and the
 		// sibling GPT-5.6 models' — Sol is wider than Terra/Luna, and the [1m]
 		// variants are wider again.
-		"gpt-6-astra": codexGpt56Caps(272000),
-		"gpt-6-sol":   codexGpt56Caps(272000),
-		"gpt-6-luna":  codexGpt56Caps(272000),
-		"gpt-6.1-sol": codexGpt56Caps(272000),
+		"gpt-6-astra":   codexGpt56Caps(272000),
+		"gpt-6-sol":     codexGpt56Caps(272000),
+		"gpt-6-luna":    codexGpt56Caps(272000),
+		"gpt-6.1-sol":   codexGpt56Caps(272000),
+		"gpt-6.2-astra": codexGpt56Caps(272000),
+		"gpt-6.2-sol":   codexGpt56Caps(272000),
 		// codex-rs/models-manager/models.json: gpt-6.1-terra carries a 500k
 		// window on Codex (the API model is 1.05M; Codex caps the default
 		// window like its siblings).
 		"gpt-6.1-terra":          codexGpt56Caps(500000),
 		"gpt-6-astra[1m]":        codexGpt56Caps(codexExtendedContextWindow),
 		"gpt-6-sol[1m]":          codexGpt56Caps(codexExtendedContextWindow),
+		"gpt-6.2-astra[1m]":      codexGpt56Caps(codexExtendedContextWindow),
+		"gpt-6.2-sol[1m]":        codexGpt56Caps(codexExtendedContextWindow),
 		"gpt-6-luna[1m]":         codexGpt56Caps(codexExtendedContextWindow),
 		"gpt-5.6-sol":            codexGpt56Caps(372000),
 		"gpt-5.6-sol[1m]":        codexGpt56Caps(codexExtendedContextWindow),
@@ -674,6 +687,11 @@ var providerCapabilities = map[string]map[string]Capabilities{
 		"gemini-4-hydrogen-medium": {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
 		"gemini-4-hydrogen-low":    {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
 		"gemini-4-hydrogen":        {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-neon-xhigh":      {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-neon-high":       {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-neon-medium":     {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-neon-low":        {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"gemini-4-neon":            {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
 		"gemini-3.8-flash-high":    {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
 		"gemini-3.8-flash-medium":  {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
 		"gemini-3.8-flash-low":     {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
@@ -692,6 +710,8 @@ var providerCapabilities = map[string]map[string]Capabilities{
 		"claude-opus-5-5-medium":   {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
 		"claude-opus-5-5-low":      {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
 		"claude-opus-5-5":          {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"claude-sonnet-5-5-max":    {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
+		"claude-opus-5-5-max":      {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
 		"claude-sonnet-4-6":        {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
 		"claude-opus-4-6-thinking": {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
 		"gpt-oss-120b-medium":      {Vision: true, Reasoning: true, Tools: true, ContextWindow: 1000000},
@@ -880,9 +900,16 @@ func init() {
 	// zcode: ZCode start-plan lane. The gateway accepts the Anthropic Messages
 	// wire with the same GLM models as the apikey lane; thinking follows the
 	// zai format (the executor already maps it).
+	//
+	// glm-5.4 is published by the models.dev coding-plan feed
+	// (`zai-coding-plan`/`zhipuai-coding-plan`) with a 1M window. It is not yet
+	// in upstream's static capabilities table, whose `*glm-5*` catch-all would
+	// otherwise answer 200k. Keep the static fallback here, and let the
+	// catalog alias in catalog_sync.go make the feed authoritative when loaded.
 	providerCapabilities["zcode"] = map[string]Capabilities{
 		"glm-5.3":       {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "zai", ThinkingCanDisable: new(false), ContextWindow: 1000000, MaxOutput: 131072},
 		"glm-5.3-flash": {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "zai", ThinkingCanDisable: new(false), ContextWindow: 1000000, MaxOutput: 131072},
+		"glm-5.4":       {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "zai", ThinkingCanDisable: new(false), ContextWindow: 1000000, MaxOutput: 131072},
 	}
 	// DaoXE (daoxe) — OpenAI-compatible free tier
 	providerCapabilities["daoxe"] = map[string]Capabilities{
@@ -1004,7 +1031,10 @@ func init() {
 	// the same model. pixtral-large/mistral-small-4/saba have no published
 	// window yet and keep the conservative default.
 	providerCapabilities["mistral"] = map[string]Capabilities{
-		"pixtral-12b-2409": {Vision: true, Tools: true, ContextWindow: 128000, MaxOutput: 128000},
+		"mistral-large-latest": {Vision: true, Tools: true, ContextWindow: 1048576},
+		"mistral-large-4":      {Vision: true, Tools: true, ContextWindow: 1048576},
+		"mistral-large-4-0":    {Vision: true, Tools: true, ContextWindow: 1048576},
+		"pixtral-12b-2409":     {Vision: true, Tools: true, ContextWindow: 128000, MaxOutput: 128000},
 	}
 
 	// Cloudflare llama-3.1 fast/awq variants share the 32000 window the

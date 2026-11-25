@@ -32,7 +32,7 @@ import (
 // CurrentVersion is the active 9router-go application version.
 // Can be overridden at build time via -ldflags "-X 9router/proxy/internal/updater.CurrentVersion=1.8.8"
 // Default fallback is read from version.json at init if not overridden.
-var CurrentVersion = "1.9.17-exp.13"
+var CurrentVersion = "1.9.17-exp.16"
 
 // DefaultUpdateURL is the primary remote version manifest URL.
 var DefaultUpdateURL = "https://raw.githubusercontent.com/luqman-v1/9router-go/main/version.json"
@@ -195,7 +195,6 @@ func CheckUpdate(ctx context.Context) (*UpdateInfo, error) {
 		// is not an answer, only a lead. Keep it as the fallback so an outage
 		// in the Releases API still shows the notes.
 		log.Debug("updater", "manifest has no sha256, trying github releases", "url", updateURL)
-		manifestErr = fmt.Errorf("manifest carries no sha256 for %s", info.LatestVersion)
 	}
 
 	// 2. Fallback to GitHub Releases API
@@ -211,6 +210,10 @@ func CheckUpdate(ctx context.Context) (*UpdateInfo, error) {
 	if ghErr == nil && ghInfo != nil {
 		cacheUpdateInfo(ghInfo)
 		return ghInfo, nil
+	}
+	if info != nil {
+		cacheUpdateInfo(info)
+		return info, nil
 	}
 
 	if manifestErr != nil {
@@ -459,11 +462,15 @@ func PerformSelfUpdate(downloadURL, expectedSHA256 string) error {
 	log.Info("updater", "downloading update asset", "url", downloadURL, "target", execPath)
 
 	client := &http.Client{Timeout: 90 * time.Second}
-	resp, err := client.Get(downloadURL)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return fmt.Errorf("create download request: %w", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("download binary asset: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download asset returned status %d", resp.StatusCode)
@@ -815,7 +822,7 @@ func runCheckCycle(ctx context.Context) {
 // earlier races it for the port. main runs the hook once fxApp.Stop has closed
 // the listener, so the new process always finds the port free.
 func RestartSelf() {
-	execPath, err := os.Executable()
+	execPath, err := selfExecutable()
 	if err != nil {
 		log.Error("updater", "locate binary for restart failed", "error", err)
 		return
