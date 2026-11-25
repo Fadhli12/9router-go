@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"9router/proxy/internal/auth"
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlers/shared"
 	"9router/proxy/internal/middleware"
@@ -67,7 +68,6 @@ type DashboardHandler struct {
 	ChatProbe ChatBanProber
 }
 
-// NewDashboardHandler initializes a DashboardHandler with the provided Repo.
 func NewDashboardHandler(repo *db.Repo, ts ...*shared.TokenSaverConfig) *DashboardHandler {
 	h := &DashboardHandler{
 		Repo:              repo,
@@ -82,6 +82,15 @@ func NewDashboardHandler(repo *db.Repo, ts ...*shared.TokenSaverConfig) *Dashboa
 	// StartJailbreakSync, and a handler built outside a boot still answers the
 	// source endpoints by opening a store over the same repository.
 	return h
+}
+
+// refreshSessionEpoch reinstalls the in-memory revocation state from the stored
+// settings, the way boot does. Every handler that writes a password outside
+// `changeDashboardPassword` — the reset that clears the hash, the setup wizard
+// that writes the first one — must call this, or a token captured before the
+// write keeps verifying against the stale fingerprint until a restart.
+func (h *DashboardHandler) refreshSessionEpoch() {
+	auth.LoadSessionEpoch(h.Repo)
 }
 
 // SetJailbreakSync installs the running worker behind the sync endpoints. The
@@ -223,6 +232,7 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Get("/jailbreak/models/catalog", h.HandleJailbreakModelCatalog)
 		r.Put("/jailbreak/models", h.HandleSetJailbreakModel)
 		r.Put("/jailbreak/keys/model", h.HandleSetJailbreakKeyModel)
+		r.Delete("/jailbreak/keys/model", h.HandleDeleteJailbreakKeyModel)
 		r.Get("/jailbreak/keys/bindings", h.HandleListJailbreakKeyBindings)
 		r.Delete("/jailbreak/models", h.HandleDeleteJailbreakModel)
 		r.Get("/jailbreak/excludes", h.HandleGetJailbreakExcludes)
@@ -260,6 +270,10 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Post("/settings/database/prune", h.HandlePruneDatabase)
 		r.Post("/settings/database/prune-usage", h.HandlePruneUsageHistory)
 		r.Post("/settings/database/vacuum", h.HandleVacuumDatabase)
+		// Process control. Registered here and in SetupDashboardRoutes: this
+		// table is mounted by tests only, so a route added here alone 404s on
+		// the real server.
+		r.Post("/system/restart", h.HandleRestartGateway)
 		r.Post("/settings/proxy-test", h.HandleProxyTest)
 		// White-label logo upload: the file lands under DATA_DIR/uploads and
 		// appLogoUrl is rewritten to the path this gateway serves it from.
@@ -310,6 +324,14 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Get("/resilience", h.HandleGetResilience)
 		r.Post("/resilience/reset", h.HandleResetResilience)
 		r.Post("/resilience/suspensions/clear", h.HandleClearSuspension)
+
+		// Per-model circuit breaker (one provider/model pair, distinct from the
+		// provider breaker above). Static before the parameterised reset so a
+		// request to reset everything is not read as a reset of the model named
+		// "reset".
+		r.Get("/model-breakers", h.HandleGetModelBreakers)
+		r.Post("/model-breakers/reset", h.HandleResetAllModelBreakers)
+		r.Post("/model-breakers/{provider}/{model}/reset", h.HandleResetModelBreaker)
 		r.Get("/cache", h.HandleGetCache)
 		r.Delete("/cache", h.HandleDeleteCache)
 		r.Get("/cache/entries", h.HandleGetCacheEntries)

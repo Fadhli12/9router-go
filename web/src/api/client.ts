@@ -1095,6 +1095,25 @@ export interface CacheEntriesResponse {
   }
 }
 
+/** One provider/model pair's circuit breaker snapshot. */
+export interface ModelBreakerStatus {
+  /** `closed` serves normally; `cooling` sits out a cooldown; `disabled` needs a reset. */
+  state: 'closed' | 'cooling' | 'disabled'
+  provider: string
+  model: string
+  /** Consecutive model-scoped failures since the last success. */
+  failures: number
+  /** Cooldown cycles already served, which is what makes the next one longer. */
+  cooldowns: number
+  /** Milliseconds until the pair is probed again. 0 when there is no timer. */
+  retryAfterMs: number
+}
+
+/** The panel response: held-back pairs ordered first by the backend. */
+export interface ModelBreakerStatusResponse {
+  models: ModelBreakerStatus[]
+}
+
 export interface CompressionModeStats {
   count: number
   tokensSaved: number
@@ -2274,6 +2293,14 @@ export const api = {
       '/api/settings/database/vacuum',
       { method: 'POST' }
     ),
+  // The body carries the confirmation word: the gateway ignores a restart
+  // request that could not set a JSON body, so a cross-site form post cannot
+  // stop the process.
+  restartGateway: () =>
+    request<{ success: boolean; restarting: boolean }>('/api/system/restart', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: 'restart' }),
+    }),
   testRtk: (data: { text: string; config?: Record<string, unknown> }) =>
     request<{
       originalTokens: number
@@ -2337,18 +2364,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ connectionId, model }),
     }),
-  getAntigravityAuthorizeUrl: (redirectUri: string) =>
+  getAntigravityAuthorizeUrl: (redirectUri: string, proxy = false) =>
     request<{ url: string; redirectUrl: string; authUrl: string; state: string; redirectUri: string }>(
-      `/api/oauth/antigravity/authorize?redirect_uri=${encodeURIComponent(redirectUri)}`,
+      `/api/oauth/antigravity/authorize?redirect_uri=${encodeURIComponent(redirectUri)}${proxy ? '&proxy=1' : ''}`,
     ),
   antigravityExchange: (code: string, redirectUri: string, state?: string) =>
     request<{ success: boolean; error?: string }>('/api/oauth/antigravity/exchange', {
       method: 'POST',
       body: JSON.stringify({ code, redirectUri, state }),
     }),
-  getAGYACPAuthorizeUrl: (redirectUri: string) =>
+  getAGYACPAuthorizeUrl: (redirectUri: string, proxy = false) =>
     request<{ url: string; redirectUrl: string; authUrl: string; state: string; redirectUri: string }>(
-      `/api/oauth/agy-acp/authorize?redirect_uri=${encodeURIComponent(redirectUri)}`,
+      `/api/oauth/agy-acp/authorize?redirect_uri=${encodeURIComponent(redirectUri)}${proxy ? '&proxy=1' : ''}`,
     ),
   agyACPExchange: (code: string, redirectUri: string, state?: string) =>
     request<{ success: boolean; error?: string }>('/api/oauth/agy-acp/exchange', {
@@ -2976,6 +3003,58 @@ export const api = {
     } catch {}
     return { requireLogin: false }
   },
+  // the dashboard password from the browser before the first login. The
+  // server only accepts this from a loopback peer while no password is stored.
+  getSetup: async (): Promise<{ status: boolean; databaseType: string }> => {
+    const res = await fetch('/api/setup')
+    if (!res.ok) return { status: false, databaseType: 'sqlite' }
+    const data = await res.json()
+    return { status: !!data.status, databaseType: data.databaseType || 'sqlite' }
+  },
+  setup: async (
+    password: string,
+    advancedMode?: boolean
+  ): Promise<{ success: boolean; error?: string }> => {
+    const res = await fetch('/api/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password, ...(advancedMode === undefined ? {} : { advancedMode }) }),
+    })
+    if (res.ok) {
+      sessionStorage.setItem('9router_auth', 'true')
+      localStorage.setItem('9router_auth', 'true')
+      return { success: true }
+    }
+    let errText = 'Setup failed'
+    try {
+      const errJson = await res.json()
+      errText = errJson.error?.message || errJson.error || errJson.message || errText
+    } catch {}
+    return { success: false, error: errText }
+  },
+  // Skip the password step: the dashboard answers without a login (the same
+  // switch Settings > Security exposes as "Require login"), so this is only
+  // offered on a fresh install from the local machine.
+  setupSkip: async (): Promise<{ success: boolean; error?: string }> => {
+    const res = await fetch('/api/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ skipPassword: true }),
+    })
+    if (res.ok) {
+      // The server sets the httpOnly auth_token cookie on success; the client
+      // gate mirrors what api.login does.
+      sessionStorage.setItem('9router_auth', 'true')
+      localStorage.setItem('9router_auth', 'true')
+      return { success: true }
+    }
+    let errText = 'Setup failed'
+    try {
+      const errJson = await res.json()
+      errText = errJson.error?.message || errJson.error || errJson.message || errText
+    } catch {}
+    return { success: false, error: errText }
+  },
   login: async (password: string, newPassword?: string): Promise<LoginResponse> => {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
@@ -3057,6 +3136,19 @@ export const api = {
       request<CompressionAnalyticsSummary>(
         `/api/analytics/compression?period=${encodeURIComponent(period)}`
       ),
+    // Per-model circuit breaker: one provider/model pair, distinct from the
+    // provider breaker. `retryAfterMs` is 0 for a pair that does not come
+    // back on a timer (closed, or disabled).
+    getModelBreakers: () => request<ModelBreakerStatusResponse>('/api/model-breakers'),
+    /** Lifts one pair. The only way a disabled model serves again. */
+    resetModelBreaker: (provider: string, model: string) =>
+      request<{ status: string }>(
+        `/api/model-breakers/${encodeURIComponent(provider)}/${encodeURIComponent(model)}/reset`,
+        { method: 'POST' }
+      ),
+    /** Lifts every pair, for after a provider-wide outage. */
+    resetAllModelBreakers: () =>
+      request<{ status: string }>('/api/model-breakers/reset', { method: 'POST' }),
   logout: async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST' })
@@ -3160,6 +3252,14 @@ export const api = {
         body: JSON.stringify({ keyId, id, presetId, enabled }),
       },
     ),
+  // Drop one key-scoped binding outright. The per-key delete button calls this;
+  // unlike setJailbreakKeyModel('off'), which only turns the row off, this
+  // removes it. The same model's global binding is untouched.
+  deleteJailbreakKeyModel: (keyId: string, id: string) =>
+    request<{ ok: boolean; keyId: string; id: string }>('/api/jailbreak/keys/model', {
+      method: 'DELETE',
+      body: JSON.stringify({ keyId, id }),
+    }),
   deleteJailbreakModel: (id: string) =>
     request<{ ok: boolean; id: string }>('/api/jailbreak/models', {
       method: 'DELETE',

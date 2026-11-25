@@ -26,6 +26,7 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "alicode-intl": "alicode-intl",
   "alims-intl": "alims-intl",
   "alitp-intl": "alitp-intl",
+  "qwencloud": "qwencloud",
   "anthropic": "anthropic",
   "antigravity": "ag",
   "agy-acp": "agcpy",
@@ -1019,9 +1020,25 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   ],
   "cloudflare-ai":   [
     {
+      "id": "@cf/cloudflare/clef",
+      "name": "Clef",
+      "kind": "systemone"
+    },
+    {
+      "id": "@cf/cloudflare/clef-omni",
+      "name": "Clef Omni",
+      "kind": "systemone"
+    },
+    {
       "id": "@cf/cloudflare/clef-flash",
       "name": "Clef Flash",
       "kind": "systemone"
+    },
+    {
+      "id": "@cf/cloudflare/clairic",
+      "name": "Clairic",
+      "kind": "systemone",
+      "payloadShape": "fields"
     },
     {
       "id": "@cf/meta/llama-3.1-8b-instruct-awq",
@@ -1184,6 +1201,25 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "transcribe",
       "name": "Codex Transcription"
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "name": "GPT 6.2 Sol",
+      "upstreamModelId": "gpt-6.2-sol"
+    },
+    {
+      "id": "gpt-6.2-sol[1m]",
+      "name": "GPT 6.2 Sol (extended context)",
+      "upstreamModelId": "gpt-6.2-sol"
+    },
+    {
+      "id": "gpt-6.2-astra",
+      "name": "GPT 6.2 Astra"
+    },
+    {
+      "id": "gpt-6.2-astra[1m]",
+      "name": "GPT 6.2 Astra (extended context)",
+      "upstreamModelId": "gpt-6.2-astra"
     },
     {
       "id": "gpt-6.1-sol",
@@ -4287,8 +4323,64 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "name": "Nemotron 3 Ultra"
     },
     {
-      "id": "nvidia/nv-embedqa-e5-v5",
-      "name": "NV EmbedQA E5 v5",
+      "id": "nvidia/nemotron-3.5-embed-8b",
+      "name": "Nemotron 3.5 Embed 8B",
+      "params": [
+        "input_type"
+      ],
+      "kind": "embedding"
+    },
+    {
+      "id": "nvidia/nemotron-3.5-embed-1b",
+      "name": "Nemotron 3.5 Embed 1B",
+      "params": [
+        "input_type"
+      ],
+      "kind": "embedding"
+    },
+    {
+      "id": "nvidia/nemotron-3-embed-1b",
+      "name": "Nemotron 3 Embed 1B",
+      "params": [
+        "input_type"
+      ],
+      "kind": "embedding"
+    },
+    {
+      "id": "nvidia/nv-embedqa-mistral-7b-v2",
+      "name": "NV EmbedQA Mistral 7B v2",
+      "params": [
+        "input_type"
+      ],
+      "kind": "embedding"
+    },
+    {
+      "id": "nvidia/embed-qa-4",
+      "name": "Embed QA 4",
+      "params": [
+        "input_type"
+      ],
+      "kind": "embedding"
+    },
+    {
+      "id": "nvidia/llama-3.2-nemoretriever-1b-vlm-embed-v1",
+      "name": "Llama 3.2 Nemoretriever 1B VLM Embed v1",
+      "params": [
+        "input_type"
+      ],
+      "kind": "embedding"
+    },
+    {
+      "id": "nvidia/llama-3.2-nv-embedqa-1b-v1",
+      "name": "Llama 3.2 NV EmbedQA 1B v1",
+      "params": [
+        "input_type"
+      ],
+      "kind": "embedding"
+    },
+    {
+      "id": "nvidia/nvclip",
+      "name": "NVCLIP",
       "kind": "embedding"
     },
     {
@@ -7361,30 +7453,39 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     }
   ],
   "alitp-intl": [
-    {
-      "id": "qwen3.8-max-preview",
-      "name": "Qwen3.8 Max Preview"
-    },
-    {
-      "id": "qwen3.7-max",
-      "name": "Qwen3.7 Max"
-    },
-    {
-      "id": "qwen3.7-plus",
-      "name": "Qwen3.7 Plus"
-    },
-    {
-      "id": "qwen3.6-flash",
-      "name": "Qwen3.6 Flash"
-    },
-    {
-      "id": "glm-5.2",
-      "name": "GLM 5.2"
-    },
-    {
-      "id": "deepseek-v4-pro",
-      "name": "DeepSeek V4 Pro"
-    }
+    {"id": "auto", "name": "Auto"},
+    {"id": "qwen4-max", "name": "Qwen4 Max"},
+    {"id": "qwen4-max-preview", "name": "Qwen4 Max Preview"},
+    {"id": "qwen3.8-max", "name": "Qwen3.8 Max"},
+    {"id": "qwen3.8-max-preview", "name": "Qwen3.8 Max Preview"},
+    {"id": "qwen3.8-flash", "name": "Qwen3.8 Flash"},
+    {"id": "qwen3.7-max", "name": "Qwen3.7 Max"},
+    {"id": "qwen3.7-plus", "name": "Qwen3.7 Plus"},
+    {"id": "qwen3.6-flash", "name": "Qwen3.6 Flash"},
+    {"id": "glm-5.3", "name": "GLM 5.3"},
+    {"id": "glm-5.2", "name": "GLM 5.2"},
+    {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro"},
+    {"id": "deepseek-v4-pro-0813", "name": "DeepSeek V4 Pro 0813"},
+    {"id": "deepseek-v4-flash-0731", "name": "DeepSeek V4 Flash 0731"},
+    {"id": "deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash"},
+    {"id": "deepseek-v4.1-flash-1017", "name": "DeepSeek V4.1 Flash 1017"}
+  ],
+  "qwencloud": [
+    {"id": "auto", "name": "Auto"},
+    {"id": "qwen4-max", "name": "Qwen4 Max"},
+    {"id": "qwen4-max-preview", "name": "Qwen4 Max Preview"},
+    {"id": "qwen3.8-max", "name": "Qwen3.8 Max"},
+    {"id": "qwen3.8-flash", "name": "Qwen3.8 Flash"},
+    {"id": "qwen3.7-max", "name": "Qwen3.7 Max"},
+    {"id": "qwen3.7-plus", "name": "Qwen3.7 Plus"},
+    {"id": "qwen3.6-flash", "name": "Qwen3.6 Flash"},
+    {"id": "glm-5.3", "name": "GLM 5.3"},
+    {"id": "glm-5.2", "name": "GLM 5.2"},
+    {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro"},
+    {"id": "deepseek-v4-pro-0813", "name": "DeepSeek V4 Pro 0813"},
+    {"id": "deepseek-v4-flash-0731", "name": "DeepSeek V4 Flash 0731"},
+    {"id": "deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash"},
+    {"id": "deepseek-v4.1-flash-1017", "name": "DeepSeek V4.1 Flash 1017"}
   ],
   "openai-tts-models": [
     {

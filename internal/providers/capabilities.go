@@ -545,16 +545,20 @@ var providerCapabilities = map[string]map[string]Capabilities{
 		// capabilities.js), which differ from both the OpenAI API's and the
 		// sibling GPT-5.6 models' — Sol is wider than Terra/Luna, and the [1m]
 		// variants are wider again.
-		"gpt-6-astra": codexGpt56Caps(272000),
-		"gpt-6-sol":   codexGpt56Caps(272000),
-		"gpt-6-luna":  codexGpt56Caps(272000),
-		"gpt-6.1-sol": codexGpt56Caps(272000),
+		"gpt-6-astra":   codexGpt56Caps(272000),
+		"gpt-6-sol":     codexGpt56Caps(272000),
+		"gpt-6-luna":    codexGpt56Caps(272000),
+		"gpt-6.1-sol":   codexGpt56Caps(272000),
+		"gpt-6.2-astra": codexGpt56Caps(272000),
+		"gpt-6.2-sol":   codexGpt56Caps(272000),
 		// codex-rs/models-manager/models.json: gpt-6.1-terra carries a 500k
 		// window on Codex (the API model is 1.05M; Codex caps the default
 		// window like its siblings).
 		"gpt-6.1-terra":          codexGpt56Caps(500000),
 		"gpt-6-astra[1m]":        codexGpt56Caps(codexExtendedContextWindow),
 		"gpt-6-sol[1m]":          codexGpt56Caps(codexExtendedContextWindow),
+		"gpt-6.2-astra[1m]":      codexGpt56Caps(codexExtendedContextWindow),
+		"gpt-6.2-sol[1m]":        codexGpt56Caps(codexExtendedContextWindow),
 		"gpt-6-luna[1m]":         codexGpt56Caps(codexExtendedContextWindow),
 		"gpt-5.6-sol":            codexGpt56Caps(372000),
 		"gpt-5.6-sol[1m]":        codexGpt56Caps(codexExtendedContextWindow),
@@ -762,6 +766,24 @@ var providerCapabilities = map[string]map[string]Capabilities{
 	"commandcode": {
 		"claude-haiku-5-5": {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "commandcode", ThinkingEffortSupported: true, ContextWindow: 1000000, MaxOutput: 128000},
 	},
+	"alitp-intl": {
+		"qwen4-max":            {Vision: true, VideoInput: true, Reasoning: true, ThinkingFormat: "qwen", ContextWindow: 1000000, MaxOutput: 393216},
+		"qwen4-max-preview":    {Vision: true, VideoInput: true, Reasoning: true, ThinkingFormat: "qwen", ContextWindow: 1000000, MaxOutput: 393216},
+		"qwen3.8-max":          {Vision: true, VideoInput: true, Reasoning: true, ThinkingFormat: "qwen", ContextWindow: 1000000, MaxOutput: 131072},
+		"qwen3.8-flash":        {Vision: true, Reasoning: true, ThinkingFormat: "qwen", ContextWindow: 1000000, MaxOutput: 131072},
+		"qwen3.7-max":          {Vision: false, Reasoning: true, ThinkingFormat: "qwen", ContextWindow: 1000000, MaxOutput: 131072},
+		"qwen3.7-plus":         {Vision: true, Reasoning: true, ThinkingFormat: "qwen", ContextWindow: 1000000, MaxOutput: 131072},
+		"deepseek-v4-pro-0813": {Reasoning: true, ThinkingFormat: "deepseek", ThinkingEffortSupported: true, ContextWindow: 1000000, MaxOutput: 393216},
+	},
+	"qwencloud": {
+		"qwen4-max":            {Vision: true, VideoInput: true, Reasoning: true, ThinkingFormat: "qwen", ContextWindow: 1000000, MaxOutput: 393216},
+		"qwen4-max-preview":    {Vision: true, VideoInput: true, Reasoning: true, ThinkingFormat: "qwen", ContextWindow: 1000000, MaxOutput: 393216},
+		"qwen3.8-max":          {Vision: true, VideoInput: true, Reasoning: true, ThinkingFormat: "qwen", ContextWindow: 1000000, MaxOutput: 131072},
+		"qwen3.8-flash":        {Vision: true, Reasoning: true, ThinkingFormat: "qwen", ContextWindow: 1000000, MaxOutput: 131072},
+		"qwen3.7-max":          {Vision: false, Reasoning: true, ThinkingFormat: "qwen", ContextWindow: 1000000, MaxOutput: 131072},
+		"qwen3.7-plus":         {Vision: true, Reasoning: true, ThinkingFormat: "qwen", ContextWindow: 1000000, MaxOutput: 131072},
+		"deepseek-v4-pro-0813": {Reasoning: true, ThinkingFormat: "deepseek", ThinkingEffortSupported: true, ContextWindow: 1000000, MaxOutput: 393216},
+	},
 }
 
 func init() {
@@ -896,9 +918,16 @@ func init() {
 	// zcode: ZCode start-plan lane. The gateway accepts the Anthropic Messages
 	// wire with the same GLM models as the apikey lane; thinking follows the
 	// zai format (the executor already maps it).
+	//
+	// glm-5.4 is published by the models.dev coding-plan feed
+	// (`zai-coding-plan`/`zhipuai-coding-plan`) with a 1M window. It is not yet
+	// in upstream's static capabilities table, whose `*glm-5*` catch-all would
+	// otherwise answer 200k. Keep the static fallback here, and let the
+	// catalog alias in catalog_sync.go make the feed authoritative when loaded.
 	providerCapabilities["zcode"] = map[string]Capabilities{
 		"glm-5.3":       {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "zai", ThinkingCanDisable: new(false), ContextWindow: 1000000, MaxOutput: 131072},
 		"glm-5.3-flash": {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "zai", ThinkingCanDisable: new(false), ContextWindow: 1000000, MaxOutput: 131072},
+		"glm-5.4":       {Vision: true, Reasoning: true, Tools: true, ThinkingFormat: "zai", ThinkingCanDisable: new(false), ContextWindow: 1000000, MaxOutput: 131072},
 	}
 	// DaoXE (daoxe) — OpenAI-compatible free tier
 	providerCapabilities["daoxe"] = map[string]Capabilities{
@@ -1020,7 +1049,10 @@ func init() {
 	// the same model. pixtral-large/mistral-small-4/saba have no published
 	// window yet and keep the conservative default.
 	providerCapabilities["mistral"] = map[string]Capabilities{
-		"pixtral-12b-2409": {Vision: true, Tools: true, ContextWindow: 128000, MaxOutput: 128000},
+		"mistral-large-latest": {Vision: true, Tools: true, ContextWindow: 1048576},
+		"mistral-large-4":      {Vision: true, Tools: true, ContextWindow: 1048576},
+		"mistral-large-4-0":    {Vision: true, Tools: true, ContextWindow: 1048576},
+		"pixtral-12b-2409":     {Vision: true, Tools: true, ContextWindow: 128000, MaxOutput: 128000},
 	}
 
 	// Cloudflare llama-3.1 fast/awq variants share the 32000 window the
