@@ -46,7 +46,7 @@ describe('provider thinking selector (#1214)', () => {
     'exposes Thinking control with Off option on OpenAI-compatible custom nodes and persists mode',
     async () => {
       await page.getByRole('link', { name: 'Providers' }).click()
-      await page.getByRole('button', { name: 'Add Custom Provider' }).click()
+      await page.getByRole('button', { name: 'Add OpenAI Compatible', exact: true }).click()
       await page.getByRole('radio', { name: /OpenAI/ }).first().waitFor()
 
       await field(page, 'Name').fill('AMD Radeon')

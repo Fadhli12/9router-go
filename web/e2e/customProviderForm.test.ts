@@ -17,14 +17,7 @@ import type { Page } from '@playwright/test'
 
 import { startDashboard, type Dashboard } from './harness'
 
-/** Past the 10s poll interval, plus room for the request to land. */
-const POLL_SETTLE_MS = 15_000
-
-/**
- * Each case spends POLL_SETTLE_MS asleep on purpose, and the create step walks
- * several page transitions first, so bun's 5s default — and even a 30s budget —
- * is not enough to reach the assertion this suite exists to make.
- */
+/** Covers the dashboard's 10-second poll and the preceding form transitions. */
 const SLOW = 60_000
 
 let app: Dashboard
@@ -63,7 +56,7 @@ describe('custom provider edit dialog (#234)', () => {
 
     // A real stored node, created through the UI, so the case runs against a
     // row the dashboard actually polls back rather than a faked prop.
-    await page.getByRole('button', { name: 'Add Custom Provider' }).click()
+    await page.getByRole('button', { name: 'Add OpenAI Compatible', exact: true }).click()
     await page.getByRole('radio', { name: /OpenAI/ }).first().waitFor()
 
     await field(page, 'Name').fill('Poll Survivor')
@@ -92,8 +85,17 @@ describe('custom provider edit dialog (#234)', () => {
       await prefix.fill('pollsurvivor2')
       await baseUrl.fill('https://api.example.com/v2')
 
-      // The bug: one poll tick restored all three to their pre-edit values.
-      await page.waitForTimeout(POLL_SETTLE_MS)
+      // Await the actual provider-node poll rather than guessing its timing.
+      const polledNodes = await page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/api/provider-nodes' &&
+          response.request().method() === 'GET' &&
+          response.status() === 200,
+        { timeout: 20_000 },
+      )
+      await polledNodes.finished()
+      // The browser task after delivery lets Svelte flush the poll's state update.
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
 
       expect(await name.inputValue()).toBe('Poll Survivor Edited')
       expect(await prefix.inputValue()).toBe('pollsurvivor2')

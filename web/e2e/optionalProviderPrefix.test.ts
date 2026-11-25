@@ -70,7 +70,7 @@ describe('compatible provider name autofill', () => {
     'derives both fields from the name and follows subsequent name changes',
     async () => {
       await page.getByRole('link', { name: 'Providers' }).click()
-      await page.getByRole('button', { name: 'Add Custom Provider' }).click()
+      await page.getByRole('button', { name: 'Add OpenAI Compatible', exact: true }).click()
       await page.getByRole('radio', { name: /OpenAI/ }).first().waitFor()
 
       await field(page, 'Name').fill('No Prefix Node')
@@ -100,7 +100,7 @@ describe('compatible provider name autofill', () => {
     'keeps both values operator-owned after they are edited',
     async () => {
       await page.getByRole('link', { name: 'Providers' }).click()
-      await page.getByRole('button', { name: 'Add Custom Provider' }).click()
+      await page.getByRole('button', { name: 'Add OpenAI Compatible', exact: true }).click()
       await page.getByRole('radio', { name: /OpenAI/ }).first().waitFor()
 
       await field(page, 'Name').fill('Manual Namespace')
@@ -129,7 +129,7 @@ describe('compatible provider name autofill', () => {
     'shows live availability for the suggested prefix and suffix',
     async () => {
       await page.getByRole('link', { name: 'Providers' }).click()
-      await page.getByRole('button', { name: 'Add Custom Provider' }).click()
+      await page.getByRole('button', { name: 'Add OpenAI Compatible', exact: true }).click()
       await page.getByRole('radio', { name: /OpenAI/ }).first().waitFor()
 
       // A free name: both identifiers report available.

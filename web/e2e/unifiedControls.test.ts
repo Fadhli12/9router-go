@@ -252,8 +252,8 @@ describe('provider connections page', () => {
       page.on('console', onConsole)
 
       await page.getByRole('link', { name: 'Providers' }).click()
-      await page.getByRole('button', { name: 'Add Custom Provider' }).waitFor()
-      await page.waitForTimeout(1500)
+      await page.getByRole('button', { name: 'Add OpenAI Compatible', exact: true }).waitFor()
+      await page.getByRole('button', { name: 'Add Anthropic Compatible', exact: true }).waitFor()
       page.off('console', onConsole)
 
       // A collapsed action row can leave a verb referencing a removed binding,
