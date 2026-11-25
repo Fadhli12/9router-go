@@ -388,11 +388,14 @@ func rewriteBrandingText(text string, isSystemInstruction bool) string {
 		// Hermes/OpenClaw sentences, headers, and identifiers are the
 		// fingerprints the backend answers with a false 429; tool
 		// descriptions carry the same text and are sanitized separately.
+		// Whole-line Hermes markers + identity run inside rewriteAntigravityFingerprints.
 		text = rewriteAntigravityFingerprints(text)
 		text = normalizeHarnessMarkers(text)
 		// OpenClaw rewrite row: competing-client
 		// branding in the system instruction.
 		text = rewriteOpenClawBrand(text)
+	} else {
+		text = rewriteAntigravityHermesWholeLines(text)
 	}
 	return strings.TrimSpace(text)
 }
@@ -469,6 +472,18 @@ var AntigravityModelSynonyms = map[string]string{
 	"gemini-4-argon-high":   "gemini-4-argon-high",
 	"gemini-4-argon-medium": "gemini-4-argon-medium",
 	"gemini-4-argon-low":    "gemini-4-argon-low",
+	// Gemini 4 Hydrogen serves one backend id per tier.
+	"gemini-4-hydrogen":        "gemini-4-hydrogen-high",
+	"gemini-4-hydrogen-xhigh":  "gemini-4-hydrogen-xhigh",
+	"gemini-4-hydrogen-high":   "gemini-4-hydrogen-high",
+	"gemini-4-hydrogen-medium": "gemini-4-hydrogen-medium",
+	"gemini-4-hydrogen-low":    "gemini-4-hydrogen-low",
+	// Gemini 4 Neon serves one backend id per tier; the bare catalog id is high tier.
+	"gemini-4-neon":        "gemini-4-neon-high",
+	"gemini-4-neon-xhigh":  "gemini-4-neon-xhigh",
+	"gemini-4-neon-high":   "gemini-4-neon-high",
+	"gemini-4-neon-medium": "gemini-4-neon-medium",
+	"gemini-4-neon-low":    "gemini-4-neon-low",
 	// Upstream decolua/9router#24034f69 retired the gemini-3.5 family and
 	// gemini-3-flash; the default moved to the 3.8 medium tier.
 	"gemini-default":             "gemini-3.8-flash-medium",
@@ -505,10 +520,12 @@ var AntigravityModelSynonyms = map[string]string{
 	"gemini-3.6-flash-medium": "gemini-3.6-flash-tiered",
 	"gemini-3.6-flash-low":    "gemini-3.6-flash-tiered",
 	// Claude 5.5: bare model maps to high tier in synonyms for quota/lock lookups.
-	"claude-sonnet-5-5": "claude-sonnet-5-5-high",
-	"claude-opus-5-5":   "claude-opus-5-5-high",
-	"claude-sonnet-5.5": "claude-sonnet-5-5-high",
-	"claude-opus-5.5":   "claude-opus-5-5-high",
+	"claude-sonnet-5-5":     "claude-sonnet-5-5-high",
+	"claude-opus-5-5":       "claude-opus-5-5-high",
+	"claude-sonnet-5-5-max": "claude-sonnet-5-5-max",
+	"claude-opus-5-5-max":   "claude-opus-5-5-max",
+	"claude-sonnet-5.5":     "claude-sonnet-5-5-high",
+	"claude-opus-5.5":       "claude-opus-5-5-high",
 }
 
 // NormalizeAntigravityModel maps known aliases/synonyms to Antigravity internal backend model names.
@@ -541,15 +558,27 @@ func NormalizeAntigravityModel(model string) string {
 // live against daily-cloudcode-pa.googleapis.com on 2026-10-09.
 var antigravityUpstreamModelIDs = map[string]string{
 	// Gemini 4 Carbon serves one backend id per tier; the bare catalog id is medium tier.
-	"gemini-4-carbon":        "gemini-4-carbon-medium",
+	"gemini-4-carbon":        "gemini-4-carbon-high",
 	"gemini-4-carbon-high":   "gemini-4-carbon-high",
 	"gemini-4-carbon-medium": "gemini-4-carbon-medium",
 	"gemini-4-carbon-low":    "gemini-4-carbon-low",
 	// Gemini 4 Argon serves one backend id per tier; the bare catalog id is medium tier.
-	"gemini-4-argon":        "gemini-4-argon-medium",
+	"gemini-4-argon":        "gemini-4-argon-high",
 	"gemini-4-argon-high":   "gemini-4-argon-high",
 	"gemini-4-argon-medium": "gemini-4-argon-medium",
 	"gemini-4-argon-low":    "gemini-4-argon-low",
+	// Gemini 4 Hydrogen serves one backend id per tier; the bare catalog id is high tier.
+	"gemini-4-hydrogen":        "gemini-4-hydrogen-high",
+	"gemini-4-hydrogen-xhigh":  "gemini-4-hydrogen-xhigh",
+	"gemini-4-hydrogen-high":   "gemini-4-hydrogen-high",
+	"gemini-4-hydrogen-medium": "gemini-4-hydrogen-medium",
+	"gemini-4-hydrogen-low":    "gemini-4-hydrogen-low",
+	// Gemini 4 Neon serves one backend id per tier; the bare catalog id is high tier.
+	"gemini-4-neon":        "gemini-4-neon-high",
+	"gemini-4-neon-xhigh":  "gemini-4-neon-xhigh",
+	"gemini-4-neon-high":   "gemini-4-neon-high",
+	"gemini-4-neon-medium": "gemini-4-neon-medium",
+	"gemini-4-neon-low":    "gemini-4-neon-low",
 	// The 3.8 family serves one backend id per tier. The bare catalog id is
 	// the medium tier.
 	"gemini-3.8-flash":        "gemini-3.8-flash-medium",
@@ -570,8 +599,10 @@ var antigravityUpstreamModelIDs = map[string]string{
 	"gemini-3.1-pro-low":  "gemini-3.1-pro-low",
 	// Claude 5.5: the bare catalog id is the thinking tier, so it maps to
 	// high. The other Claude 5.5 ids are not yet served by Cloud Code.
-	"claude-sonnet-5-5":        "claude-sonnet-5-5-high",
-	"claude-opus-5-5":          "claude-opus-5-5-high",
+	"claude-sonnet-5-5":        "claude-sonnet-5-5-medium",
+	"claude-opus-5-5":          "claude-opus-5-5-medium",
+	"claude-sonnet-5-5-max":    "claude-sonnet-5-5-max",
+	"claude-opus-5-5-max":      "claude-opus-5-5-max",
 	"claude-sonnet-5-5-high":   "claude-sonnet-5-5-high",
 	"claude-sonnet-5-5-low":    "claude-sonnet-5-5-low",
 	"claude-sonnet-5-5-medium": "claude-sonnet-5-5-medium",

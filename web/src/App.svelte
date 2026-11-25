@@ -372,7 +372,7 @@
     'media-image': { title: 'Text to Image', description: 'Image generation and transformation models' },
     'media-tts': { title: 'Text to Speech', description: 'Voice synthesis and audio generation models' },
     'media-stt': { title: 'Speech to Text', description: 'Audio transcription and speech recognition models' },
-    'media-video': { title: 'Video', description: 'Video generation and analysis models' },
+    'media-video': { title: 'Video', description: 'Manage your Video providers' },
     'media-systemone': { title: 'System One', description: 'Structured state evaluation models' },
     'media-web': { title: 'Web Fetch & Search', description: 'Configure web search and scrape tools' },
     'proxy-pools': { title: 'Proxy Pools', description: 'Manage your proxy pool configurations' },
@@ -384,9 +384,9 @@
       title: 'Security',
       description: 'Encrypt provider credentials at rest, and scan prompts for personal data and injection attempts before they leave the gateway',
     },
-    keys: { title: 'Endpoint & Key', description: 'API endpoint and key configuration' },
     plans: { title: 'Plans', description: 'Per-key quota plans and policy resolution' },
     jailbreak: { title: 'Persona', description: 'Per-model system-prompt injection and Gemini safety bypass' },
+    keys: { title: 'Endpoint & Key', description: 'API endpoint and key configuration' },
   }
 
   let isUpdateModalOpen = $state(false)

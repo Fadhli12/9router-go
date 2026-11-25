@@ -7,11 +7,17 @@ import (
 	"sync"
 	"time"
 
+	"9router/proxy/internal/db"
 	"9router/proxy/internal/fetchgate"
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/providers"
 )
+
+type usageCacheKey struct {
+	repo   *db.Repo
+	connID string
+}
 
 type cachedUsageEntry struct {
 	data      any
@@ -20,25 +26,25 @@ type cachedUsageEntry struct {
 
 var (
 	usageCacheMu sync.RWMutex
-	usageCache   = make(map[string]cachedUsageEntry)
+	usageCache   = make(map[usageCacheKey]cachedUsageEntry)
 )
 
 const usageCacheTTL = 60 * time.Second
 
-func getCachedUsage(key string) (any, bool) {
+func getCachedUsage(repo *db.Repo, key string) (any, bool) {
 	usageCacheMu.RLock()
 	defer usageCacheMu.RUnlock()
-	entry, ok := usageCache[key]
+	entry, ok := usageCache[usageCacheKey{repo: repo, connID: key}]
 	if !ok || time.Now().After(entry.expiresAt) {
 		return nil, false
 	}
 	return entry.data, true
 }
 
-func setCachedUsage(key string, data any) {
+func setCachedUsage(repo *db.Repo, key string, data any) {
 	usageCacheMu.Lock()
 	defer usageCacheMu.Unlock()
-	usageCache[key] = cachedUsageEntry{
+	usageCache[usageCacheKey{repo: repo, connID: key}] = cachedUsageEntry{
 		data:      data,
 		expiresAt: time.Now().Add(usageCacheTTL),
 	}
@@ -93,7 +99,7 @@ func (h *DashboardHandler) HandleGetConnectionUsage(w http.ResponseWriter, r *ht
 	}
 
 	// In-memory cache hit: serve immediately (< 1ms) to eliminate redundant Google quota calls
-	if cached, ok := getCachedUsage(connID); ok {
+	if cached, ok := getCachedUsage(h.Repo, connID); ok {
 		handlerutil.WriteJSON(w, http.StatusOK, cached)
 		return
 	}
@@ -146,16 +152,18 @@ func (h *DashboardHandler) HandleGetConnectionUsage(w http.ResponseWriter, r *ht
 			if retried, retryOK := fetchProviderUsage(r.Context(), conn.Provider, data); retryOK {
 				// Cache the retried response too, so the next dashboard poll
 				// within the TTL is served from memory.
+				h.syncCodexPlanFromUsage(conn, data, retried.plan)
 				resp := retried.toResponse()
-				setCachedUsage(connID, resp)
+				setCachedUsage(h.Repo, connID, resp)
 				handlerutil.WriteJSON(w, http.StatusOK, resp)
 				return
 			}
 		}
 	}
 	if ok {
+		h.syncCodexPlanFromUsage(conn, data, res.plan)
 		resp := res.toResponse()
-		setCachedUsage(connID, resp)
+		setCachedUsage(h.Repo, connID, resp)
 		handlerutil.WriteJSON(w, http.StatusOK, resp)
 		return
 	}
@@ -178,7 +186,7 @@ func (h *DashboardHandler) HandleGetConnectionUsage(w http.ResponseWriter, r *ht
 
 			res := fetchAntigravityDashboardUsage(ctx, accessToken, projectID)
 			resp := res.toResponse()
-			setCachedUsage(connID, resp)
+			setCachedUsage(h.Repo, connID, resp)
 			handlerutil.WriteJSON(w, http.StatusOK, resp)
 			return
 		}

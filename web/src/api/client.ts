@@ -1203,6 +1203,48 @@ export interface JailbreakDoc {
   createdAt?: string
   /** RFC3339 UTC stamp of the last write. */
   updatedAt?: string
+  /**
+   * Provenance of a preset the auto-sync worker wrote: the repository it came
+   * from ("owner/repo@ref") and the file inside it. A preset carrying both is
+   * rewritten by every pass of that source; one carrying neither was typed,
+   * uploaded or imported by hand and sync never touches it.
+   */
+  syncOrigin?: string
+  syncPath?: string
+}
+
+/** One GitHub collection the preset library auto-syncs from. */
+export interface JailbreakSyncSource {
+  id: string
+  /** Anything the GitHub import accepts: owner/repo, a GitHub URL, or a raw file URL. */
+  target: string
+  /** Branch, tag or sha to follow. Empty follows the repository default. */
+  ref?: string
+  /** Paused sources are kept and never fetched. */
+  enabled: boolean
+  /** Label the panel shows; derived from the target when absent. */
+  name?: string
+  lastSyncAt?: string
+  lastError?: string
+  lastResult?: JailbreakSyncResult
+}
+
+/** What one pass of one source did. */
+export interface JailbreakSyncResult {
+  written: number
+  updated: number
+  orphaned: number
+  failed: number
+  files?: JailbreakSyncFile[]
+}
+
+/** One file of one pass. */
+export interface JailbreakSyncFile {
+  path: string
+  preset?: string
+  /** "written" | "updated" | "unchanged" | "orphaned" | "failed" */
+  action: string
+  reason?: string
 }
 
 /**
@@ -1560,7 +1602,7 @@ export const api = {
   // Connections
   getConnections: async () => {
     const conns = await request<ProviderConnection[]>('/api/connections')
-return conns.map(normalizeConnection)
+    return conns.map(normalizeConnection)
   },
   createConnection: (payload: CreateConnectionPayload) =>
     request<{ success: boolean; id: string }>('/api/connections', {
@@ -1848,14 +1890,10 @@ return conns.map(normalizeConnection)
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  rotateApiKey: (id: string) =>
-    request<{ status: string; id: string; key: string }>(`/api/keys/${encodeURIComponent(id)}/rotate`, {
-      method: 'POST',
-    }),
   updateApiKeyLimit: (id: string, maxConcurrent: number) =>
     request<{ status: string; id: string; maxConcurrent: number }>(`/api/keys/${encodeURIComponent(id)}/limit`, {
       method: 'PUT',
-      body: JSON.stringify({ maxConcurrent })
+      body: JSON.stringify({ maxConcurrent }),
     }),
   updateApiKeyAllowedProviders: (id: string, allowedProviders: string) =>
     request<{ status: string; id: string; allowedProviders: string }>(
@@ -1863,7 +1901,7 @@ return conns.map(normalizeConnection)
       {
         method: 'PUT',
         body: JSON.stringify({ allowedProviders }),
-      }
+      },
     ),
   deleteApiKey: (id: string) =>
     request<{ success: boolean }>(`/api/keys/${encodeURIComponent(id)}`, {
@@ -1876,6 +1914,11 @@ return conns.map(normalizeConnection)
       body: isActive === undefined ? undefined : JSON.stringify({ isActive }),
     }),
 
+  /** Mints a replacement secret, keeping the row's id, policy and history. */
+  rotateApiKey: (id: string) =>
+    request<{ status: string; id: string; key: string }>(`/api/keys/${encodeURIComponent(id)}/rotate`, {
+      method: 'POST',
+    }),
   /**
    * Clears a key's spent token budget (#365). The server stamps the usage mark
    * the budget is measured from, so the key starts over while its history stays
@@ -2169,7 +2212,6 @@ return conns.map(normalizeConnection)
       method: 'POST',
       body: JSON.stringify({ model }),
     }),
-
   testModel: (model: string, kind?: string) =>
     request<{ ok: boolean; error?: string; note?: string; latencyMs?: number; status?: number; blocked?: boolean; resetAt?: string }>('/api/models/test', {
       method: 'POST',
@@ -2501,11 +2543,11 @@ return conns.map(normalizeConnection)
       body: JSON.stringify({ apiKey, region }),
     }),
   kiroSocialAuthorize: (provider: 'google' | 'github') =>
-    request<{ authUrl: string; url: string; state: string }>(`/api/oauth/kiro/social-authorize?provider=${provider}`),
-  kiroSocialExchange: (code: string) =>
+    request<{ authUrl: string; url: string; state: string; codeVerifier: string }>(`/api/oauth/kiro/social-authorize?provider=${provider}`),
+  kiroSocialExchange: (code: string, codeVerifier: string, provider?: 'google' | 'github') =>
     request<{ success: boolean; id?: string; error?: string }>('/api/oauth/kiro/social-exchange', {
       method: 'POST',
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code, codeVerifier, provider }),
     }),
   cursorImport: (accessToken: string, machineId: string) =>
     request<{ success: boolean; id: string; error?: string }>('/api/oauth/cursor/import', {
@@ -3046,6 +3088,8 @@ return conns.map(normalizeConnection)
     keywords?: JailbreakKeyword[]
     excludes?: JailbreakKeyword[]
     order?: number
+    syncOrigin?: string
+    syncPath?: string
   }) =>
     request<{ success: boolean }>('/api/jailbreak/presets', {
       method: 'PUT',
@@ -3056,6 +3100,43 @@ return conns.map(normalizeConnection)
       method: 'DELETE',
     }),
   listJailbreakModels: () => request<Record<string, JailbreakModelConfig>>('/api/jailbreak/models'),
+  // Preset auto-sync: the GitHub collections the library follows. One pass
+  // rewrites only the presets it wrote itself, so an operator's hand-made
+  // preset is never touched and a file upstream dropped is reported as
+  // orphaned rather than deleted.
+  listJailbreakSyncSources: () =>
+    request<{ sources: JailbreakSyncSource[] }>('/api/jailbreak/sync/sources'),
+  saveJailbreakSyncSources: (sources: JailbreakSyncSource[]) =>
+    request<{ sources: JailbreakSyncSource[]; ok: boolean }>('/api/jailbreak/sync/sources', {
+      method: 'PUT',
+      body: JSON.stringify({ sources }),
+    }),
+  runJailbreakSync: () =>
+    request<{ outcomes: { source: JailbreakSyncSource; result: JailbreakSyncResult }[]; ok: boolean }>(
+      '/api/jailbreak/sync/run',
+      { method: 'POST' },
+    ),
+  // GitHub credential and mirror. The api.github.com quota is 60 anonymous
+  // requests an hour and 5,000 with a token, so a library following several
+  // collections needs one. The token is never returned by the GET — only
+  // whether one is set and where it came from.
+  getJailbreakGithub: () =>
+    request<{
+      tokenSet: boolean
+      source: 'dashboard' | 'environment' | 'none'
+      apiBase: string
+      rawBase: string
+      envToken: boolean
+      envMirror: boolean
+      /** Bodies held for a conditional (If-None-Match) re-fetch. */
+      cached: number
+      cacheMax: number
+    }>('/api/jailbreak/github'),
+  setJailbreakGithubToken: (token: string) =>
+    request<{ ok: boolean; tokenSet: boolean }>('/api/jailbreak/github/token', {
+      method: 'PUT',
+      body: JSON.stringify({ token }),
+    }),
   setJailbreakModel: (id: string, presetId: string, enabled: boolean) =>
     request<{ success: boolean }>('/api/jailbreak/models', {
       method: 'PUT',
@@ -3114,6 +3195,29 @@ return conns.map(normalizeConnection)
     }>('/api/jailbreak/preview', {
       method: 'POST',
       body: JSON.stringify({ id, messages }),
+    }),
+  /**
+   * The same preview, resolved under one client API key's scope.
+   *
+   * The gateway's preview endpoint already reads `apiKeyId` from the body — the
+   * tester needs both scopes of one id to diff them, and passing the key here is
+   * what makes the second body the one that key would actually carry.
+   */
+  previewJailbreakKey: (
+    id: string,
+    messages: { role: string; content: string }[],
+    apiKeyId: string,
+  ) =>
+    request<{
+      injected: boolean
+      reason: string
+      presetId?: string
+      presetName?: string
+      prompt?: string
+      messages: { role: string; content: string }[]
+    }>('/api/jailbreak/preview', {
+      method: 'POST',
+      body: JSON.stringify({ id, messages, apiKeyId }),
     }),
   reorderJailbreakPresets: (order: string[]) =>
     request<{ ok: boolean }>('/api/jailbreak/presets/order', {
