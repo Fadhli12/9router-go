@@ -145,16 +145,16 @@ func (h *ChatHandler) handleAccountFallback(
 				Ctx: ctx, W: w, Provider: provider, Model: model,
 				ConnectionID: "default", ConnData: &ConnectionData{APIKey: apiKey, ProxyPoolID: proxyPoolID}, Body: body, Attempts: 1,
 				IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
-			PrefixHash: prefixHash,
-		}
-		err := h.tryForwardWithConnection(noAuthParams)
-		// The keyless free lane takes this branch, so the pool walk has to
-		// run here too. Without it the operator's pool was walked on the
-		// stored-connection path and silently abandoned on the one the
-		// OpenCode free tier actually uses: the log showed conn=default, a
-		// handful of proxies, then "free tier refused after retries".
-		err = h.walkPoolOnFreeTierRefusalFor(noAuthParams, "default", "", "", err)
-		if err != nil {
+				PrefixHash: prefixHash,
+			}
+			err := h.tryForwardWithConnection(noAuthParams)
+			// The keyless free lane takes this branch, so the pool walk has to
+			// run here too. Without it the operator's pool was walked on the
+			// stored-connection path and silently abandoned on the one the
+			// OpenCode free tier actually uses: the log showed conn=default, a
+			// handful of proxies, then "free tier refused after retries".
+			err = h.walkPoolOnFreeTierRefusalFor(noAuthParams, "default", "", "", err)
+			if err != nil {
 				// Same contract as the multi-connection loop's return: a
 				// free-tier refusal leaves this path as the classified
 				// answer, not the upstream body verbatim.
