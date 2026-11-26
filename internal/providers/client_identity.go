@@ -54,7 +54,7 @@ const (
 	// the gateway host, and antigravity_project.go pins "platform": 2
 	// (DARWIN_ARM64) so the body agrees with the header. Only the version
 	// moves on a bump.
-	AntigravityHubVersion   = "2.34.0"
+	AntigravityHubVersion   = "2.35.2"
 	AntigravityCLIVersion   = AntigravityHubVersion
 	AntigravityCLIUserAgent = "antigravity/hub/" + AntigravityHubVersion + " darwin/arm64"
 	AntigravityIDEVersion   = AntigravityHubVersion

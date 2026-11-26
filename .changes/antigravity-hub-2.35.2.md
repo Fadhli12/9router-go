@@ -1,0 +1,5 @@
+### Fixed
+
+- **Antigravity: Hub fingerprint bumped 2.34.0 -> 2.35.2.** Source: the Hub auto-updater (`antigravity-hub-auto-updater-974169037036.us-central1.run.app`) reports `Stable Version: 2.35.2. Rolled out to 100%`, matching the official releases page, the changelog (2026-11-25), and the download object `antigravity-public/antigravity-hub/2.35.2-4585983447007232` (HTTP 200). The User-Agent is now `antigravity/hub/2.35.2 darwin/arm64`. Upstream decolua/9router `master` is still on 2.33.0 (`src/mitm/antigravityIdeVersion.js`); this fork is ahead of it here.
+- **Antigravity MITM: generation override follows the Hub pin.** `antigravityIDEVersion` in `internal/mitm/handlers/antigravity.go` was still 2.33.0, one release behind the Hub pin, so intercepted generation requests were rewritten to an older identity than the gateway presented. It is now 2.35.2.
+- The CLI release baseline (`AntigravityCLIReleaseBaseline` = 1.5.14) is unchanged; the CLI updater reports 1.5.17, so the release watch still flags that drift for review.
