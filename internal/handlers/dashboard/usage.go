@@ -189,7 +189,7 @@ func (h *DashboardHandler) HandleGetConnectionUsage(w http.ResponseWriter, r *ht
 			if retried, retryOK := fetchProviderUsage(r.Context(), conn.Provider, data); retryOK {
 				// Cache the retried response too, so the next dashboard poll
 				// within the TTL is served from memory.
-				h.syncCodexPlanFromUsage(conn, data, retried.plan)
+				h.syncCodexPlanFromUsage(r.Context(), conn, data, retried.plan)
 				resp := retried.toResponse()
 				setCachedUsage(h.Repo, connID, resp)
 				handlerutil.WriteJSON(w, http.StatusOK, resp)
@@ -198,7 +198,7 @@ func (h *DashboardHandler) HandleGetConnectionUsage(w http.ResponseWriter, r *ht
 		}
 	}
 	if ok {
-		h.syncCodexPlanFromUsage(conn, data, res.plan)
+		h.syncCodexPlanFromUsage(r.Context(), conn, data, res.plan)
 		resp := res.toResponse()
 		setCachedUsage(h.Repo, connID, resp)
 		handlerutil.WriteJSON(w, http.StatusOK, resp)

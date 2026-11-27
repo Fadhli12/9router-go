@@ -9,7 +9,39 @@ import (
 	"9router/proxy/internal/providers"
 )
 
-const antigravityIDEVersion = "2.35.2"
+const (
+	antigravityIDEVersion   = "2.35.2"
+	antigravityUABarePrefix = "antigravity/"
+	antigravityUAHubPrefix  = "antigravity/hub/"
+)
+
+// trailingSuffix returns the platform suffix (e.g. " darwin/arm64") portion
+// of an Antigravity User-Agent after the version component.
+func trailingSuffix(userAgent, prefix string) string {
+	rest := userAgent[len(prefix):]
+	sepIdx := strings.Index(rest, " ")
+	if sepIdx == -1 {
+		return ""
+	}
+	return rest[sepIdx:]
+}
+
+// RewriteAntigravityUserAgent replaces the version component of an Antigravity
+// User-Agent while preserving both the "hub/" prefix (if present) and any
+// platform suffix (e.g. " darwin/arm64").
+// Parity with decolua/9router@6b8b7ceb9.
+func RewriteAntigravityUserAgent(userAgent, version string) string {
+	if userAgent == "" {
+		return userAgent
+	}
+	if strings.HasPrefix(userAgent, antigravityUAHubPrefix) {
+		return antigravityUAHubPrefix + version + trailingSuffix(userAgent, antigravityUAHubPrefix)
+	}
+	if strings.HasPrefix(userAgent, antigravityUABarePrefix) {
+		return antigravityUABarePrefix + version + trailingSuffix(userAgent, antigravityUABarePrefix)
+	}
+	return userAgent
+}
 
 // HandleAntigravity intercepts Antigravity Gemini-native requests and forwards to 9router.
 // It preserves client identity for catalog requests (fetchAvailableModels) and only
@@ -38,8 +70,12 @@ func HandleAntigravity(w http.ResponseWriter, r *http.Request, body []byte) {
 
 	// Apply IDE version override only for generation endpoints
 	if isGeneration {
-		// Override User-Agent header
-		r.Header.Set("User-Agent", "antigravity/"+antigravityIDEVersion)
+		incomingUA := r.UserAgent()
+		if incomingUA != "" {
+			r.Header.Set("User-Agent", RewriteAntigravityUserAgent(incomingUA, antigravityIDEVersion))
+		} else {
+			r.Header.Set("User-Agent", "antigravity/"+antigravityIDEVersion)
+		}
 		// Override body metadata.ideVersion if present
 		if meta, ok := reqBody["metadata"].(map[string]any); ok {
 			meta["ideVersion"] = antigravityIDEVersion

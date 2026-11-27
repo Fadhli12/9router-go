@@ -34,7 +34,8 @@ const apiKeyColumns = `SELECT id, key, name, machineId, isActive, createdAt,
 	tokenQuota, queueTimeoutMs, contextLimit,
 	keyHash, lookupHash, keyDisplay,
 	expiresAt, lastUsedAt, usedCount, metadata, planId, maxConcurrent, allowedProviders,
-	limitMicros, limitTokens, budgetPeriod, alertPct, hardCutoff`
+	limitMicros, limitTokens, budgetPeriod, alertPct, hardCutoff,
+	rateLimitRPH, rateLimitRPD`
 
 // apiKeyColumnsLegacy is the pre-F-2 read: everything above except the five
 // budget columns.
@@ -148,6 +149,7 @@ func apiKeyScan(k *models.APIKey, columns string) (dest []any, apply func()) {
 	withBudget := columns == apiKeyColumns
 	var nameVal, machineVal sql.NullString
 	var rateRPM, rateTPM, rateConc sql.NullInt64
+	var rateRPH, rateRPD sql.NullInt64
 	var tokenQuota, queueTimeout, contextLimit sql.NullInt64
 	var keyHash, lookupHash, keyDisplay sql.NullString
 	var expiresAt, lastUsedAt, metadata sql.NullString
@@ -179,6 +181,11 @@ func apiKeyScan(k *models.APIKey, columns string) (dest []any, apply func()) {
 	}
 	if withBudget {
 		dest = append(dest, &limitMicros, &limitTokens, &budgetPeriod, &alertPct, &hardCutoff)
+		// The hourly and daily ceilings ride with the budget columns: they are
+		// added by the same EnsureAdditiveColumns pass, so a database that has
+		// one has all of them. Appending them here keeps the destination count
+		// equal to apiKeyColumns' column count.
+		dest = append(dest, &rateRPH, &rateRPD)
 	}
 	apply = func() {
 		switch v := isActive.(type) {
@@ -204,6 +211,14 @@ func apiKeyScan(k *models.APIKey, columns string) (dest []any, apply func()) {
 			if contextLimit.Valid {
 				v := int(contextLimit.Int64)
 				k.ContextLimit = &v
+			}
+			if rateRPH.Valid {
+				v := int(rateRPH.Int64)
+				k.RateLimitRPH = &v
+			}
+			if rateRPD.Valid {
+				v := int(rateRPD.Int64)
+				k.RateLimitRPD = &v
 			}
 			k.LimitMicros = limitMicros
 			k.LimitTokens = limitTokens

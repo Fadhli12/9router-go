@@ -483,7 +483,7 @@ func (h *OAuthHandler) persistConnection(ctx context.Context, connID, provider, 
 	} else {
 		priority := 1
 		if h.Repo != nil {
-			priority = h.Repo.ResolveDefaultPriority(provider)
+			priority = h.Repo.ResolveDefaultPriority(ctx, provider)
 		}
 		_, err = h.Repo.RawDB().ExecContext(ctx,
 			"INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES (?, ?, 'oauth', ?, ?, 1, ?, ?, ?)",

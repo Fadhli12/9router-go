@@ -35,7 +35,7 @@ func TestEnablingAConnectionClearsTheProviderHalt(t *testing.T) {
 	router := setupTestRouter(repo)
 
 	connID := "conn-halted"
-	if err := repo.CreateProviderConnection(connID, "antigravity", "apikey", "Halted", "sk-1"); err != nil {
+	if err := repo.CreateProviderConnection(t.Context(), connID, "antigravity", "apikey", "Halted", "sk-1"); err != nil {
 		t.Fatalf("create connection: %v", err)
 	}
 
@@ -74,7 +74,7 @@ func TestDisablingAConnectionLeavesTheHaltInPlace(t *testing.T) {
 	router := setupTestRouter(repo)
 
 	connID := "conn-still-halted"
-	if err := repo.CreateProviderConnection(connID, "antigravity", "apikey", "Halted", "sk-1"); err != nil {
+	if err := repo.CreateProviderConnection(t.Context(), connID, "antigravity", "apikey", "Halted", "sk-1"); err != nil {
 		t.Fatalf("create connection: %v", err)
 	}
 	resilience.RecordAccountSuspension("antigravity", connID, http.StatusForbidden, "account suspended")
@@ -98,10 +98,10 @@ func TestEnablingOneProviderDoesNotClearAnothersHalt(t *testing.T) {
 	defer cleanup()
 	router := setupTestRouter(repo)
 
-	if err := repo.CreateProviderConnection("conn-ag", "antigravity", "apikey", "AG", "sk-ag"); err != nil {
+	if err := repo.CreateProviderConnection(t.Context(), "conn-ag", "antigravity", "apikey", "AG", "sk-ag"); err != nil {
 		t.Fatalf("create antigravity connection: %v", err)
 	}
-	if err := repo.CreateProviderConnection("conn-oc", "opencode", "apikey", "OC", "sk-oc"); err != nil {
+	if err := repo.CreateProviderConnection(t.Context(), "conn-oc", "opencode", "apikey", "OC", "sk-oc"); err != nil {
 		t.Fatalf("create opencode connection: %v", err)
 	}
 
@@ -132,7 +132,7 @@ func TestEnablingIntoADriftHaltIsRefused(t *testing.T) {
 	router := setupTestRouter(repo)
 
 	connID := "conn-drifted"
-	if err := repo.CreateProviderConnection(connID, "antigravity", "apikey", "Drifted", "sk-1"); err != nil {
+	if err := repo.CreateProviderConnection(t.Context(), connID, "antigravity", "apikey", "Drifted", "sk-1"); err != nil {
 		t.Fatalf("create connection: %v", err)
 	}
 	reason := resilience.DriftHaltReasonPrefix + "Antigravity released 1.5.4, this gateway sends 1.5.3"

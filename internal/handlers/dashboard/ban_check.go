@@ -138,7 +138,7 @@ func (h *DashboardHandler) HandleBanCheck(w http.ResponseWriter, r *http.Request
 	}
 
 	state := banCheckStateFor(verdict)
-	h.persistBanCheckResult(conn, state, verdict)
+	h.persistBanCheckResult(r.Context(), conn, state, verdict)
 
 	handlerutil.WriteJSON(w, http.StatusOK, BanCheckResponse{
 		State:   state,
@@ -162,7 +162,7 @@ func (h *DashboardHandler) HandleBanCheck(w http.ResponseWriter, r *http.Request
 // An "error" verdict is deliberately not written. It says nothing about the
 // account, only that this attempt did not land, and overwriting a known ban
 // with a transport fault would lose the one fact the operator has.
-func (h *DashboardHandler) persistBanCheckResult(conn *models.ProviderConnection, state string, verdict chat.BanCheckVerdict) {
+func (h *DashboardHandler) persistBanCheckResult(ctx context.Context, conn *models.ProviderConnection, state string, verdict chat.BanCheckVerdict) {
 	if conn == nil || h.Repo == nil {
 		return
 	}
@@ -191,7 +191,7 @@ func (h *DashboardHandler) persistBanCheckResult(conn *models.ProviderConnection
 	if err != nil {
 		return
 	}
-	_ = h.Repo.UpdateConnectionData(conn.ID, string(encoded))
+	_ = h.Repo.UpdateConnectionData(ctx, conn.ID, string(encoded))
 }
 
 // banCheckStateFor maps one upstream outcome to the state the operator reads.

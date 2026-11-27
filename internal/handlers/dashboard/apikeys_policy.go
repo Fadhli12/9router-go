@@ -51,6 +51,8 @@ func (h *DashboardHandler) HandleUpdateApiKey(w http.ResponseWriter, r *http.Req
 		AllowedProviders     *string `json:"allowedProviders"`
 		RateLimitRPM         *int    `json:"rateLimitRpm"`
 		RateLimitTPM         *int    `json:"rateLimitTpm"`
+		RateLimitRPH         *int    `json:"rateLimitRph"`
+		RateLimitRPD         *int    `json:"rateLimitRpd"`
 		RateLimitConcurrency *int    `json:"rateLimitConcurrency"`
 		TokenQuota           *int    `json:"tokenQuota"`
 		QueueTimeoutMs       *int    `json:"queueTimeoutMs"`
@@ -122,6 +124,16 @@ func (h *DashboardHandler) HandleUpdateApiKey(w http.ResponseWriter, r *http.Req
 	tpm, err := mergeLimit(req.RateLimitTPM, existing.RateLimitTPM)
 	if err != nil {
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, "rateLimitTpm: "+err.Error())
+		return
+	}
+	rph, err := mergeLimit(req.RateLimitRPH, existing.RateLimitRPH)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "rateLimitRph: "+err.Error())
+		return
+	}
+	rpd, err := mergeLimit(req.RateLimitRPD, existing.RateLimitRPD)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "rateLimitRpd: "+err.Error())
 		return
 	}
 	conc, err := mergeLimit(req.RateLimitConcurrency, existing.RateLimitConcurrency)
@@ -244,7 +256,7 @@ func (h *DashboardHandler) HandleUpdateApiKey(w http.ResponseWriter, r *http.Req
 		}
 		accessPatterns = patterns
 	}
-	if err := h.Repo.SetApiKeyRateLimit(id, rpm, tpm, conc); err != nil {
+	if err := h.Repo.SetApiKeyRateWindows(id, rpm, tpm, rph, rpd, conc); err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -314,6 +326,7 @@ func (h *DashboardHandler) HandleUpdateApiKey(w http.ResponseWriter, r *http.Req
 		"planId": planID,
 		"limits": map[string]int{
 			"rpm": rpm, "tpm": tpm, "concurrency": conc,
+			"rph": rph, "rpd": rpd,
 			"tokenQuota": quota, "queueTimeoutMs": queueMs, "contextLimit": contextLimit,
 		},
 	})

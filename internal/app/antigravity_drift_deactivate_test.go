@@ -37,7 +37,7 @@ func TestHaltAntigravityOnDriftDeactivatesConnections(t *testing.T) {
 
 	repo := newDriftTestRepo(t)
 	for i, name := range []string{"acct-a", "acct-b"} {
-		if err := repo.CreateProviderConnection(name, "antigravity", "oauth", name, "key-"+name); err != nil {
+		if err := repo.CreateProviderConnection(t.Context(), name, "antigravity", "oauth", name, "key-"+name); err != nil {
 			t.Fatalf("CreateProviderConnection %s: %v", name, err)
 		}
 		_ = i
