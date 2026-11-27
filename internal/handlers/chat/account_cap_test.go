@@ -146,10 +146,10 @@ func TestAccountCapPromotesStandbyWhenAnActiveAccountIsParked(t *testing.T) {
 		t.Fatalf("baseline set is not the first three by priority: %v", active)
 	}
 
-	if err := repo.RecordConnectionScopedError("conn-cap-2", "deepseek-chat", "chat", http.StatusTooManyRequests, "rate limited", 1); err != nil {
+	if err := repo.RecordConnectionScopedError(t.Context(), "conn-cap-2", "deepseek-chat", "chat", http.StatusTooManyRequests, "rate limited", 1); err != nil {
 		t.Fatalf("park conn-cap-2: %v", err)
 	}
-	if err := repo.LockConnectionModel("conn-cap-2", "deepseek-chat", 3600, 1); err != nil {
+	if err := repo.LockConnectionModel(t.Context(), "conn-cap-2", "deepseek-chat", 3600, 1); err != nil {
 		t.Fatalf("lock conn-cap-2: %v", err)
 	}
 

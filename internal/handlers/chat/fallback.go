@@ -148,16 +148,16 @@ func (h *ChatHandler) handleAccountFallback(
 				Ctx: ctx, W: w, Provider: provider, Model: model,
 				ConnectionID: "default", ConnData: &ConnectionData{APIKey: apiKey, ProxyPoolID: proxyPoolID}, Body: body, Attempts: 1,
 				IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
-			PrefixHash: prefixHash,
-		}
-		err := h.tryForwardWithConnection(noAuthParams)
-		// The keyless free lane takes this branch, so the pool walk has to
-		// run here too. Without it the operator's pool was walked on the
-		// stored-connection path and silently abandoned on the one the
-		// OpenCode free tier actually uses: the log showed conn=default, a
-		// handful of proxies, then "free tier refused after retries".
-		err = h.walkPoolOnFreeTierRefusalFor(noAuthParams, "default", "", "", err)
-		if err != nil {
+				PrefixHash: prefixHash,
+			}
+			err := h.tryForwardWithConnection(noAuthParams)
+			// The keyless free lane takes this branch, so the pool walk has to
+			// run here too. Without it the operator's pool was walked on the
+			// stored-connection path and silently abandoned on the one the
+			// OpenCode free tier actually uses: the log showed conn=default, a
+			// handful of proxies, then "free tier refused after retries".
+			err = h.walkPoolOnFreeTierRefusalFor(noAuthParams, "default", "", "", err)
+			if err != nil {
 				// Same contract as the multi-connection loop's return: a
 				// free-tier refusal leaves this path as the classified
 				// answer, not the upstream body verbatim.
@@ -354,7 +354,7 @@ func (h *ChatHandler) handleAccountFallback(
 		// a verdict on the credential, not a model-level fault, so the model
 		// must not also collect a "temporarily unavailable" badge for it.
 		if errors.As(lastErr, &ue) && providers.LooksLikeAccountSuspension(ue.StatusCode, extractErrorText(ue.Body)) {
-			h.haltProviderOnSuspension(provider, model, connObj, ue)
+			h.haltProviderOnSuspension(ctx, provider, model, connObj, ue)
 			return lastErr
 		}
 		// A model-level fault that is not a permanent deprecation (404,
@@ -402,7 +402,7 @@ func (h *ChatHandler) handleAccountFallback(
 			// Extract error text from upstream body for classification
 			errorText := extractErrorText(ue.Body)
 			// Get current backoff level from this connection
-			currentBackoffLevel := h.Repo.GetConnectionBackoffLevel(connObj.ID)
+			currentBackoffLevel := h.Repo.GetConnectionBackoffLevel(ctx, connObj.ID)
 			// Classify error to get dynamic cooldown; provider-scoped rules
 			// key off the canonical provider the request routed to.
 			classification := providers.ClassifyErrorForProvider(ue.StatusCode, errorText, currentBackoffLevel, provider, ue.Body)
@@ -423,9 +423,9 @@ func (h *ChatHandler) handleAccountFallback(
 				errMsg = fmt.Sprintf("%d upstream error", ue.StatusCode)
 			}
 			lockKey := canonicalLockModel(provider, model)
-			h.Repo.LockConnectionModel(connObj.ID, lockKey, cooldownSec, classification.NewBackoffLevel)
+			_ = h.Repo.LockConnectionModel(ctx, connObj.ID, lockKey, cooldownSec, classification.NewBackoffLevel)
 			if lockKey != model {
-				_ = h.Repo.LockConnectionModel(connObj.ID, model, cooldownSec, classification.NewBackoffLevel)
+				_ = h.Repo.LockConnectionModel(ctx, connObj.ID, model, cooldownSec, classification.NewBackoffLevel)
 			}
 			// Account-scoped cooldown alongside the per-model locks, so the
 			// selector can skip this account before spending a request
@@ -434,7 +434,7 @@ func (h *ChatHandler) handleAccountFallback(
 			// itself such as an NVIDIA NIM degraded cluster), so unrelated
 			// models stay available.
 			if classification.ModelScoped || isModelScopedError(ue.StatusCode, errorText, model, ue.Body) {
-				if recErr := h.Repo.RecordConnectionScopedError(connObj.ID, model, "chat", ue.StatusCode, errorText, classification.NewBackoffLevel); recErr != nil {
+				if recErr := h.Repo.RecordConnectionScopedError(ctx, connObj.ID, model, "chat", ue.StatusCode, errorText, classification.NewBackoffLevel); recErr != nil {
 					log.Warn("fallback", "record connection error failed", "conn", connObj.ID, "error", recErr)
 				}
 			} else {
@@ -449,7 +449,7 @@ func (h *ChatHandler) handleAccountFallback(
 					}
 				}
 				until := time.Now().UTC().Add(time.Duration(cooldownSec) * time.Second)
-				if lockErr := h.Repo.LockConnectionRateLimit(connObj.ID, until, classification.NewBackoffLevel, ue.StatusCode, errMsg); lockErr != nil {
+				if lockErr := h.Repo.LockConnectionRateLimit(ctx, connObj.ID, until, classification.NewBackoffLevel, ue.StatusCode, errMsg); lockErr != nil {
 					log.Warn("fallback", "rate limit lock failed", "conn", connObj.ID, "error", lockErr)
 				}
 				h.getSessionAffinity().EvictConnection(connObj.ID)
@@ -1547,16 +1547,16 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		}
 		// Clear any existing model lock on success (matching Next.js clearAccountError).
 		lockKey := canonicalLockModel(provider, model)
-		if unlockErr := h.Repo.UnlockConnectionModel(connectionID, lockKey); unlockErr != nil {
+		if unlockErr := h.Repo.UnlockConnectionModel(ctx, connectionID, lockKey); unlockErr != nil {
 			log.Warn("fallback", "unlock failed", "provider", provider, "model", lockKey, "error", unlockErr)
 		}
 		if lockKey != model {
-			_ = h.Repo.UnlockConnectionModel(connectionID, model)
+			_ = h.Repo.UnlockConnectionModel(ctx, connectionID, model)
 		}
 		// A served request also clears the account-scoped cooldown, so an
 		// account that recovered is not kept out of rotation until the
 		// cooldown expires on its own.
-		if clearErr := h.Repo.ClearConnectionRateLimit(connectionID); clearErr != nil {
+		if clearErr := h.Repo.ClearConnectionRateLimit(ctx, connectionID); clearErr != nil {
 			log.Warn("fallback", "rate limit clear failed", "conn", connectionID, "error", clearErr)
 		}
 		// A served request proves the account is usable again, so drop the
@@ -1728,7 +1728,25 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	if isClientCanceled(ctx, fwdErr) {
 		return &upstreamError{StatusCode: StatusClientClosedRequest, Body: []byte(clientClosedBody)}
 	}
+	// The gateway's own end-to-end bound expiring is a gateway timeout, not a
+	// lost upstream socket: the client needs to know the request was cut by
+	// policy rather than by a broken connection, because only one of those is
+	// worth retrying unchanged.
+	//
+	// Local is set for the same reason a full local queue sets it: the account
+	// was never exercised, the gateway simply stopped waiting. Without it the
+	// 504 would fall into the gateway-fault branch of recordModelCooldown and
+	// park a healthy connection for a delay the operator configured.
+	if isRequestDeadline(ctx) && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return &upstreamError{StatusCode: http.StatusGatewayTimeout, Body: requestDeadlineBody(), Local: true}
+	}
 	return fwdErr
+}
+
+// requestDeadlineBody is the JSON body that travels with a 504 caused by the
+// gateway's end-to-end request bound.
+func requestDeadlineBody() []byte {
+	return []byte(`{"error":{"message":"request exceeded the gateway's total request timeout","type":"server_error","code":"gateway_timeout"}}`)
 }
 
 // isClientCanceled reports whether the client that asked for this response

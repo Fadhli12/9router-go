@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	json "encoding/json/v2"
 	"fmt"
 	"net/http"
@@ -61,7 +62,7 @@ func suspendedProviderError(provider string) *upstreamError {
 // The account still carries the error for the dashboard: the suspension is a
 // fact about that credential too, and an operator who clears the latch needs to
 // see which account was refused.
-func (h *ChatHandler) haltProviderOnSuspension(provider, model string, conn *models.ProviderConnection, ue *upstreamError) {
+func (h *ChatHandler) haltProviderOnSuspension(ctx context.Context, provider, model string, conn *models.ProviderConnection, ue *upstreamError) {
 	canonical := providers.ResolveAlias(provider)
 	errText := extractErrorText(ue.Body)
 
@@ -73,7 +74,7 @@ func (h *ChatHandler) haltProviderOnSuspension(provider, model string, conn *mod
 	latched := resilience.RecordAccountSuspension(canonical, connID, ue.StatusCode, errText)
 
 	if connID != "" && h.Repo != nil {
-		if err := h.Repo.RecordConnectionScopedError(connID, model, "chat", ue.StatusCode, errText, 0); err != nil {
+		if err := h.Repo.RecordConnectionScopedError(ctx, connID, model, "chat", ue.StatusCode, errText, 0); err != nil {
 			log.Warn("fallback", "record suspension on connection failed", "conn", connID, "error", err)
 		}
 		h.getSessionAffinity().EvictConnection(connID)

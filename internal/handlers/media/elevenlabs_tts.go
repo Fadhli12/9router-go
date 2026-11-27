@@ -227,11 +227,11 @@ func (h *MediaHandler) tryElevenLabsTTSConn(
 		log.Warn("media", "elevenlabs tts upstream error", "status", resp.StatusCode, "body", snippet)
 		retryable := false
 		if h.Repo != nil {
-			backoff := h.Repo.GetConnectionBackoffLevel(conn.ID)
+			backoff := h.Repo.GetConnectionBackoffLevel(r.Context(), conn.ID)
 			if classification := providers.ClassifyError(resp.StatusCode, snippet, backoff, respBody); classification.ShouldFallback {
 				cooldownSec := max(classification.CooldownMs/1000, 1)
 				if !handlerutil.IsProbeContext(r.Context()) {
-					_ = h.Repo.LockConnectionModel(conn.ID, modelInfo.Model, cooldownSec, classification.NewBackoffLevel)
+					_ = h.Repo.LockConnectionModel(r.Context(), conn.ID, modelInfo.Model, cooldownSec, classification.NewBackoffLevel)
 				}
 				retryable = true
 			}
@@ -245,7 +245,7 @@ func (h *MediaHandler) tryElevenLabsTTSConn(
 	if h.Repo != nil {
 		_ = h.Repo.UpdateConnectionLastUsed(conn.ID)
 		if !handlerutil.IsProbeContext(r.Context()) {
-			_ = h.Repo.UnlockConnectionModel(conn.ID, modelInfo.Model)
+			_ = h.Repo.UnlockConnectionModel(r.Context(), conn.ID, modelInfo.Model)
 		}
 	}
 	h.trackTTSUsage("elevenlabs", modelInfo.Model)

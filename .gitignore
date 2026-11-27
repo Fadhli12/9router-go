@@ -120,3 +120,7 @@ deploy/migrate/
 deploy/migrate-src/
 deploy/migrate-out/
 deploy/docker-compose.override.yml
+
+# Python bytecode from the OpenWrt shell harness
+__pycache__/
+*.pyc

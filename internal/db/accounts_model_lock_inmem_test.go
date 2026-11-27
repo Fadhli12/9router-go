@@ -120,7 +120,7 @@ func TestConnectionModelLockedFromMatchesTheQueryingPath(t *testing.T) {
 				connID, tt.data); err != nil {
 				t.Fatalf("seed connection: %v", err)
 			}
-			queried, err := repo.IsConnectionModelLocked(connID, tt.model)
+			queried, err := repo.IsConnectionModelLocked(t.Context(), connID, tt.model)
 			if err != nil {
 				t.Fatalf("IsConnectionModelLocked: %v", err)
 			}
@@ -149,7 +149,7 @@ func TestConnectionModelLockedFromReadsAWrittenLock(t *testing.T) {
 		t.Fatalf("seed connection: %v", err)
 	}
 
-	if err := repo.LockConnectionModel("conn-written", "deepseek-chat", 3600, 1); err != nil {
+	if err := repo.LockConnectionModel(t.Context(), "conn-written", "deepseek-chat", 3600, 1); err != nil {
 		t.Fatalf("LockConnectionModel: %v", err)
 	}
 
