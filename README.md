@@ -114,8 +114,17 @@ irm https://raw.githubusercontent.com/luqman-v1/9router-go/main/install.ps1 | ie
 9router-go status         # is it running? (pid, dashboard, log)
 9router-go restart        # replace the running daemon
 9router-go logs -n 100    # tail the background log
+9router-go doctor         # why is it not reachable? port, pid, data dir, db
 9router-go stop           # stop it
 ```
+
+`doctor` is the diagnostic for a gateway that will not answer. `status` tells
+you whether a daemon is alive; `doctor` tells you *why* it is not, checking the
+resolved port, the pid claim, whether the listening socket belongs to the
+gateway or a foreign process, the data directory's writability, the database
+file, and a failed-bind marker in the run log. Each failing line names the
+platform command that fixes it (`netstat`/`taskkill` on Windows, `lsof`/`kill`
+elsewhere). `--port` diagnoses an address other than the one `PORT` resolves.
 
 The detached process records itself in `DATA_DIR/run/gateway.pid` and writes its
 output to `DATA_DIR/run/gateway.log`. A second `start` while one is running
@@ -197,6 +206,10 @@ docker run -d --name 9router-go --restart unless-stopped \
 - 🧪 Dashboard Playground: a streaming, multi-turn conversation through the engine's own dispatch, with no engine key — attributed to a picked key, budget and allowlist enforced, nothing persisted (inspired by [new-api](wiki/new-api-ports.md))
 - 📡 Uptime heartbeat (Push-Monitor / Uptime Kuma) — from [new-api](wiki/new-api-ports.md)
 - 🔀 Vertex `v1beta1` per-connection switch, and an optional HTTP/2 PING health check for idle upstream connections — from [new-api](wiki/new-api-ports.md)
+- 🚦 Rate ceilings per key — RPM/TPM/RPH/RPD/concurrency with a FIFO queue — plus a per-client-IP gate checked before every key window, so a caller holding or minting many keys cannot escape the host ceiling
+- 🧭 Connection strategies: failover, round-robin, sticky and **least-busy** (the key with the fewest turns in flight goes next), plus per-custom-provider capacity limits — RPM/TPM/concurrency, a FIFO queue timeout, a lifetime token quota and a contract expiry — and a sparse per-model capability override that leaves an untouched field on detection
+- 📅 Usage periods from one hour to sixty days **and month-to-date**, with the Claude and Codex seat tier and its lapse date in the quota tracker
+- ⏱️ Optional end-to-end request timeout (`totalRequestTimeoutMs`, off by default) to reclaim a hung upstream without cutting a slow reasoning stream
 
 For sequential combo routing, set **Model response timeout** in seconds (decimals
 such as `5.3` are fine) in the combo's Edit dialog, or from the compact field on the

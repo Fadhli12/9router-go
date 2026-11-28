@@ -31,6 +31,7 @@ func parseSettings(rawData string) (*SettingsData, bool) {
 	applyProviderOverrides(s, raw)
 	applySeatAttemptBudget(s, raw)
 	applySuspensionThreshold(s, raw)
+	applyComboMemberAttemptCap(s, raw)
 	applyTotalRequestTimeout(s, raw)
 	applyPerModelRateLimit(s, raw)
 	return s, true
@@ -102,6 +103,17 @@ func applySeatAttemptBudget(s *SettingsData, raw map[string]any) {
 func applySuspensionThreshold(s *SettingsData, raw map[string]any) {
 	if v, ok := raw["suspensionThreshold"].(float64); ok && v >= 1 {
 		s.SuspensionThreshold = int(v)
+	}
+}
+
+// applyComboMemberAttemptCap reads the member attempt cap. A negative value is
+// stored as 0 (off) rather than as a member that may send nothing.
+func applyComboMemberAttemptCap(s *SettingsData, raw map[string]any) {
+	if cap, ok := raw["comboMemberAttemptCap"].(float64); ok {
+		if cap < 0 {
+			cap = 0
+		}
+		s.ComboMemberAttemptCap = int(cap)
 	}
 }
 

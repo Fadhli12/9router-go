@@ -61,6 +61,14 @@ is idempotent:
 9router-go-feed remove       # drop it
 ```
 
+The feed is `https`, and `opkg` needs a TLS provider plus a CA bundle to fetch
+it: `libustream-*` and `ca-bundle`. Both are present on any image with LuCI, and
+a minimal image can lack them — `opkg update` then fails with `SSL support not
+available`, which names neither. `9router-go-feed add` checks before it registers
+and prints the exact `opkg install` line when something is missing; the feed line
+is still written, because the provider has to be installable before the feed can
+be used.
+
 Manual install works too: download
 `9router-go_<version>_<arch>.ipk` from the release page and run
 `opkg install ./9router-go_<version>_<arch>.ipk`.
@@ -88,8 +96,13 @@ squashfs the package file cannot be rewritten, so a self-update would either
 fail or corrupt the image. The launcher prefers `/opt/9router/bin/9router-go`,
 which is writable, and postinst installs it.
 
-`/opt` keeps its contents across a sysupgrade that keeps settings. `/tmp` and
-`/var` do not, which is why the database is not there.
+`/opt` keeps its contents across a sysupgrade that keeps settings, but only
+because this package ships `/lib/upgrade/keep.d/9router-go` naming
+`/opt/9router/db` and `/opt/9router/uploads`. Without that drop-in OpenWrt's
+default keep set (`/lib/upgrade/keep.d/base-files-essential` plus a
+commented-out `/etc/sysupgrade.conf`) names nothing this package owns, and the
+database would be discarded on every flash. `/tmp` and `/var` are still not
+preserved, which is why the database is not there.
 
 The pid file is written by the launcher (`echo $$` before `exec`), not by
 `procd_set_param pidfile`: that parameter does not exist in every procd release
@@ -106,6 +119,7 @@ uci set 9router-go.main.host=''           # empty = all interfaces, 127.0.0.1 = 
 uci set 9router-go.main.data_dir='/opt/9router'
 uci set 9router-go.main.auto_update='0'
 uci set 9router-go.main.log_level='info'
+uci set 9router-go.main.initial_password='…'  # first dashboard login, empty = none
 uci commit 9router-go
 /etc/init.d/9router-go restart
 ```
@@ -129,6 +143,35 @@ opkg install luci-compat     # only needed on 21.02+
 Installing on such an image prints that hint. The gateway itself does not
 depend on LuCI; the page is optional.
 
+## Dashboard password
+The gateway ships no password of its own. With `initial_password` empty, a
+fresh install accepts the well-known default **only** from the router itself:
+a login over the LAN is refused with "Default password must be changed" until
+the password is changed from the machine running the gateway (`INITIAL_PASSWORD`
+set, or the dashboard reached on the router's own loopback).
+
+That guard is correct — a router sold with a known dashboard password is a
+router anyone on the LAN can reconfigure — but it leaves an operator who only
+has the web UI stuck until they have a shell. Setting the password at install
+time skips it:
+```sh
+uci set 9router-go.main.initial_password='a-password-you-choose'
+uci commit 9router-go
+/etc/init.d/9router-go restart
+```
+The value is exported as `INITIAL_PASSWORD` and is **plain text in
+`/etc/config/9router-go`** (mode `0644`, like every UCI file). Change it from
+the dashboard after the first login, which stores a bcrypt hash in the settings
+database, and then clear the option so the plain-text copy goes away:
+```sh
+uci set 9router-go.main.initial_password=''
+uci commit 9router-go
+```
+Note that this file already holds `jwt_secret`, which is enough to forge a
+session, so a local reader has an equivalent secret either way; the option does
+not widen the exposure, it just makes the file worth protecting. It is
+world-readable by default, so do not reuse a password from anywhere else.
+
 ## Updates: two paths, one version
 
 | Path | Command | When to use |
@@ -150,6 +193,7 @@ flash write.
 
 ```sh
 /etc/init.d/9router-go start|stop|restart|status|enable|disable
+/etc/init.d/9router-go sync_cron 0|1   # remove / install the probe cron entry
 logread -e 9router-go          # service log
 wget -qO- http://127.0.0.1:20130/health
 ```
@@ -164,11 +208,64 @@ uci get 9router-go.main.healthcheck_threshold # failures before restart, 3
 uci get 9router-go.main.healthcheck_timeout   # seconds per probe, 5
 ```
 
-`start_service` adds the once-a-minute probe to `/etc/crontabs/root` and removes
-it again when `healthcheck` is `0`; the CRON entry is only rewritten and cron is
-only restarted when the table actually changes. Three consecutive `/health`
-failures restart the service; one is treated as load. The counter lives in
-`/var/run`, so it costs no flash writes and resets on reboot.
+`sync_cron` is the only thing that writes the once-a-minute probe into
+`/etc/crontabs/root`: `start_service` calls it on every start, `postinst` after
+an install or upgrade, and `prerm` on removal. It compares the result with the
+current table first, so the file is only rewritten and cron only restarted when
+the entry actually changes — an upgrade that changes nothing costs no flash
+write. Three consecutive `/health` failures restart the service; one is treated
+as load. The counter lives in `/var/run`, so it costs no flash writes and resets
+on reboot.
+
+The probe runs unless procd reports the service as stopped. A stopped
+gateway is procd's business — it respawns a crash, and applies its own backoff to
+a binary that cannot start — and the probe covering that case would restart it
+every `healthcheck_threshold` minutes, bypassing the backoff. It also keeps the
+probe quiet while `9router-go-backup` stops the gateway to copy the database,
+which otherwise counts a deliberate stop as a failure and can restart the service
+mid-copy.
+
+The gate reads `/etc/init.d/9router-go status` and skips only on a verdict that
+names the service stopped (`not running` or `stopped`). Anything else — including
+the help text a call returns on OpenWrt 18.06 and 19.07, where `status` is not a
+registered rc.common action — is treated as "the gate cannot decide" and the probe
+fires anyway, because a silently disabled watchdog costs a wedged gateway while a
+redundant probe costs one HTTP request. A non-numeric `port` falls back to `20130`
+in the probe rather than turning every check into a failed URL.
+
+## Memory and file limits
+```sh
+uci set 9router-go.main.mem_limit='64'        # MiB, 0 = no limit (default)
+uci set 9router-go.main.nofile_limit='4096'   # 0 = system default
+uci commit 9router-go
+/etc/init.d/9router-go restart
+```
+`mem_limit` is exported as `GOMEMLIMIT`, Go's **soft** heap ceiling: the garbage
+collector works harder as the heap approaches it, instead of the process growing
+until the router's OOM killer picks a victim. On a small router that victim is
+often `sshd` or the kernel doing the flashing, so the ceiling protects more than
+the gateway.
+
+It is deliberately not an `RLIMIT_AS` (`procd_set_param limits as=…`). Go
+reserves a large virtual address space up front, so an address-space limit
+aborts the process at start-up while the actual heap is still small — the limit
+that is supposed to protect the gateway would be what kills it. A malformed
+value sets nothing at all rather than passing garbage through, because Go treats
+an unparsable `GOMEMLIMIT` as a fatal start-up error. An oversized value is
+clamped to `1048576` MiB and logged instead: Go also throws `fatal error:
+malformed GOMEMLIMIT` on a number too large to parse, so the guard must bound the
+magnitude as well as the syntax.
+
+`nofile_limit` is an `RLIMIT_NOFILE` set through procd. Each proxied stream
+holds one descriptor for the client socket and one for the upstream, so a busy
+gateway reaches the default 1024 long before it is out of CPU. Both the soft and
+the hard limit are set: procd leaves `rlim_max` at the inherited value when it is
+omitted, and raising only the soft limit above it fails with `EINVAL`.
+
+A fresh install and an upgraded install both start with `nofile_limit=4096`
+from the packaged default, so an existing install picks up the raised limit on
+its first restart after `opkg upgrade`. Setting the option to `0` restores the
+system default (1024 on most images).
 
 ## LAN firewall
 
@@ -202,6 +299,16 @@ succeeds.
 `/etc/9router-go` survives sysupgrade with "keep settings", so the default backup
 location comes back after the flash. Copy the file off the device before
 overwriting the firmware anyway.
+
+The gateway runs SQLite in WAL mode, so a `data.sqlite-wal` file can sit beside
+the database holding transactions that have not been checkpointed into it yet.
+`save` copies that file to `<file>-wal` when it exists, and `restore` puts it
+back — a copy of `data.sqlite` alone would silently be missing the most recent
+writes. In the other direction, `restore` deletes a `-wal`/`-shm` pair belonging
+to the database it replaces before writing the incoming file: SQLite replays
+whatever `-wal` it finds beside a database, and one from a different database
+means corrupted or reverted rows. The `-shm` file is a shared-memory index, never
+data, and is never copied.
 
 ## Tunnels
 
@@ -250,9 +357,11 @@ python3 scripts/openwrt-vm-test.py \
 
 ## Notes and limits
 
-- The dashboard bundle is 4.6 MB of the binary, and the package is ~18 MB
-  compressed. On a 16 MB flash device, install to extroot or a USB mount;
-  `data_dir` must be writable and must have room for the database.
+- The gateway binary is ~50 MB installed (`Installed-Size` in the package is
+  51046 KiB); the `.ipk` itself is ~21 MB compressed, and the dashboard bundle
+  embedded in it is 4.6 MB of that. On a 16 MB flash device, install to extroot
+  or a USB mount; `data_dir` must be writable and must have room for the
+  database.
 - No firewall rule is opened automatically. `open_lan` (default `0`) is the only
   way this package writes one, and that rule is LAN input only: it never opens
   the WAN, and it is removed again when the option is turned off or the package
